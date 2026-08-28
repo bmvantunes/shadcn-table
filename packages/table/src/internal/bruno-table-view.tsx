@@ -404,6 +404,8 @@ export type BrunoTableViewProps<
 > = {
   readonly runtime: TRuntime;
   readonly tableId: string;
+  /** Private accessible name override for an internally composed grid. */
+  readonly gridAriaLabel?: string | undefined;
   readonly compiledColumns: readonly CompiledColumn[];
   readonly toolbar: BrunoTableToolbarStore;
   readonly rowPipeline: ComponentType<BrunoTableRowPipelineProps<TRuntime, TAdapter>>;
@@ -521,6 +523,7 @@ export type BrunoTableLogicalRowSpace = Readonly<{
 function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   runtime,
   tableId,
+  gridAriaLabel,
   compiledColumns,
   toolbar,
   rowPipeline,
@@ -533,6 +536,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   editMemory,
   renderResetReview,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
+  const resolvedGridAriaLabel = gridAriaLabel ?? `Data for ${tableId}`;
   const tableElement = useRef<HTMLElement | null>(null);
   const focusFallback = useMemo(
     () => () => tableElement.current?.focus({ preventScroll: true }),
@@ -553,7 +557,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   return (
     <section
       ref={tableElement}
-      aria-label={tableId}
+      aria-label={gridAriaLabel ?? tableId}
       className="relative data-[bruno-table]:isolate"
       data-bruno-table={tableId}
       tabIndex={-1}
@@ -577,6 +581,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
         <BrunoTableGridBody
           runtime={runtime}
           tableId={tableId}
+          gridAriaLabel={resolvedGridAriaLabel}
           compiledColumns={compiledColumns}
           focusFallback={focusFallback}
           rowPipeline={rowPipeline}
@@ -1047,6 +1052,7 @@ function LifecycleAlert({
 type BrunoTableGridBodyProps<TRuntime extends BrunoTableRuntimeView, TAdapter> = {
   readonly runtime: TRuntime;
   readonly tableId: string;
+  readonly gridAriaLabel: string;
   readonly compiledColumns: readonly CompiledColumn[];
   readonly focusFallback: () => void;
   readonly rowPipeline: ComponentType<BrunoTableRowPipelineProps<TRuntime, TAdapter>>;
@@ -1060,6 +1066,7 @@ type BrunoTableGridBodyProps<TRuntime extends BrunoTableRuntimeView, TAdapter> =
 function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   runtime,
   tableId,
+  gridAriaLabel,
   compiledColumns,
   focusFallback,
   rowPipeline: RowPipeline,
@@ -1144,6 +1151,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
         ) : (
           <BrunoTableViewportAdapter
             tableId={tableId}
+            gridAriaLabel={gridAriaLabel}
             rowSpace={snapshot.rowSpace}
             runtime={snapshot.runtime}
             columns={snapshot.columns}
@@ -1328,6 +1336,7 @@ function FocusFallbackOnUnmount({
 
 type BrunoTableViewportAdapterProps = {
   readonly tableId: string;
+  readonly gridAriaLabel: string;
   readonly rowSpace: BrunoTableLogicalRowSpace;
   readonly runtime: BrunoTableRuntimeView;
   readonly columns: readonly CompiledColumn[];
@@ -1348,6 +1357,7 @@ type BrunoTableViewportAdapterProps = {
 export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportAdapterProps> = memo(
   function BrunoTableViewportAdapter({
     tableId,
+    gridAriaLabel,
     rowSpace,
     runtime,
     columns,
@@ -1435,6 +1445,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             attachAnnouncement={interactionAnnouncer.attach}
             instanceId={adapter.instanceId}
             tableId={tableId}
+            gridAriaLabel={gridAriaLabel}
             rowSpace={installedRowSpace}
             runtime={runtime}
             columns={adapter.columns}
@@ -1476,6 +1487,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   attachAnnouncement,
   instanceId,
   tableId,
+  gridAriaLabel,
   rowSpace,
   runtime,
   columns,
@@ -1510,6 +1522,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly attachAnnouncement: (element: HTMLSpanElement | null) => void;
   readonly instanceId: string;
   readonly tableId: string;
+  readonly gridAriaLabel: string;
   readonly rowSpace: BrunoTableLogicalRowSpace;
   readonly runtime: BrunoTableRuntimeView;
   readonly columns: readonly CompiledColumn[];
@@ -3035,7 +3048,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         role="grid"
         contentEditable={cellEdit === undefined ? undefined : "plaintext-only"}
         suppressContentEditableWarning={cellEdit === undefined ? undefined : true}
-        aria-label={`Data for ${tableId}`}
+        aria-label={gridAriaLabel}
         aria-busy={loading || undefined}
         aria-multiselectable={cellRange === undefined ? undefined : true}
         tabIndex={0}
@@ -5442,6 +5455,8 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     draftReviewKind === "server" ? draftReview?.serverNow : draftReview?.mine;
   const draftReviewValueUnavailable =
     draftReviewKind === "server" && draftReview?.serverValueAvailable === false;
+  const draftReviewCandidateText =
+    draftReviewKind === "mine" ? draftReview?.candidateText : undefined;
   const unavailable =
     presentationColumn === undefined ||
     (rowAware ? rowSnapshot?.kind === "unavailable" : cellSnapshot?.kind === "unavailable");
@@ -5451,13 +5466,14 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const sourceValue = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
   const value = edit.hasDraft ? edit.draft : sourceValue;
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
-  const className = draftReviewValueUnavailable
-    ? undefined
-    : draftReviewKind !== undefined && draftReview !== undefined && draftReviewRow !== undefined
-      ? resolveProxyCellClassName(draftReview.column, draftReviewRow, draftReviewValue)
-      : invalid || unavailable || rowMissing || presentationColumn === undefined
-        ? undefined
-        : resolveCellClassName(presentationColumn, row, value);
+  const className =
+    draftReviewValueUnavailable || draftReviewCandidateText !== undefined
+      ? undefined
+      : draftReviewKind !== undefined && draftReview !== undefined && draftReviewRow !== undefined
+        ? resolveProxyCellClassName(draftReview.column, draftReviewRow, draftReviewValue)
+        : invalid || unavailable || rowMissing || presentationColumn === undefined
+          ? undefined
+          : resolveCellClassName(presentationColumn, row, value);
   const content =
     unavailable || rowMissing || presentationColumn === undefined ? null : invalid ? (
       <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>

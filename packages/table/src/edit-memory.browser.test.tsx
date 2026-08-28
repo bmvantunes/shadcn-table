@@ -512,6 +512,7 @@ test("reviews pending work before Reset and changes nothing until confirmation",
 });
 
 test("reviews and resets a lone invalid active candidate", async () => {
+  const candidateClassName = ({ value }: { readonly value: string }) => `name-${value}`;
   const validatingColumns = [
     {
       columnId: "COL_ID_NAME",
@@ -519,6 +520,7 @@ test("reviews and resets a lone invalid active candidate", async () => {
       headerName: "Name",
       valueType: "text",
       isEditable: true,
+      cellClassName: candidateClassName,
       validate: ({ value }: { readonly value: string }) =>
         value === "invalid candidate" ? "Choose a valid name." : undefined,
     },
@@ -560,6 +562,12 @@ test("reviews and resets a lone invalid active candidate", async () => {
   await expect
     .element(reviewGrid.getByRole("gridcell", { name: "Choose a valid name.", exact: true }))
     .toBeVisible();
+  expect(
+    reviewGrid
+      .getByRole("gridcell", { name: "invalid candidate", exact: true })
+      .element()
+      .closest<HTMLElement>("[role=gridcell]")?.className,
+  ).not.toContain("name-Ada");
 
   expect(
     review
@@ -627,7 +635,9 @@ test("keeps Reset Review outside consumer Table Identity registration", async ()
   await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
   await userEvent.keyboard("{Enter}");
   await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
-  await expect.element(screen.getByRole("alertdialog", { name: "Reset Review" })).toBeVisible();
+  const review = screen.getByRole("alertdialog", { name: "Reset Review" });
+  await expect.element(review).toBeVisible();
+  await expect.element(review.getByRole("grid", { name: "Reset Review changes" })).toBeVisible();
 
   expect(identityErrors).not.toHaveBeenCalledWith(
     expect.stringContaining('simultaneous use of tableId "TABLE_ID_IDENTITY_OWNER:reset-review"'),

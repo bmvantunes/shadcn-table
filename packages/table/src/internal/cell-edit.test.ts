@@ -3222,6 +3222,42 @@ describe("BrunoTable Cell Edit Session", () => {
     unsubscribe();
   });
 
+  it("does not publish untouched permission loss as candidate work", () => {
+    type CandidateRow = Readonly<{ readonly value: number }>;
+    let current: CandidateRow = { value: 4 };
+    const candidateColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: ({ value }: { readonly value: number }) => value >= 0,
+      },
+    ] satisfies BrunoTableColumns<CandidateRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: candidateColumns,
+      getRow: () => current,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+
+    current = { value: -1 };
+    runtime.reconcileActiveRow(new Set(["row"]));
+
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: "This cell is no longer editable.",
+    });
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      activeEditor: true,
+      activeCandidatePending: false,
+      reviewCount: 0,
+      blockedCount: 0,
+    });
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+    unsubscribe();
+  });
+
   it("does not double-count a blocked draft and active candidate for the same cell", () => {
     let current: Row | undefined = row;
     const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });

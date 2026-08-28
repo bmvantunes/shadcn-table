@@ -1446,8 +1446,9 @@ export class BrunoTableCellEditRuntime {
   private readonly hasActiveCandidateWork = (session = this.sessionStore.get()): boolean => {
     if (session.kind !== "editing") return false;
     const candidate = this.candidateStore.get();
+    const retainedValidationMessage = this.actor.getSnapshot().context.session?.invalidMessage;
     return (
-      session.invalidMessage !== undefined ||
+      retainedValidationMessage !== undefined ||
       candidate.nativeInvalid ||
       candidate.rawText !== session.initialText ||
       (candidate.kind === "blank" && session.initialText !== "")
@@ -2288,6 +2289,11 @@ export class BrunoTableCellEditRuntime {
       redoStack: Object.freeze([...redoStack]),
     });
     this.draftMemoryStore.setState(() => next);
+    if (drafts.size === 0 && next.undoStack.length === 0 && next.redoStack.length === 0) {
+      this.draftEvidenceKeys.clear();
+      this.draftKeysByRowId.clear();
+      return;
+    }
     const changedEvidenceKeys = new Set(affectedKeys);
     const previousCommands = new Map(
       [...previous.undoStack, ...previous.redoStack].map((command) => [command.lineage, command]),
@@ -2546,9 +2552,11 @@ export class BrunoTableCellEditRuntime {
       const representative = draft ?? findDraftHistoryEntry(nextUndoStack, nextRedoStack, key);
       if (representative === undefined) continue;
       const row = this.getRow(representative.rowId);
-      reviewServerRows.set(key, row);
-      if (this.draftReviewRowStoresById.get(key)?.get().serverRow !== row) {
-        reviewChangedKeys.add(key);
+      if (this.draftReviewSubscriberCount > 0) {
+        reviewServerRows.set(key, row);
+        if (this.draftReviewRowStoresById.get(key)?.get().serverRow !== row) {
+          reviewChangedKeys.add(key);
+        }
       }
       const column = this.fieldColumnsById.get(representative.columnId);
       let blockedReason: string | undefined;
@@ -2615,24 +2623,47 @@ export class BrunoTableCellEditRuntime {
     }
     nextDrafts ??= new Map(previousDrafts);
     const converged = new Set(convergedKeys);
-    const finalUndoStack = pruneDraftHistoryAdaptive(nextUndoStack, converged);
-    const finalRedoStack = pruneDraftHistoryAdaptive(nextRedoStack, converged);
-    for (const key of changedKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
+    const allRetainedEvidenceConverged =
+      converged.size > 0 && converged.size === this.draftEvidenceKeys.size;
+    const finalUndoStack = allRetainedEvidenceConverged
+      ? Object.freeze([])
+      : pruneDraftHistoryAdaptive(nextUndoStack, converged);
+    const finalRedoStack = allRetainedEvidenceConverged
+      ? Object.freeze([])
+      : pruneDraftHistoryAdaptive(nextRedoStack, converged);
+    if (allRetainedEvidenceConverged) {
+      this.blockedDraftKeys.clear();
+      this.validationDraftKeys.clear();
+      this.conflictDraftKeys.clear();
+    } else {
+      for (const key of changedKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
+    }
     batch(() => {
       this.setDraftMemory(nextDrafts, finalUndoStack, finalRedoStack, changedKeys);
-      this.publishDraftReview(
-        nextDrafts,
-        new Set([...changedKeys, ...reviewChangedKeys]),
-        reviewServerRows,
-      );
-      for (const key of changedKeys) {
-        this.invalidateDraftCell(key, false);
-        this.publishCell(key, nextDrafts);
+      if (this.draftReviewSubscriberCount > 0) {
+        this.publishDraftReview(
+          nextDrafts,
+          new Set([...changedKeys, ...reviewChangedKeys]),
+          reviewServerRows,
+        );
+      }
+      if (allRetainedEvidenceConverged && changedRowIds === undefined) {
+        this.traversalIndex.reconcileRows(undefined);
+        for (const key of this.cellStores.keys()) this.publishCell(key, nextDrafts);
+      } else {
+        for (const key of changedKeys) {
+          this.invalidateDraftCell(key, false);
+          this.publishCell(key, nextDrafts);
+        }
       }
       this.publishActivitySnapshot();
     });
     if (publishTraversalInvalidation) this.publishTraversalInvalidation();
-    for (const key of changedKeys) this.releaseUnusedCellStore(key);
+    if (allRetainedEvidenceConverged) {
+      for (const key of this.cellStores.keys()) this.releaseUnusedCellStore(key);
+    } else {
+      for (const key of changedKeys) this.releaseUnusedCellStore(key);
+    }
     return changedKeys.length > 0;
   };
 

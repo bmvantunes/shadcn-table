@@ -276,8 +276,9 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
 
   const massSourceConvergenceSamples: number[] = [];
   const massSourceConvergenceTargets: BrunoTableCellEditRuntime[] = [];
+  const massSourceConvergenceSampleCount = 3;
   bench(
-    "bulk-prunes one 5,000-cell source convergence from 100 retained commands linearly",
+    "clears one 5,000-cell source convergence from 100 retained commands within one frame",
     () => {
       const target = massSourceConvergenceTargets.shift();
       if (target === undefined) {
@@ -290,8 +291,8 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         "5,000-identity retained-history source convergence",
         massSourceConvergenceSamples,
         {
-          budgetMs: 1_000,
-          measuredSampleCount: 1,
+          budgetMs: referenceFrameBudgetMs,
+          measuredSampleCount: massSourceConvergenceSampleCount,
           warmupSampleCount: 0,
         },
       );
@@ -300,7 +301,7 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
     },
     {
       setup: () => {
-        for (let index = 0; index < 2; index += 1) {
+        for (let index = 0; index <= massSourceConvergenceSampleCount; index += 1) {
           const target = new BrunoTableCellEditRuntime({
             columns,
             getRow: (rowId) => historySourceRows.get(rowId),
@@ -314,7 +315,7 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         for (const target of massSourceConvergenceTargets) target.dispose();
         massSourceConvergenceTargets.length = 0;
       },
-      iterations: 1,
+      iterations: massSourceConvergenceSampleCount,
       time: 0,
       warmupIterations: 0,
       warmupTime: 0,

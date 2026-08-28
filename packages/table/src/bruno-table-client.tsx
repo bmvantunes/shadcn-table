@@ -110,10 +110,12 @@ function BrunoTableClientInstance<
   const TColumns extends BrunoTableColumns<TRow>,
   TRowVersion,
 >({
+  gridAriaLabel,
   props,
   registerIdentity = true,
   tableId,
 }: Readonly<{
+  readonly gridAriaLabel?: string;
   readonly props: BrunoTableClientProps<TRow, TColumns, TRowVersion>;
   readonly registerIdentity?: boolean;
   readonly tableId: string;
@@ -373,6 +375,7 @@ function BrunoTableClientInstance<
         <BrunoTableView
           runtime={runtimeView}
           tableId={tableId}
+          {...(gridAriaLabel === undefined ? {} : { gridAriaLabel })}
           compiledColumns={compiledColumns}
           toolbar={toolbar}
           rowPipeline={BrunoTableClientRowPipeline}
@@ -485,6 +488,7 @@ function BrunoTableResetReviewTable({
   }
   return (
     <BrunoTableClientInstance
+      gridAriaLabel="Reset Review changes"
       tableId={tableId}
       registerIdentity={false}
       props={{
