@@ -22,6 +22,12 @@ Issues, specifications, and Wayfinder maps live in this repository's GitHub Issu
 
 This repository uses one BrunoTable domain context rooted at `CONTEXT.md`, with architectural decisions under `docs/adr/`. See `docs/agents/domain.md`.
 
+### Effect
+
+This repository uses Effect in `packages/table`. Before writing or reviewing Effect code, read `packages/table/node_modules/effect/AGENTS.md` completely and follow its links when relevant.
+
+For Effect APIs or concepts not covered there, search `packages/table/node_modules/effect/src`. If another workspace package uses a different installed Effect version, use that package's own `node_modules/effect/AGENTS.md` and source instead.
+
 ## Vendored Source Repositories
 
 Source repositories used for implementation research live under `.repos/` as Git submodules:
