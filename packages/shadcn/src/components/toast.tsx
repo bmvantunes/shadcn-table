@@ -246,16 +246,22 @@ function ToastList() {
   ));
 }
 
+type ToasterProps = ToastPrimitive.Provider.Props &
+  Readonly<{
+    portalContainer?: ToastPrimitive.Portal.Props["container"];
+  }>;
+
 function Toaster({
   children,
   toastManager = toast,
   timeout = 5000,
+  portalContainer,
   ...props
-}: ToastPrimitive.Provider.Props) {
+}: ToasterProps) {
   return (
     <ToastProvider toastManager={toastManager} timeout={timeout} {...props}>
       {children}
-      <ToastPortal>
+      <ToastPortal container={portalContainer}>
         <ToastViewport>
           <ToastList />
         </ToastViewport>

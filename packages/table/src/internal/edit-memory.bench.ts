@@ -151,11 +151,11 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       ) {
         throw new Error("One-row Save reconciliation changed the wrong overlay count.");
       }
-      if (!saveReconciliationRuntime.isEditable(rowId, "COL_ID_VALUE")) {
-        throw new Error("One-row Save reconciliation retained its Immediate lock.");
-      }
       if (saveRowReads !== 1) {
         throw new Error("One-row Immediate Save reconciliation visited unrelated source rows.");
+      }
+      if (!saveReconciliationRuntime.isEditable(rowId, "COL_ID_VALUE")) {
+        throw new Error("One-row Save reconciliation retained its Immediate lock.");
       }
     },
     { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },

@@ -8,6 +8,8 @@ import { StrictMode } from "react";
 import { BrunoTableClient, BrunoTableQuickFilter, BrunoTableToolbar } from "./index";
 import { useBrunoTableClientFilterContext } from "./internal/client-filter-context";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
+import { BrunoTableEditSafetyFooter } from "./internal/edit-chrome";
+import { BrunoTableEditMemoryRuntime } from "./internal/edit-memory";
 import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
 
 type Row = Readonly<{
@@ -896,6 +898,71 @@ test("preserves pending and accepted save presentation when a column becomes rea
   await expect.element(pendingCell).toHaveAttribute("aria-busy", "true");
 });
 
+test("preserves a pending Immediate value across an incompatible column replacement", async () => {
+  type SchemaRow = Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly amount: number;
+    readonly revision: bigint;
+  }>;
+  const schemaRows = [{ id: "ada", name: "Ada", amount: 4, revision: 1n }] as const;
+  const textColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "name",
+      headerName: "Value",
+      valueType: "text",
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<SchemaRow>;
+  const numberColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "amount",
+      headerName: "Value",
+      valueType: "number",
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<SchemaRow>;
+  let resolveSave!: () => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      }),
+  );
+  const renderTable = (activeColumns: BrunoTableColumns<SchemaRow>) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_PENDING_SCHEMA_REPLACEMENT"
+      columns={activeColumns}
+      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      clientSource={{
+        rows: schemaRows,
+        totalRows: schemaRows.length,
+        version: 1,
+        status: "ready",
+      }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(textColumns));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_PENDING_SCHEMA_REPLACEMENT" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Value" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  await screen.rerender(renderTable(numberColumns));
+  const pendingCell = grid.getByRole("gridcell", { name: "Augusta", exact: true });
+  await expect.element(pendingCell).toHaveAttribute("aria-busy", "true");
+
+  resolveSave();
+  await expect.element(pendingCell).toHaveAttribute("data-bruno-save-success");
+});
+
 test("reports an Immediate save failure persistently and exposes an accessible Close control", async () => {
   const onSaveEdits = vi.fn(() => Promise.reject(new Error("Version changed on the server.")));
   const screen = await render(
@@ -942,6 +1009,33 @@ test("reports an Immediate save failure persistently and exposes an accessible C
     .not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Close toast" }));
   await expect.element(alert).not.toBeInTheDocument();
+});
+
+test("clears a rejected Immediate save after its authoritative row disappears", async () => {
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_REJECTED_ROW_DISAPPEARANCE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={() => Promise.reject(new Error("The row was removed."))}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_REJECTED_ROW_DISAPPEARANCE" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByRole("alert")).toBeInTheDocument();
+
+  await screen.rerender(renderTable([], 2));
+
+  await expect.poll(() => screen.getByRole("alert").all().length).toBe(0);
+  await expect.element(screen.getByRole("switch", { name: "Batch editing" })).toBeEnabled();
 });
 
 test("retains one concurrent failure when another operation converges", async () => {
@@ -1112,8 +1206,8 @@ test("keeps shared failure toasts distinct across separate React roots", async (
     await userEvent.keyboard("{Enter}");
   }
 
+  await expect.poll(() => second.getByRole("alert").all().length).toBe(2);
   expect(second.getByRole("region", { name: "Notifications" }).all()).toHaveLength(1);
-  expect(second.getByRole("alert").all()).toHaveLength(2);
   const detailsButtons = second.getByRole("button", { name: "Operation details" }).all();
   await userEvent.click(detailsButtons[0]!);
   const details = second.getByRole("alertdialog", { name: "Save operation details" });
@@ -1131,6 +1225,66 @@ test("keeps shared failure toasts distinct across separate React roots", async (
   await second.unmount();
   await expect.poll(() => second.getByRole("alert").all().length).toBe(1);
   await expect.element(second.getByRole("button", { name: "Operation details" })).toHaveFocus();
+});
+
+test("hosts save failure notifications in the table's owner document", async () => {
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  const ownerDocument = frame.contentDocument;
+  if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+  const container = ownerDocument.createElement("div");
+  ownerDocument.body.append(container);
+  const runtime = new BrunoTableEditMemoryRuntime();
+  runtime.activate();
+  const screen = await render(
+    <BrunoTableEditSafetyFooter
+      dispatchGridCommand={() => false}
+      runtime={runtime}
+      renderReview={() => null}
+    />,
+    { container, baseElement: ownerDocument.body },
+  );
+  await expect
+    .poll(() => ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]"))
+    .not.toBeNull();
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+  runtime.recordSaveFailure("operation-secondary-document", new Error("Failure."), [
+    {
+      rowId: "ada",
+      baseRow: rows[0],
+      expectedVersion: 1n,
+      changes: [
+        {
+          columnId: "COL_ID_NAME",
+          field: "name",
+          before: "Ada",
+          after: "Augusta",
+        },
+      ],
+    },
+  ]);
+
+  await expect
+    .poll(() => {
+      const ownerAlerts = ownerDocument.querySelectorAll('[role="alert"]').length;
+      const mainAlerts = document.querySelectorAll('[role="alert"]').length;
+      if (ownerAlerts === 0 && mainAlerts > 0) {
+        throw new Error(`Toast rendered in the main document (${String(mainAlerts)} alerts).`);
+      }
+      return ownerAlerts;
+    })
+    .toBe(1);
+  expect(ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]")).not.toBeNull();
+  expect(document.querySelector("[data-bruno-table-save-failure-toaster]")).toBeNull();
+
+  await screen.unmount();
+  await expect
+    .poll(() => ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]"))
+    .toBeNull();
+  runtime.dispose();
+  frame.remove();
 });
 
 test("does not reopen stale failure details when a later save fails", async () => {
@@ -2091,6 +2245,47 @@ test("captures Row Version evidence through the latest extractor", async () => {
 
   expect(initialExtractor).not.toHaveBeenCalled();
   expect(latestExtractor).toHaveBeenCalledWith(rows[0]);
+});
+
+test("blocks Batch Save while Row Version extraction fails and recovers", async () => {
+  let extractorAvailable = true;
+  const getRowVersion = (candidate: Row) => {
+    if (!extractorAvailable) throw new Error("Row Version unavailable.");
+    return candidate.revision;
+  };
+  const renderTable = (version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_ROW_VERSION_RECOVERY"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={getRowVersion}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(renderTable(1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_ROW_VERSION_RECOVERY" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  extractorAvailable = false;
+  await screen.rerender(renderTable(2));
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 blocked change");
+  await expect.element(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+  extractorAvailable = true;
+  await screen.rerender(renderTable(3));
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 unsaved change");
+  await expect.element(screen.getByRole("button", { name: "Save" })).toBeEnabled();
 });
 
 test("reviews pending work before Reset and changes nothing until confirmation", async () => {

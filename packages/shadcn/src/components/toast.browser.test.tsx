@@ -90,6 +90,31 @@ function CompoundToastHarness({
 }
 
 describe("persistent toast accessibility", () => {
+  test("supports a portal container in another document", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const ownerDocument = frame.contentDocument;
+    if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+    const toastManager = createToastManager();
+    const screen = await render(
+      <Toaster
+        portalContainer={{ current: ownerDocument.body }}
+        toastManager={toastManager}
+        timeout={0}
+      />,
+    );
+
+    addPersistentToast(toastManager, "Secondary document failure");
+
+    await expect
+      .poll(() => ownerDocument.body.textContent?.includes("Secondary document failure"))
+      .toBe(true);
+    expect(document.body.textContent).not.toContain("Secondary document failure");
+
+    await screen.unmount();
+    frame.remove();
+  });
+
   test("keeps the public compound Close control accessible", async () => {
     const toastManager = createToastManager();
     const screen = await render(<CompoundToastHarness toastManager={toastManager} />);

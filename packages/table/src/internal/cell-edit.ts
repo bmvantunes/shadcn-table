@@ -1422,6 +1422,7 @@ export class BrunoTableCellEditRuntime {
   private batchHistoryEnabled = false;
   private saveOperationCapacityAvailable = true;
   private readonly blockedDraftKeys = new Set<string>();
+  private readonly rowVersionBlockedRowIds = new Set<string>();
   private readonly validationDraftKeys = new Set<string>();
   private readonly conflictDraftKeys = new Set<string>();
   private readonly draftEvidenceKeys = new Set<string>();
@@ -1487,6 +1488,9 @@ export class BrunoTableCellEditRuntime {
     getRowVersion: ((row: object) => unknown) | undefined,
   ): void => {
     this.getRowVersion = getRowVersion;
+    if (this.rowVersionBlockedRowIds.size > 0 && this.isSourceAuthoritative()) {
+      this.reconcileDraftRows(new Set(this.rowVersionBlockedRowIds), true);
+    }
   };
 
   public readonly subscribeActivity = (listener: Listener): (() => void) => {
@@ -2485,7 +2489,6 @@ export class BrunoTableCellEditRuntime {
     const previousDrafts = this.draftStore.get();
     const protectedPresentationColumns = new Map<string, CompiledFieldColumn>();
     for (const [key, operationId] of this.saveLockedCellKeys) {
-      if (!this.batchSaveOperationIds.has(operationId)) continue;
       const identity = parseCellKey(key);
       if (identity === undefined) continue;
       const presentationColumn = this.valueAuthoritiesByOperation
@@ -3109,6 +3112,7 @@ export class BrunoTableCellEditRuntime {
     if (drafts.size === 0 && next.undoStack.length === 0 && next.redoStack.length === 0) {
       this.draftEvidenceKeys.clear();
       this.draftKeysByRowId.clear();
+      this.rowVersionBlockedRowIds.clear();
       return;
     }
     const changedEvidenceKeys = new Set(affectedKeys);
@@ -3152,8 +3156,19 @@ export class BrunoTableCellEditRuntime {
     ) {
       return Object.freeze({ entry: undefined, prune: true });
     }
-    const blockedReason =
-      source._tag !== "Success" || !isDraftEditable(column, row, entry.mine)
+    let rowVersionAvailable = true;
+    if (this.getRowVersion !== undefined) {
+      try {
+        this.getRowVersion(row);
+      } catch {
+        rowVersionAvailable = false;
+      }
+    }
+    if (rowVersionAvailable) this.rowVersionBlockedRowIds.delete(entry.rowId);
+    else this.rowVersionBlockedRowIds.add(entry.rowId);
+    const blockedReason = !rowVersionAvailable
+      ? BRUNO_TABLE_CELL_EDIT_ROW_VERSION_MESSAGE
+      : source._tag !== "Success" || !isDraftEditable(column, row, entry.mine)
         ? BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE
         : undefined;
     return Object.freeze({ entry: setDraftBlockedReason(entry, blockedReason), prune: false });
@@ -3357,6 +3372,8 @@ export class BrunoTableCellEditRuntime {
     const changedKeys: string[] = [];
     const reviewChangedKeys = new Set<string>();
     const reviewServerRows = new Map<string, unknown>();
+    const rowVersionAvailability = new Map<string, boolean>();
+    const visitedRowIds = new Set<string>();
     const keys =
       changedRowIds === undefined
         ? this.draftEvidenceKeys.values()
@@ -3376,6 +3393,7 @@ export class BrunoTableCellEditRuntime {
       let reconciledDraft = draft;
       const representative = draft ?? findDraftHistoryEntry(nextUndoStack, nextRedoStack, key);
       if (representative === undefined) continue;
+      visitedRowIds.add(representative.rowId);
       if (submittedConvergedKeys.has(key)) {
         nextDrafts ??= new Map(previousDrafts);
         nextDrafts.delete(key);
@@ -3433,7 +3451,24 @@ export class BrunoTableCellEditRuntime {
           nextUndoStack = transformDraftHistoryCell(nextUndoStack, key, clearConflict);
           nextRedoStack = transformDraftHistoryCell(nextRedoStack, key, clearConflict);
         }
-        if (source._tag !== "Success" || !isDraftEditable(column, row, representative.mine)) {
+        let rowVersionAvailable = rowVersionAvailability.get(representative.rowId);
+        if (rowVersionAvailable === undefined) {
+          rowVersionAvailable = true;
+          if (this.getRowVersion !== undefined) {
+            try {
+              this.getRowVersion(row);
+            } catch {
+              rowVersionAvailable = false;
+            }
+          }
+          rowVersionAvailability.set(representative.rowId, rowVersionAvailable);
+        }
+        if (!rowVersionAvailable) {
+          blockedReason = BRUNO_TABLE_CELL_EDIT_ROW_VERSION_MESSAGE;
+        } else if (
+          source._tag !== "Success" ||
+          !isDraftEditable(column, row, representative.mine)
+        ) {
           blockedReason = BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE;
         }
       }
@@ -3458,6 +3493,10 @@ export class BrunoTableCellEditRuntime {
         nextRedoStack = transformedRedo;
         changedKeys.push(key);
       }
+    }
+    for (const rowId of visitedRowIds) {
+      if (rowVersionAvailability.get(rowId) === false) this.rowVersionBlockedRowIds.add(rowId);
+      else this.rowVersionBlockedRowIds.delete(rowId);
     }
     for (const key of convergedKeys) {
       const operationId = this.saveLockedCellKeys.get(key);
@@ -3557,12 +3596,17 @@ export class BrunoTableCellEditRuntime {
     this.draftEvidenceKeys.delete(key);
     const rowKeys = this.draftKeysByRowId.get(rowId);
     if (typeof rowKeys === "string") {
-      if (rowKeys === key) this.draftKeysByRowId.delete(rowId);
+      if (rowKeys === key) {
+        this.draftKeysByRowId.delete(rowId);
+        this.rowVersionBlockedRowIds.delete(rowId);
+      }
       return;
     }
     rowKeys?.delete(key);
-    if (rowKeys?.size === 0) this.draftKeysByRowId.delete(rowId);
-    else if (rowKeys?.size === 1) {
+    if (rowKeys?.size === 0) {
+      this.draftKeysByRowId.delete(rowId);
+      this.rowVersionBlockedRowIds.delete(rowId);
+    } else if (rowKeys?.size === 1) {
       const remaining = rowKeys.values().next().value;
       if (remaining !== undefined) this.draftKeysByRowId.set(rowId, remaining);
     }
@@ -3829,8 +3873,10 @@ export class BrunoTableCellEditRuntime {
         const evidence = evidenceByRow.get(rowId);
         if (evidence === undefined) continue;
         const remaining: AcceptedOverlayEntry[] = [];
-        const converged: AcceptedOverlayEntry[] = [];
+        const reconciled: AcceptedOverlayEntry[] = [];
+        const valueConverged: AcceptedOverlayEntry[] = [];
         const row = this.getRow(rowId);
+        const rowMissing = typeof row !== "object" || row === null;
         for (const entry of evidence) {
           const source = this.readSubmittedSourceValue(row, entry.valueAuthority);
           const matches =
@@ -3838,6 +3884,7 @@ export class BrunoTableCellEditRuntime {
             safeEquivalentEditValues(entry.valueAuthority.equivalent, entry.after, source.value) ===
               true;
           if (
+            !rowMissing &&
             !matches &&
             this.rejectedBatchOperationIds.has(operationId) &&
             source._tag === "Success" &&
@@ -3851,6 +3898,7 @@ export class BrunoTableCellEditRuntime {
             clearedConflicts.add(cellKey(entry.rowId, entry.columnId));
           }
           if (
+            !rowMissing &&
             !matches &&
             this.rejectedBatchOperationIds.has(operationId) &&
             source._tag === "Success" &&
@@ -3873,9 +3921,14 @@ export class BrunoTableCellEditRuntime {
               conflicts.set(key, source.value);
             }
           }
-          (matches ? converged : remaining).push(entry);
+          if (rowMissing || matches) {
+            reconciled.push(entry);
+            if (matches) valueConverged.push(entry);
+          } else {
+            remaining.push(entry);
+          }
         }
-        if (converged.length === 0) continue;
+        if (reconciled.length === 0) continue;
         remainingByRow ??= new Map(evidenceByRow);
         if (remaining.length === 0) {
           remainingByRow.delete(rowId);
@@ -3883,8 +3936,8 @@ export class BrunoTableCellEditRuntime {
         } else {
           remainingByRow.set(rowId, Object.freeze(remaining));
         }
-        this.removeRejectedOperationCellKeys(operationId, converged, changedKeys);
-        for (const entry of converged) {
+        this.removeRejectedOperationCellKeys(operationId, reconciled, changedKeys);
+        for (const entry of valueConverged) {
           const key = cellKey(entry.rowId, entry.columnId);
           convergedKeys.add(key);
           const currentDraft = this.draftStore.get().get(key);
@@ -3902,7 +3955,7 @@ export class BrunoTableCellEditRuntime {
         }
       }
       if (remainingByRow === undefined) continue;
-      this.startSuccessFlash(operationId, convergedKeys);
+      if (convergedKeys.size > 0) this.startSuccessFlash(operationId, convergedKeys);
       if (remainingByRow.size === 0) {
         next.delete(operationId);
         this.rejectedBatchOperationIds.delete(operationId);

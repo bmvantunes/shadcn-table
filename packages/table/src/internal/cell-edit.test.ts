@@ -4224,6 +4224,110 @@ describe("BrunoTable Cell Edit Session", () => {
     ]);
   });
 
+  it("blocks dirty rows while Row Version extraction fails and clears the block on recovery", () => {
+    let extractorAvailable = true;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+
+    runtime.setRowVersionExtractor(() => {
+      if (!extractorAvailable) throw new Error("Row Version unavailable");
+      return 2n;
+    });
+    extractorAvailable = false;
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { mine: 7, blockedReason: expect.stringContaining("Row Version") },
+    ]);
+    expect(runtime.createBatchSaveChangeSet()).toBeUndefined();
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+
+    extractorAvailable = true;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 0 });
+    expect(runtime.createBatchSaveChangeSet()?.[0]?.expectedVersion).toBe(2n);
+  });
+
+  it("revalidates only Row Version-blocked rows when the extractor changes", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const byId = new Map([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const getRow = vi.fn((rowId: string) => byId.get(rowId));
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow,
+      getRowVersion: () => 1n,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    for (const [rowId, mine] of [
+      [row.id, "7"],
+      [second.id, "8"],
+    ] as const) {
+      expect(runtime.start(rowId, "COL_ID_SCORE")).toBe(true);
+      expect(runtime.commit(mine)).toBe(true);
+    }
+
+    runtime.setRowVersionExtractor((candidate) => {
+      if (candidate === row) throw new Error("Row Version unavailable");
+      return 1n;
+    });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+
+    getRow.mockClear();
+    runtime.setRowVersionExtractor(() => 2n);
+
+    expect(getRow.mock.calls.map(([rowId]) => rowId)).toEqual([row.id]);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 0, draftCount: 2 });
+  });
+
+  it("drops a Row Version-blocked row index when its final evidence converges", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const byId = new Map<string, Row>([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const getRow = vi.fn((rowId: string) => byId.get(rowId));
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow,
+      getRowVersion: () => 1n,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    for (const [rowId, mine] of [
+      [row.id, "7"],
+      [second.id, "8"],
+    ] as const) {
+      expect(runtime.start(rowId, "COL_ID_SCORE")).toBe(true);
+      expect(runtime.commit(mine)).toBe(true);
+    }
+    runtime.setRowVersionExtractor((candidate) => {
+      if (candidate === row) throw new Error("Row Version unavailable");
+      return 1n;
+    });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1, draftCount: 2 });
+
+    byId.set(row.id, Object.freeze({ ...row, score: 7 }));
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 0, draftCount: 1 });
+
+    getRow.mockClear();
+    runtime.setRowVersionExtractor(() => 2n);
+    expect(getRow).not.toHaveBeenCalled();
+  });
+
   it("groups a Batch Save Change Set by stable Row Identity", () => {
     const second = Object.freeze({ ...row, id: "row-2", score: 5 });
     const byId = new Map([
@@ -4279,6 +4383,37 @@ describe("BrunoTable Cell Edit Session", () => {
     current = undefined;
     runtime.reconcileSourceRows(new Set([row.id]));
     expect(runtime.getAcceptedOverlayCountForOperation("operation-disappearance")).toBe(0);
+  });
+
+  it("reconciles rejected evidence when its authoritative row disappears", () => {
+    let current: Row | undefined = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    const changeSet = [
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: row.quantity,
+        changes: [
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ] as const;
+
+    runtime.rejectSave("operation-disappearance", changeSet, true);
+    expect(runtime.hasRejectedOperation("operation-disappearance")).toBe(true);
+    current = undefined;
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.hasRejectedOperation("operation-disappearance")).toBe(false);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toEqual({
+      active: false,
+      hasDraft: false,
+    });
   });
 
   it("refuses a fresh Save preflight and records a conflict when an edited Base diverges", () => {

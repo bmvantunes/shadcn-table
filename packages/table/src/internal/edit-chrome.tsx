@@ -30,43 +30,61 @@ import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit";
 import type { BrunoTableGridCommand } from "./column-management";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
-const saveFailureToastManager = createToastManager();
 type SaveFailureToasterOwner = object;
-const saveFailureToasterOwners = new Set<SaveFailureToasterOwner>();
-let saveFailureToastIdSequence = 0;
-let saveFailureToasterHost: HTMLElement | undefined;
-let saveFailureToasterRoot: Root | undefined;
+type SaveFailureToasterEntry = Readonly<{
+  readonly manager: ReturnType<typeof createToastManager>;
+  readonly owners: Set<SaveFailureToasterOwner>;
+  readonly host: HTMLElement;
+  readonly root: Root;
+}>;
 
-function ensureSaveFailureToasterHost(): void {
-  if (saveFailureToasterRoot !== undefined || typeof document === "undefined") return;
-  const host = document.createElement("div");
+const saveFailureToastersByDocument = new WeakMap<Document, SaveFailureToasterEntry>();
+let saveFailureToastIdSequence = 0;
+
+function createSaveFailureToasterEntry(ownerDocument: Document): SaveFailureToasterEntry {
+  const manager = createToastManager();
+  const host = ownerDocument.createElement("div");
   host.dataset["brunoTableSaveFailureToaster"] = "";
-  document.body.append(host);
+  ownerDocument.body.append(host);
   const root = createRoot(host);
-  root.render(<Toaster toastManager={saveFailureToastManager} timeout={0} />);
-  saveFailureToasterHost = host;
-  saveFailureToasterRoot = root;
+  root.render(
+    <Toaster
+      portalContainer={{ current: ownerDocument.body }}
+      toastManager={manager}
+      timeout={0}
+    />,
+  );
+  return Object.freeze({ manager, owners: new Set<SaveFailureToasterOwner>(), host, root });
 }
 
-function scheduleSaveFailureToasterDisposal(): void {
+function scheduleSaveFailureToasterDisposal(
+  ownerDocument: Document,
+  entry: SaveFailureToasterEntry,
+): void {
   queueMicrotask(() => {
-    if (saveFailureToasterOwners.size > 0) return;
-    const root = saveFailureToasterRoot;
-    const host = saveFailureToasterHost;
-    saveFailureToasterRoot = undefined;
-    saveFailureToasterHost = undefined;
-    root?.unmount();
-    host?.remove();
+    if (entry.owners.size > 0 || saveFailureToastersByDocument.get(ownerDocument) !== entry) return;
+    saveFailureToastersByDocument.delete(ownerDocument);
+    entry.root.unmount();
+    entry.host.remove();
   });
 }
 
-function registerSaveFailureToasterOwner(owner: SaveFailureToasterOwner): () => void {
-  saveFailureToasterOwners.add(owner);
-  ensureSaveFailureToasterHost();
-  return () => {
-    saveFailureToasterOwners.delete(owner);
-    if (saveFailureToasterOwners.size === 0) scheduleSaveFailureToasterDisposal();
-  };
+function registerSaveFailureToasterOwner(
+  ownerDocument: Document,
+  owner: SaveFailureToasterOwner,
+): Readonly<{ readonly entry: SaveFailureToasterEntry; readonly unregister: () => void }> {
+  const entry =
+    saveFailureToastersByDocument.get(ownerDocument) ??
+    createSaveFailureToasterEntry(ownerDocument);
+  saveFailureToastersByDocument.set(ownerDocument, entry);
+  entry.owners.add(owner);
+  return Object.freeze({
+    entry,
+    unregister: () => {
+      entry.owners.delete(owner);
+      if (entry.owners.size === 0) scheduleSaveFailureToasterDisposal(ownerDocument, entry);
+    },
+  });
 }
 
 type BrunoTableEditModeControlProps = Readonly<{
@@ -318,6 +336,8 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
     runtime.getSaveFailureSnapshot,
   );
   const [toasterOwnerToken] = useState<SaveFailureToasterOwner>(() => Object.freeze({}));
+  const toasterAnchor = useRef<HTMLSpanElement>(null);
+  const [toasterEntry, setToasterEntry] = useState<SaveFailureToasterEntry>();
   const [toastId] = useState(
     () => `bruno-table-save-failure-${String((saveFailureToastIdSequence += 1))}`,
   );
@@ -325,15 +345,22 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
   const failureSignature = failure.operations.map((operation) => operation.operationId).join("\0");
   const [detailsFailureSignature, setDetailsFailureSignature] = useState<string>();
   const detailsOpen = failure.count > 0 && detailsFailureSignature === failureSignature;
-  useEffect(() => registerSaveFailureToasterOwner(toasterOwnerToken), [toasterOwnerToken]);
   useEffect(() => {
+    const ownerDocument = toasterAnchor.current?.ownerDocument;
+    if (ownerDocument === undefined) return;
+    const registration = registerSaveFailureToasterOwner(ownerDocument, toasterOwnerToken);
+    setToasterEntry(registration.entry);
+    return registration.unregister;
+  }, [toasterOwnerToken]);
+  useEffect(() => {
+    if (toasterEntry === undefined) return;
     if (failure.count === 0) {
       programmaticToastClose.current = true;
-      saveFailureToastManager.close(toastId);
+      toasterEntry.manager.close(toastId);
       programmaticToastClose.current = false;
       return;
     }
-    saveFailureToastManager.add({
+    toasterEntry.manager.add({
       id: toastId,
       title:
         failure.count === 1
@@ -356,17 +383,19 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
         runtime.dismissSaveFailures();
       },
     });
-  }, [failure, failureSignature, runtime, toastId]);
+  }, [failure, failureSignature, runtime, toastId, toasterEntry]);
   useEffect(
     () => () => {
+      if (toasterEntry === undefined) return;
       programmaticToastClose.current = true;
-      saveFailureToastManager.close(toastId);
+      toasterEntry.manager.close(toastId);
       programmaticToastClose.current = false;
     },
-    [toastId],
+    [toastId, toasterEntry],
   );
   return (
     <>
+      <span aria-hidden="true" className="hidden" ref={toasterAnchor} />
       <AlertDialog
         open={detailsOpen}
         onOpenChange={(open) => setDetailsFailureSignature(open ? failureSignature : undefined)}
