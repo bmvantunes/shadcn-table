@@ -128,6 +128,53 @@ describe("BrunoTableSaveOperationRuntime", () => {
     expect(saveOperations.getRetainedChangeSetCount()).toBe(0);
   });
 
+  it("rejects non-thenable results and hostile then accessors through the ordinary workflow", async () => {
+    const runInvalidHandler = async (handler: () => never): Promise<string> => {
+      let editMemory!: BrunoTableEditMemoryRuntime;
+      const cellEdit = new BrunoTableCellEditRuntime({
+        columns,
+        getRow: () => row,
+        getRowVersion: () => row.revision,
+        onCommit: (change) => editMemory.requestImmediateSave([change]),
+        onCommitGesture: (changes) => editMemory.requestImmediateSave(changes),
+      });
+      editMemory = new BrunoTableEditMemoryRuntime();
+      const saveOperations = new BrunoTableSaveOperationRuntime(cellEdit, editMemory);
+      cellEdit.activate();
+      editMemory.activate();
+      disposers.push(
+        () => cellEdit.dispose(),
+        () => editMemory.dispose(),
+        saveOperations.activate(),
+        editMemory.connectCellEdit(cellEdit),
+        saveOperations.setHandler(handler),
+      );
+
+      expect(cellEdit.start(row.id, "COL_ID_VALUE")).toBe(true);
+      expect(cellEdit.commit("submitted")).toBe(true);
+      await vi.waitFor(
+        () => {
+          expect(editMemory.getSaveFailureSnapshot().count).toBe(1);
+        },
+        { interval: 1 },
+      );
+      expect(cellEdit.start(row.id, "COL_ID_VALUE")).toBe(true);
+      cellEdit.cancel();
+      return editMemory.getSaveFailureSnapshot().operations[0]!.message;
+    };
+
+    await expect(runInvalidHandler(() => 42 as never)).resolves.toBe(
+      "BrunoTable onSaveEdits must return a PromiseLike<void>.",
+    );
+    const hostile = new Proxy(Object.create(null) as object, {
+      get: (_target, property) => {
+        if (property === "then") throw new Error("Hostile then accessor.");
+        return undefined;
+      },
+    });
+    await expect(runInvalidHandler(() => hostile as never)).resolves.toBe("Hostile then accessor.");
+  });
+
   it("bounds rejected workflows without consuming pending-operation capacity", async () => {
     let editMemory!: BrunoTableEditMemoryRuntime;
     const cellEdit = new BrunoTableCellEditRuntime({

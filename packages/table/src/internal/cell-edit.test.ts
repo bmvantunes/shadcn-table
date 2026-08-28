@@ -4093,6 +4093,37 @@ describe("BrunoTable Cell Edit Session", () => {
     }
   });
 
+  it("does not retain a rejection deadline for a fully converged Immediate operation", () => {
+    vi.useFakeTimers();
+    try {
+      let source = row;
+      const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => source });
+      const changeSet = [
+        {
+          rowId: row.id,
+          baseRow: row,
+          expectedVersion: 1n,
+          changes: [
+            {
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: row.score,
+              after: 7,
+            },
+          ],
+        },
+      ] as const;
+
+      expect(runtime.beginSaveOperation("operation-converged", changeSet, false)).toBe(true);
+      source = Object.freeze({ ...row, score: 7 });
+      runtime.reconcileSourceRows(new Set([row.id]));
+      runtime.rejectSave("operation-converged", changeSet, true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds rejected operation evidence to the latest 128 operations", () => {
     const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
     for (let index = 0; index < 129; index += 1) {

@@ -12,7 +12,6 @@ import {
 import { Switch } from "@bruno/shadcn/switch";
 import { ScrollArea } from "@bruno/shadcn/scroll-area";
 import { createToastManager, Toaster } from "@bruno/shadcn/toast";
-import { Store } from "@tanstack/store";
 import {
   memo,
   useCallback,
@@ -25,6 +24,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { createRoot, type Root } from "react-dom/client";
 
 import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit";
 import type { BrunoTableGridCommand } from "./column-management";
@@ -33,17 +33,39 @@ import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 const saveFailureToastManager = createToastManager();
 type SaveFailureToasterOwner = object;
 const saveFailureToasterOwners = new Set<SaveFailureToasterOwner>();
-const saveFailureToasterOwnerStore = new Store<SaveFailureToasterOwner | undefined>(undefined);
 let saveFailureToastIdSequence = 0;
+let saveFailureToasterHost: HTMLElement | undefined;
+let saveFailureToasterRoot: Root | undefined;
+
+function ensureSaveFailureToasterHost(): void {
+  if (saveFailureToasterRoot !== undefined || typeof document === "undefined") return;
+  const host = document.createElement("div");
+  host.dataset["brunoTableSaveFailureToaster"] = "";
+  document.body.append(host);
+  const root = createRoot(host);
+  root.render(<Toaster toastManager={saveFailureToastManager} timeout={0} />);
+  saveFailureToasterHost = host;
+  saveFailureToasterRoot = root;
+}
+
+function scheduleSaveFailureToasterDisposal(): void {
+  queueMicrotask(() => {
+    if (saveFailureToasterOwners.size > 0) return;
+    const root = saveFailureToasterRoot;
+    const host = saveFailureToasterHost;
+    saveFailureToasterRoot = undefined;
+    saveFailureToasterHost = undefined;
+    root?.unmount();
+    host?.remove();
+  });
+}
 
 function registerSaveFailureToasterOwner(owner: SaveFailureToasterOwner): () => void {
   saveFailureToasterOwners.add(owner);
-  saveFailureToasterOwnerStore.setState(() => owner);
+  ensureSaveFailureToasterHost();
   return () => {
     saveFailureToasterOwners.delete(owner);
-    if (saveFailureToasterOwnerStore.get() === owner) {
-      saveFailureToasterOwnerStore.setState(() => saveFailureToasterOwners.values().next().value);
-    }
+    if (saveFailureToasterOwners.size === 0) scheduleSaveFailureToasterDisposal();
   };
 }
 
@@ -300,16 +322,9 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
     () => `bruno-table-save-failure-${String((saveFailureToastIdSequence += 1))}`,
   );
   const programmaticToastClose = useRef(false);
-  const selectedToasterOwner = useSyncExternalStore(
-    (listener) => {
-      const subscription = saveFailureToasterOwnerStore.subscribe(listener);
-      return () => subscription.unsubscribe();
-    },
-    () => saveFailureToasterOwnerStore.get(),
-    () => saveFailureToasterOwnerStore.get(),
-  );
   const failureSignature = failure.operations.map((operation) => operation.operationId).join("\0");
   const [detailsFailureSignature, setDetailsFailureSignature] = useState<string>();
+  const detailsOpen = failure.count > 0 && detailsFailureSignature === failureSignature;
   useEffect(() => registerSaveFailureToasterOwner(toasterOwnerToken), [toasterOwnerToken]);
   useEffect(() => {
     if (failure.count === 0) {
@@ -352,44 +367,43 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
   );
   return (
     <>
-      {selectedToasterOwner === toasterOwnerToken ? (
-        <Toaster toastManager={saveFailureToastManager} timeout={0} />
-      ) : null}
       <AlertDialog
-        open={failure.count > 0 && detailsFailureSignature === failureSignature}
+        open={detailsOpen}
         onOpenChange={(open) => setDetailsFailureSignature(open ? failureSignature : undefined)}
       >
-        <AlertDialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Save operation details</AlertDialogTitle>
-            <AlertDialogDescription>
-              These saves were not confirmed. Live source convergence can still clear each result.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <ScrollArea className="min-h-0 max-h-[min(60dvh,32rem)]">
-            <ul className="flex list-disc flex-col gap-1 py-1 ps-5 pe-4 text-sm">
-              {failure.operations.map((operation, index) => (
-                <li key={operation.operationId}>
-                  <p>
-                    Operation {String(index + 1)}: {operation.message}
-                  </p>
-                  <ul className="mt-1 list-[circle] space-y-1 ps-5">
-                    {operation.rows.flatMap((row) =>
-                      row.cells.map((cell) => (
-                        <li key={`${row.rowId}\0${cell.columnId}`}>
-                          Row {row.rowId}, column {cell.columnId} (field {cell.field}).
-                        </li>
-                      )),
-                    )}
-                  </ul>
-                </li>
-              ))}
-            </ul>
-          </ScrollArea>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Close details</AlertDialogCancel>
-          </AlertDialogFooter>
-        </AlertDialogContent>
+        {detailsOpen ? (
+          <AlertDialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Save operation details</AlertDialogTitle>
+              <AlertDialogDescription>
+                These saves were not confirmed. Live source convergence can still clear each result.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <ScrollArea className="min-h-0 max-h-[min(60dvh,32rem)]">
+              <ul className="flex list-disc flex-col gap-1 py-1 ps-5 pe-4 text-sm">
+                {failure.operations.map((operation, index) => (
+                  <li key={operation.operationId}>
+                    <p>
+                      Operation {String(index + 1)}: {operation.message}
+                    </p>
+                    <ul className="mt-1 flex list-[circle] flex-col gap-1 ps-5">
+                      {operation.rows.flatMap((row) =>
+                        row.cells.map((cell) => (
+                          <li key={`${row.rowId}\0${cell.columnId}`}>
+                            Row {row.rowId}, column {cell.columnId} (field {cell.field}).
+                          </li>
+                        )),
+                      )}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            </ScrollArea>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Close details</AlertDialogCancel>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        ) : null}
       </AlertDialog>
     </>
   );

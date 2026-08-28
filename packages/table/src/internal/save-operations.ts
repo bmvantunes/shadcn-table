@@ -162,7 +162,7 @@ export class BrunoTableSaveOperationRuntime {
     };
     this.operations.set(operationId, operation);
     this.publishCapacityAvailability();
-    let result: PromiseLike<void>;
+    let result: unknown;
     try {
       result =
         this.handler?.(changeSet) ??
@@ -171,6 +171,30 @@ export class BrunoTableSaveOperationRuntime {
       this.rejectOperation(operation, error);
       return;
     }
+    let then: unknown;
+    try {
+      then =
+        (typeof result === "object" && result !== null) || typeof result === "function"
+          ? (result as { readonly then?: unknown }).then
+          : undefined;
+    } catch (error) {
+      this.rejectOperation(operation, error);
+      return;
+    }
+    if (typeof then !== "function") {
+      this.rejectOperation(
+        operation,
+        new TypeError("BrunoTable onSaveEdits must return a PromiseLike<void>."),
+      );
+      return;
+    }
+    const promise = new Promise<void>((resolve, reject) => {
+      try {
+        Reflect.apply(then, result, [resolve, reject]);
+      } catch (error) {
+        reject(error);
+      }
+    });
     const settlement: {
       runtime: BrunoTableSaveOperationRuntime | undefined;
       operation: SaveOperationRecord | undefined;
@@ -179,7 +203,7 @@ export class BrunoTableSaveOperationRuntime {
       settlement.runtime = undefined;
       settlement.operation = undefined;
     };
-    void Promise.resolve(result).then(
+    void promise.then(
       () => {
         const runtime = settlement.runtime;
         const retainedOperation = settlement.operation;

@@ -1950,7 +1950,7 @@ export class BrunoTableCellEditRuntime {
     if (!immediateOperation && evidenceByRow.size > 0) {
       this.rejectedBatchOperationIds.add(operationId);
     }
-    if (!immediateOperation && pendingConvergedKeys !== undefined) {
+    if (pendingConvergedKeys !== undefined) {
       this.startSuccessFlash(operationId, pendingConvergedKeys);
     }
     const affectedKeys = new Set<string>();
@@ -1989,7 +1989,7 @@ export class BrunoTableCellEditRuntime {
       }
       this.publishRejectedOperation(operationId);
     });
-    if (immediateOperation) {
+    if (immediateOperation && evidenceByRow.size > 0) {
       this.rejectedCellPresentationDeadlinesByOperation.set(operationId, Date.now() + 5_000);
       this.scheduleCellPresentationDeadline();
     }
@@ -2352,18 +2352,18 @@ export class BrunoTableCellEditRuntime {
 
   public readonly reconcileSourceRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
     if (!this.isSourceAuthoritative()) return;
-    const submittedConvergedKeys = this.reconcilePendingBatchSubmittedValues(changedRowIds);
+    const submittedConvergedKeys = this.reconcilePendingSubmittedValues(changedRowIds);
     const draftsChanged = this.reconcileDraftRows(changedRowIds, false, submittedConvergedKeys);
     const overlaysChanged = this.reconcileAcceptedOverlays(changedRowIds);
     const rejectedChanged = this.reconcileRejectedOperations(changedRowIds);
     if (draftsChanged || overlaysChanged || rejectedChanged) this.publishTraversalInvalidation();
   };
 
-  private readonly reconcilePendingBatchSubmittedValues = (
+  private readonly reconcilePendingSubmittedValues = (
     changedRowIds: ReadonlySet<string> | undefined,
   ): ReadonlySet<string> => {
     const newlyConverged = new Set<string>();
-    for (const operationId of this.batchSaveOperationIds) {
+    for (const operationId of this.valueAuthoritiesByOperation.keys()) {
       const authorities = this.valueAuthoritiesByOperation.get(operationId);
       const submittedValues = this.submittedValuesByOperation.get(operationId);
       const locksByRow = this.saveLockedCellKeysByOperationRow.get(operationId);
@@ -3807,6 +3807,7 @@ export class BrunoTableCellEditRuntime {
     const changedOperationIds = new Set<string>();
     const conflicts = new Map<string, unknown>();
     const clearedConflicts = new Set<string>();
+    const convergedBatchKeys = new Set<string>();
     let changed = false;
     const operationIds =
       changedRowIds === undefined
@@ -3884,7 +3885,20 @@ export class BrunoTableCellEditRuntime {
         }
         this.removeRejectedOperationCellKeys(operationId, converged, changedKeys);
         for (const entry of converged) {
-          convergedKeys.add(cellKey(entry.rowId, entry.columnId));
+          const key = cellKey(entry.rowId, entry.columnId);
+          convergedKeys.add(key);
+          const currentDraft = this.draftStore.get().get(key);
+          if (
+            this.rejectedBatchOperationIds.has(operationId) &&
+            currentDraft !== undefined &&
+            safeEquivalentEditValues(
+              entry.valueAuthority.equivalent,
+              currentDraft.mine,
+              entry.after,
+            ) === true
+          ) {
+            convergedBatchKeys.add(key);
+          }
         }
       }
       if (remainingByRow === undefined) continue;
@@ -3901,16 +3915,20 @@ export class BrunoTableCellEditRuntime {
     }
     if (clearedConflicts.size > 0) this.clearConflictEvidence(clearedConflicts);
     if (conflicts.size > 0) this.applyPreflightConflicts(conflicts);
-    if (!changed) return conflicts.size > 0 || clearedConflicts.size > 0;
-    this.rejectedOperations = next;
-    batch(() => {
-      for (const operationId of changedOperationIds) {
-        this.publishRejectedOperation(operationId);
-      }
-      for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
-    });
-    for (const key of changedKeys) this.releaseUnusedCellStore(key);
-    return true;
+    if (changed) {
+      this.rejectedOperations = next;
+      batch(() => {
+        for (const operationId of changedOperationIds) {
+          this.publishRejectedOperation(operationId);
+        }
+        for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
+      });
+      for (const key of changedKeys) this.releaseUnusedCellStore(key);
+    }
+    const draftsChanged =
+      convergedBatchKeys.size > 0 &&
+      this.reconcileDraftRows(changedRowIds, false, convergedBatchKeys);
+    return changed || conflicts.size > 0 || clearedConflicts.size > 0 || draftsChanged;
   };
 
   private readonly removeRejectedOperationRows = (

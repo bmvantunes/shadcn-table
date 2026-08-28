@@ -78,7 +78,8 @@
   "peerDependencies": {
     "@bruno/shadcn": ">=0.0.0 <1.0.0",
     "effect": "4.0.0-rc.111",
-    "react": "^19.2.8"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "peerDependenciesMeta": {
     "effect": {

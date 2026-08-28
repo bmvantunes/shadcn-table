@@ -1114,9 +1114,23 @@ test("keeps shared failure toasts distinct across separate React roots", async (
 
   expect(second.getByRole("region", { name: "Notifications" }).all()).toHaveLength(1);
   expect(second.getByRole("alert").all()).toHaveLength(2);
-  await first.unmount();
-  await expect.element(second.getByRole("alert")).toBeVisible();
-  expect(second.getByRole("alert").all()).toHaveLength(1);
+  const detailsButtons = second.getByRole("button", { name: "Operation details" }).all();
+  await userEvent.click(detailsButtons[0]!);
+  const details = second.getByRole("alertdialog", { name: "Save operation details" });
+  const firstToastIndex = details
+    .element()
+    .textContent?.includes("Failure for TABLE_ID_FAILURE_ROOT_FIRST.")
+    ? 0
+    : 1;
+  await userEvent.click(details.getByRole("button", { name: "Close details" }));
+  const survivingDetailsButton = second.getByRole("button", { name: "Operation details" }).all()[
+    firstToastIndex
+  ]!;
+  survivingDetailsButton.element().focus();
+  await expect.element(survivingDetailsButton).toHaveFocus();
+  await second.unmount();
+  await expect.poll(() => second.getByRole("alert").all().length).toBe(1);
+  await expect.element(second.getByRole("button", { name: "Operation details" })).toHaveFocus();
 });
 
 test("does not reopen stale failure details when a later save fails", async () => {
@@ -1344,7 +1358,7 @@ test("clears only an ambiguous failure whose submitted values later converge", a
     .toHaveAttribute("data-bruno-save-success");
 });
 
-test("does not retain a failure when the live source converges before rejection", async () => {
+test("remembers Immediate convergence when the source advances before rejection", async () => {
   let rejectSave!: (reason: Error) => void;
   const onSaveEdits = vi.fn(
     () =>
@@ -1377,13 +1391,18 @@ test("does not retain a failure when the live source converges before rejection"
 
   const convergedRows = [{ id: "ada", name: "Augusta", revision: 2n }] as const;
   await screen.rerender(renderTable(convergedRows, 2));
+  const advancedRows = [{ id: "ada", name: "Countess", revision: 3n }] as const;
+  await screen.rerender(renderTable(advancedRows, 3));
   rejectSave(new Error("The application raced with the source."));
 
   await expect.element(batchEditing).toBeEnabled();
   await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
   await expect
-    .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
+    .element(grid.getByRole("gridcell", { name: "Countess", exact: true }))
     .not.toHaveAttribute("data-bruno-save-failed");
+  await expect
+    .element(grid.getByRole("gridcell", { name: "Countess", exact: true }))
+    .toHaveAttribute("data-bruno-save-success");
 });
 
 test("remembers and prunes pending Batch convergence through a rebound column", async () => {
@@ -1447,6 +1466,118 @@ test("remembers and prunes pending Batch convergence through a rebound column", 
   await expect
     .element(grid.getByRole("gridcell", { name: "Countess", exact: true }))
     .toHaveAttribute("data-bruno-save-success");
+});
+
+test("prunes rejected Batch drafts when captured schema authority later converges", async () => {
+  let rejectSave!: (reason: Error) => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectSave = reject;
+      }),
+  );
+  const reboundColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "id",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+    },
+  ] as unknown as BrunoTableColumns<Row>;
+  const renderTable = (
+    sourceRows: readonly Row[],
+    version: number,
+    activeColumns: BrunoTableColumns<Row> = columns,
+  ) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_REJECTED_BATCH_SCHEMA_CONVERGENCE"
+      columns={activeColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  const batchEditing = screen.getByRole("switch", { name: "Batch editing" });
+  await userEvent.click(batchEditing);
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_REJECTED_BATCH_SCHEMA_CONVERGENCE",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await screen.rerender(renderTable(rows, 2, reboundColumns));
+  rejectSave(new Error("The save callback rejected before source confirmation."));
+  await expect.element(screen.getByRole("alert")).toBeVisible();
+  await expect.element(batchEditing).toBeDisabled();
+
+  const convergedRows = [{ id: "ada", name: "Augusta", revision: 2n }] as const;
+  await screen.rerender(renderTable(convergedRows, 3, reboundColumns));
+
+  await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
+  await expect.element(batchEditing).toBeEnabled();
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("No unsaved changes");
+});
+
+test("preserves a later Batch draft when an older rejected save converges", async () => {
+  let rejectSave!: (reason: Error) => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectSave = reject;
+      }),
+  );
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_REJECTED_BATCH_LATER_DRAFT"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_REJECTED_BATCH_LATER_DRAFT",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  rejectSave(new Error("The first Batch save was rejected."));
+  await expect.element(screen.getByRole("alert")).toBeVisible();
+
+  await userEvent.click(grid.getByRole("gridcell", { name: "Augusta", exact: true }));
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Countess");
+  await userEvent.keyboard("{Enter}");
+  const oldSaveConverged = [{ id: "ada", name: "Augusta", revision: 2n }] as const;
+  await screen.rerender(renderTable(oldSaveConverged, 2));
+
+  await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
+  await expect.element(grid.getByRole("gridcell", { name: "Countess", exact: true })).toBeVisible();
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 unsaved change");
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+  const resetAllChanges = screen.getByRole("button", { name: "Reset All Changes" });
+  const historyDescriptionId = resetAllChanges.element().getAttribute("aria-describedby");
+  expect(document.getElementById(historyDescriptionId ?? "")?.textContent).toContain(
+    "2 Batch history commands",
+  );
 });
 
 test("suppresses stale success flashes while a newer save owns the cell", async () => {
