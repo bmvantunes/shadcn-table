@@ -1,12 +1,37 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BrunoTableCellEditRuntime } from "./cell-edit";
 import { compileColumns } from "./compile-columns";
 import { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
+const disposers: Array<() => void> = [];
+
+afterEach(() => {
+  for (const dispose of disposers.splice(0).reverse()) dispose();
+});
+
 describe("BrunoTable Edit Memory", () => {
+  it("reports an awaiting Batch operation even when no rows remain", () => {
+    const memory = new BrunoTableEditMemoryRuntime();
+    disposers.push(() => memory.dispose());
+    memory.activate();
+    const release = memory.beginSaveWork("batch:1", "batch");
+    disposers.push(release);
+
+    memory.setSaveWorkAwaitingSource("batch:1", 0);
+
+    expect(memory.getSaveWorkSnapshot()).toEqual({
+      pendingBatchCount: 0,
+      awaitingBatchCount: 1,
+      awaitingBatchRowCount: 0,
+      pendingImmediateCount: 0,
+      awaitingImmediateCount: 0,
+    });
+  });
+
   it("aggregates failures by operation and clears only the converged operation", () => {
     const memory = new BrunoTableEditMemoryRuntime();
+    disposers.push(() => memory.dispose());
     memory.activate();
     const changeSet = [
       {
@@ -58,7 +83,6 @@ describe("BrunoTable Edit Memory", () => {
 
     memory.dismissSaveFailures();
     expect(memory.getSaveFailureSnapshot()).toEqual({ count: 0, messages: [], operations: [] });
-    memory.dispose();
   });
 
   it("publishes only compact changed footer projections and keeps Save command-owned", () => {

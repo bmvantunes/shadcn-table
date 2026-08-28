@@ -31,17 +31,17 @@ import type { BrunoTableGridCommand } from "./column-management";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const saveFailureToastManager = createToastManager();
-const saveFailureToasterOwners = new Set<string>();
-const saveFailureToasterOwnerStore = new Store<string | undefined>(undefined);
+type SaveFailureToasterOwner = object;
+const saveFailureToasterOwners = new Set<SaveFailureToasterOwner>();
+const saveFailureToasterOwnerStore = new Store<SaveFailureToasterOwner | undefined>(undefined);
+let saveFailureToastIdSequence = 0;
 
-function registerSaveFailureToasterOwner(ownerId: string): () => void {
-  saveFailureToasterOwners.add(ownerId);
-  if (saveFailureToasterOwnerStore.get() === undefined) {
-    saveFailureToasterOwnerStore.setState(() => ownerId);
-  }
+function registerSaveFailureToasterOwner(owner: SaveFailureToasterOwner): () => void {
+  saveFailureToasterOwners.add(owner);
+  saveFailureToasterOwnerStore.setState(() => owner);
   return () => {
-    saveFailureToasterOwners.delete(ownerId);
-    if (saveFailureToasterOwnerStore.get() === ownerId) {
+    saveFailureToasterOwners.delete(owner);
+    if (saveFailureToasterOwnerStore.get() === owner) {
       saveFailureToasterOwnerStore.setState(() => saveFailureToasterOwners.values().next().value);
     }
   };
@@ -122,9 +122,11 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
     );
   }
   if (saveWork.pendingBatchCount > 0) saveWorkParts.push("Batch save pending");
-  if (saveWork.awaitingBatchRowCount > 0) {
+  if (saveWork.awaitingBatchCount > 0) {
     saveWorkParts.push(
-      `Batch save accepted · waiting for live confirmation · ${String(saveWork.awaitingBatchRowCount)} ${saveWork.awaitingBatchRowCount === 1 ? "row" : "rows"} remaining`,
+      saveWork.awaitingBatchRowCount > 0
+        ? `Batch save accepted · waiting for live confirmation · ${String(saveWork.awaitingBatchRowCount)} ${saveWork.awaitingBatchRowCount === 1 ? "row" : "rows"} remaining`
+        : "Batch save accepted · waiting for live confirmation",
     );
   }
   return (
@@ -293,10 +295,12 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
     runtime.getSaveFailureSnapshot,
     runtime.getSaveFailureSnapshot,
   );
-  const toasterOwnerId = useId();
-  const toastId = `${toasterOwnerId}-bruno-table-save-failure`;
+  const [toasterOwnerToken] = useState<SaveFailureToasterOwner>(() => Object.freeze({}));
+  const [toastId] = useState(
+    () => `bruno-table-save-failure-${String((saveFailureToastIdSequence += 1))}`,
+  );
   const programmaticToastClose = useRef(false);
-  const toasterOwner = useSyncExternalStore(
+  const selectedToasterOwner = useSyncExternalStore(
     (listener) => {
       const subscription = saveFailureToasterOwnerStore.subscribe(listener);
       return () => subscription.unsubscribe();
@@ -306,7 +310,7 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
   );
   const failureSignature = failure.operations.map((operation) => operation.operationId).join("\0");
   const [detailsFailureSignature, setDetailsFailureSignature] = useState<string>();
-  useEffect(() => registerSaveFailureToasterOwner(toasterOwnerId), [toasterOwnerId]);
+  useEffect(() => registerSaveFailureToasterOwner(toasterOwnerToken), [toasterOwnerToken]);
   useEffect(() => {
     if (failure.count === 0) {
       programmaticToastClose.current = true;
@@ -348,7 +352,7 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
   );
   return (
     <>
-      {toasterOwner === toasterOwnerId ? (
+      {selectedToasterOwner === toasterOwnerToken ? (
         <Toaster toastManager={saveFailureToastManager} timeout={0} />
       ) : null}
       <AlertDialog

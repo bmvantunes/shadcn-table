@@ -43,6 +43,7 @@ type SaveOperationRecord = {
   readonly kind: SaveOperationKind;
   changeSet: BrunoTableCellEditSaveChangeSet | undefined;
   readonly actor: ReturnType<typeof createSaveOperationActor>;
+  releaseRetainedOperation: (() => void) | undefined;
   releaseSaveWork: (() => void) | undefined;
   releasePromiseReferences: (() => void) | undefined;
   unsubscribeReconciliation: (() => void) | undefined;
@@ -119,6 +120,8 @@ export class BrunoTableSaveOperationRuntime {
       operation.unsubscribeReconciliation?.();
       operation.unsubscribeReconciliation = undefined;
       operation.changeSet = undefined;
+      operation.releaseRetainedOperation?.();
+      operation.releaseRetainedOperation = undefined;
       operation.releasePromiseReferences?.();
       operation.releasePromiseReferences = undefined;
       operation.releaseSaveWork?.();
@@ -152,6 +155,7 @@ export class BrunoTableSaveOperationRuntime {
       kind,
       changeSet,
       actor: createSaveOperationActor(),
+      releaseRetainedOperation: this.editMemory.beginRetainedSaveOperation(),
       releaseSaveWork,
       releasePromiseReferences: undefined,
       unsubscribeReconciliation: undefined,
@@ -244,7 +248,11 @@ export class BrunoTableSaveOperationRuntime {
     if (operation.actor.getSnapshot().value !== "rejected") return;
     this.publishCapacityAvailability();
     const reconcile = (): void => {
-      if (this.cellEdit.hasRejectedOperation(operation.operationId)) return;
+      const remainingCells = this.cellEdit.getRejectedOperationCells(operation.operationId);
+      if (remainingCells.length > 0) {
+        this.editMemory.retainSaveFailureCells(operation.operationId, remainingCells);
+        return;
+      }
       this.reconcileOperation(operation, true);
     };
     operation.unsubscribeReconciliation = this.cellEdit.subscribeRejectedOperation(
@@ -264,6 +272,8 @@ export class BrunoTableSaveOperationRuntime {
     operation.unsubscribeReconciliation = undefined;
     if (clearFailure) this.editMemory.clearSaveFailure(operation.operationId);
     this.cellEdit.completeSaveOperation(operation.operationId);
+    operation.releaseRetainedOperation?.();
+    operation.releaseRetainedOperation = undefined;
     operation.releaseSaveWork?.();
     operation.releaseSaveWork = undefined;
     this.operations.delete(operation.operationId);

@@ -47,6 +47,11 @@ export type BrunoTableCellEditSaveChangeSet = readonly [
   ...BrunoTableCellEditSaveRowChange[],
 ];
 
+export type BrunoTableCellEditRejectedOperationCell = Readonly<{
+  readonly rowId: string;
+  readonly columnId: string;
+}>;
+
 type ActiveSession = Readonly<{
   readonly rowId: string;
   readonly column: CompiledFieldColumn;
@@ -123,6 +128,7 @@ export function isBrunoTableCellEditDraftReviewSourceRow(
 type DraftEntry = BrunoTableCellEditDraftSnapshot &
   Readonly<{
     readonly blockedReason?: string;
+    readonly presentationColumn?: CompiledFieldColumn;
   }>;
 
 type DraftPatch =
@@ -591,6 +597,8 @@ const BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE =
   "This row was removed from the server. Changes cannot be saved.";
 const BRUNO_TABLE_CELL_EDIT_ROW_VERSION_MESSAGE =
   "The latest Row Version is unavailable. Try again after the source updates.";
+const BRUNO_TABLE_CELL_EDIT_SCHEMA_MESSAGE =
+  "This cell's value type changed. Changes cannot be saved.";
 
 function reconcileSessionPermission(session: ActiveSession): ActiveSession {
   const permissionMessage = isSessionEditable(session)
@@ -1038,10 +1046,12 @@ type DraftColumnReconciliationPlan =
 
 type DraftColumnReconciliationContext = Readonly<{
   readonly plans: ReadonlyMap<string, DraftColumnReconciliationPlan>;
+  readonly nextColumns: ReadonlyMap<string, CompiledFieldColumn>;
   readonly getRow: (rowId: string) => unknown;
   readonly rows: Map<string, unknown>;
   readonly migratedValues: WeakMap<DraftEntry, DraftEntry | null>;
   readonly semanticKeys: Set<string>;
+  readonly protectedPresentationColumns: ReadonlyMap<string, CompiledFieldColumn>;
   readonly draftChangesRequired: boolean;
   readonly historyChangesRequired: boolean;
 }>;
@@ -1050,6 +1060,8 @@ function createDraftColumnReconciliationContext(
   previousColumns: ReadonlyMap<string, CompiledFieldColumn>,
   nextColumns: ReadonlyMap<string, CompiledFieldColumn>,
   getRow: (rowId: string) => unknown,
+  protectedPresentationColumns: ReadonlyMap<string, CompiledFieldColumn>,
+  retainedPresentationWork: boolean,
 ): DraftColumnReconciliationContext {
   const plans = new Map<string, DraftColumnReconciliationPlan>();
   let draftChangesRequired = false;
@@ -1088,12 +1100,14 @@ function createDraftColumnReconciliationContext(
   }
   return Object.freeze({
     plans,
+    nextColumns,
     getRow,
     rows: new Map<string, unknown>(),
     migratedValues: new WeakMap<DraftEntry, DraftEntry | null>(),
     semanticKeys: new Set<string>(),
-    draftChangesRequired,
-    historyChangesRequired,
+    protectedPresentationColumns,
+    draftChangesRequired: draftChangesRequired || retainedPresentationWork,
+    historyChangesRequired: historyChangesRequired || retainedPresentationWork,
   });
 }
 
@@ -1268,6 +1282,7 @@ export type BrunoTableCellEditProjection = Readonly<{
   readonly draft?: unknown;
   readonly acceptedOverlay?: unknown;
   readonly acceptedOverlayPresentationColumn?: CompiledFieldColumn;
+  readonly draftPresentationColumn?: CompiledFieldColumn;
 }>;
 export type BrunoTableCellEditMovement =
   | "enter-forward"
@@ -1361,7 +1376,7 @@ export class BrunoTableCellEditRuntime {
   private readonly acceptedOverlayCountStoresByOperation = new Map<string, Store<number>>();
   private readonly acceptedOverlayKeysByRowId = new Map<string, Set<string>>();
   private rejectedOperations: ReadonlyMap<string, RejectedOperationEvidence> = new Map();
-  private readonly rejectedOperationStores = new Map<string, Store<boolean>>();
+  private readonly rejectedOperationStores = new Map<string, Store<number>>();
   private readonly rejectedOperationIdsByRowId = new Map<string, Set<string>>();
   private readonly rejectedBatchOperationIds = new Set<string>();
   private readonly rejectedCellKeys = new Map<string, Set<string>>();
@@ -1377,6 +1392,8 @@ export class BrunoTableCellEditRuntime {
   private readonly saveLockedCellKeys = new Map<string, string>();
   private readonly saveLockedCellKeysByOperationRow = new Map<string, Map<string, Set<string>>>();
   private readonly batchSaveOperationIds = new Set<string>();
+  private readonly pendingConvergedCellKeysByOperation = new Map<string, Set<string>>();
+  private readonly submittedValuesByOperation = new Map<string, ReadonlyMap<string, unknown>>();
   private readonly rowVersionExtractorsByOperation = new Map<
     string,
     ((row: object) => unknown) | undefined
@@ -1615,7 +1632,13 @@ export class BrunoTableCellEditRuntime {
         rows.set(draft.rowId, row);
       }
       const column = this.fieldColumnsById.get(draft.columnId);
-      if (column === undefined) return undefined;
+      if (
+        column === undefined ||
+        column.field !== draft.field ||
+        draft.presentationColumn !== undefined
+      ) {
+        return undefined;
+      }
       const source = this.readCanonicalSourceValue(draft.rowId, row.baseRow, column);
       if (source._tag !== "Success") return undefined;
       const equivalent = safeEquivalentEditValue(column, draft.base, source.value);
@@ -1717,12 +1740,26 @@ export class BrunoTableCellEditRuntime {
     operationId: string,
     listener: Listener,
   ): (() => void) => {
-    const store =
-      this.rejectedOperationStores.get(operationId) ??
-      new Store(this.hasRejectedOperation(operationId));
+    const store = this.rejectedOperationStores.get(operationId) ?? new Store(0);
     this.rejectedOperationStores.set(operationId, store);
     const subscription = store.subscribe(listener);
     return () => subscription.unsubscribe();
+  };
+
+  public readonly getRejectedOperationCells = (
+    operationId: string,
+  ): readonly BrunoTableCellEditRejectedOperationCell[] => {
+    const evidenceByRow = this.rejectedOperations.get(operationId);
+    if (evidenceByRow === undefined) return Object.freeze([]);
+    return Object.freeze(
+      [...flattenRejectedEvidence(evidenceByRow)].map((entry) =>
+        Object.freeze({ rowId: entry.rowId, columnId: entry.columnId }),
+      ),
+    );
+  };
+
+  private readonly publishRejectedOperation = (operationId: string): void => {
+    this.rejectedOperationStores.get(operationId)?.setState((version) => version + 1);
   };
 
   public readonly beginSaveOperation = (
@@ -1740,11 +1777,13 @@ export class BrunoTableCellEditRuntime {
       return false;
     }
     const valueAuthorities = new Map<string, SubmittedValueAuthority>();
+    const submittedValues = new Map<string, unknown>();
     for (const row of changeSet) {
       for (const change of row.changes) {
         const column = this.fieldColumnsById.get(change.columnId);
         if (column === undefined || column.field !== change.field) return false;
         valueAuthorities.set(change.columnId, this.createSubmittedValueAuthority(column));
+        submittedValues.set(cellKey(row.rowId, change.columnId), change.after);
       }
     }
     if (batchOperation) {
@@ -1753,18 +1792,22 @@ export class BrunoTableCellEditRuntime {
     }
     this.rowVersionExtractorsByOperation.set(operationId, this.getRowVersion);
     this.valueAuthoritiesByOperation.set(operationId, valueAuthorities);
+    this.submittedValuesByOperation.set(operationId, submittedValues);
     this.clearSupersededRejectedOperations(keys);
     const locksByRow = new Map<string, Set<string>>();
     for (const row of changeSet) {
       const rowKeys = new Set<string>();
       for (const change of row.changes) {
         const key = cellKey(row.rowId, change.columnId);
+        this.successFlashOperationByKey.delete(key);
+        this.successFlashDeadlinesByKey.delete(key);
         this.saveLockedCellKeys.set(key, operationId);
         rowKeys.add(key);
       }
       locksByRow.set(row.rowId, rowKeys);
     }
     this.saveLockedCellKeysByOperationRow.set(operationId, locksByRow);
+    this.scheduleCellPresentationDeadline();
     for (const key of keys) this.publishCell(key, this.draftStore.get());
     this.traversalIndex.reconcileRows(
       batchOperation ? undefined : new Set(changeSet.map((row) => row.rowId)),
@@ -1790,6 +1833,8 @@ export class BrunoTableCellEditRuntime {
       changed = true;
     }
     this.batchSaveOperationIds.delete(operationId);
+    this.pendingConvergedCellKeysByOperation.delete(operationId);
+    this.submittedValuesByOperation.delete(operationId);
     this.rowVersionExtractorsByOperation.delete(operationId);
     this.valueAuthoritiesByOperation.delete(operationId);
     this.saveLockedCellKeysByOperationRow.delete(operationId);
@@ -1881,27 +1926,33 @@ export class BrunoTableCellEditRuntime {
     immediateOperation: boolean,
   ): void => {
     const evidenceByRow = new Map<string, readonly AcceptedOverlayEntry[]>();
+    const pendingConvergedKeys = this.pendingConvergedCellKeysByOperation.get(operationId);
     for (const row of changeSet) {
-      evidenceByRow.set(
-        row.rowId,
-        Object.freeze(
-          row.changes.map((change) =>
-            Object.freeze({
-              operationId,
-              rowId: row.rowId,
-              columnId: change.columnId,
-              expectedVersion: row.expectedVersion,
-              valueAuthority: this.getSubmittedValueAuthority(operationId, change),
-              before: change.before,
-              after: change.after,
-            }),
-          ),
-        ),
+      const evidence = row.changes.flatMap((change) =>
+        pendingConvergedKeys?.has(cellKey(row.rowId, change.columnId)) === true
+          ? []
+          : [
+              Object.freeze({
+                operationId,
+                rowId: row.rowId,
+                columnId: change.columnId,
+                expectedVersion: row.expectedVersion,
+                valueAuthority: this.getSubmittedValueAuthority(operationId, change),
+                before: change.before,
+                after: change.after,
+              }),
+            ],
       );
+      if (evidence.length > 0) evidenceByRow.set(row.rowId, Object.freeze(evidence));
     }
     const rejectedOperations = new Map(this.rejectedOperations);
-    rejectedOperations.set(operationId, evidenceByRow);
-    if (!immediateOperation) this.rejectedBatchOperationIds.add(operationId);
+    if (evidenceByRow.size > 0) rejectedOperations.set(operationId, evidenceByRow);
+    if (!immediateOperation && evidenceByRow.size > 0) {
+      this.rejectedBatchOperationIds.add(operationId);
+    }
+    if (!immediateOperation && pendingConvergedKeys !== undefined) {
+      this.startSuccessFlash(operationId, pendingConvergedKeys);
+    }
     const affectedKeys = new Set<string>();
     const evicted = new Map<string, RejectedOperationEvidence>();
     while (rejectedOperations.size > 128) {
@@ -1934,9 +1985,9 @@ export class BrunoTableCellEditRuntime {
         this.removeRejectedOperationRows(evictedOperationId, evictedEvidence.keys());
         this.rejectedBatchOperationIds.delete(evictedOperationId);
         this.rejectedCellPresentationDeadlinesByOperation.delete(evictedOperationId);
-        this.rejectedOperationStores.get(evictedOperationId)?.setState(() => false);
+        this.publishRejectedOperation(evictedOperationId);
       }
-      this.rejectedOperationStores.get(operationId)?.setState(() => true);
+      this.publishRejectedOperation(operationId);
     });
     if (immediateOperation) {
       this.rejectedCellPresentationDeadlinesByOperation.set(operationId, Date.now() + 5_000);
@@ -2301,10 +2352,54 @@ export class BrunoTableCellEditRuntime {
 
   public readonly reconcileSourceRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
     if (!this.isSourceAuthoritative()) return;
-    const draftsChanged = this.reconcileDraftRows(changedRowIds, false);
+    const submittedConvergedKeys = this.reconcilePendingBatchSubmittedValues(changedRowIds);
+    const draftsChanged = this.reconcileDraftRows(changedRowIds, false, submittedConvergedKeys);
     const overlaysChanged = this.reconcileAcceptedOverlays(changedRowIds);
     const rejectedChanged = this.reconcileRejectedOperations(changedRowIds);
     if (draftsChanged || overlaysChanged || rejectedChanged) this.publishTraversalInvalidation();
+  };
+
+  private readonly reconcilePendingBatchSubmittedValues = (
+    changedRowIds: ReadonlySet<string> | undefined,
+  ): ReadonlySet<string> => {
+    const newlyConverged = new Set<string>();
+    for (const operationId of this.batchSaveOperationIds) {
+      const authorities = this.valueAuthoritiesByOperation.get(operationId);
+      const submittedValues = this.submittedValuesByOperation.get(operationId);
+      const locksByRow = this.saveLockedCellKeysByOperationRow.get(operationId);
+      if (authorities === undefined || submittedValues === undefined || locksByRow === undefined) {
+        continue;
+      }
+      const converged =
+        this.pendingConvergedCellKeysByOperation.get(operationId) ?? new Set<string>();
+      for (const [rowId, keys] of locksByRow) {
+        if (changedRowIds !== undefined && !changedRowIds.has(rowId)) continue;
+        const row = this.getRow(rowId);
+        for (const key of keys) {
+          if (converged.has(key)) continue;
+          const identity = parseCellKey(key);
+          if (identity === undefined) continue;
+          const authority = authorities.get(identity.columnId);
+          if (authority === undefined || !submittedValues.has(key)) continue;
+          const source = this.readSubmittedSourceValue(row, authority);
+          if (
+            source._tag === "Success" &&
+            safeEquivalentEditValues(
+              authority.equivalent,
+              submittedValues.get(key),
+              source.value,
+            ) === true
+          ) {
+            converged.add(key);
+            newlyConverged.add(key);
+          }
+        }
+      }
+      if (converged.size > 0) {
+        this.pendingConvergedCellKeysByOperation.set(operationId, converged);
+      }
+    }
+    return newlyConverged;
   };
 
   public readonly subscribeTraversalInvalidation = (listener: Listener): (() => void) => {
@@ -2388,10 +2483,25 @@ export class BrunoTableCellEditRuntime {
     this.draftProjectionCache = new WeakMap();
     const nextFieldColumns = indexFieldColumns(columns);
     const previousDrafts = this.draftStore.get();
+    const protectedPresentationColumns = new Map<string, CompiledFieldColumn>();
+    for (const [key, operationId] of this.saveLockedCellKeys) {
+      if (!this.batchSaveOperationIds.has(operationId)) continue;
+      const identity = parseCellKey(key);
+      if (identity === undefined) continue;
+      const presentationColumn = this.valueAuthoritiesByOperation
+        .get(operationId)
+        ?.get(identity.columnId)?.presentationColumn;
+      if (presentationColumn !== undefined) {
+        protectedPresentationColumns.set(key, presentationColumn);
+      }
+    }
     const reconciliation = createDraftColumnReconciliationContext(
       previousFieldColumns,
       nextFieldColumns,
       getRow,
+      protectedPresentationColumns,
+      protectedPresentationColumns.size > 0 ||
+        [...previousDrafts.values()].some((draft) => draft.presentationColumn !== undefined),
     );
     const { drafts: migratedDrafts, changedKeys: migratedDraftKeys } = reconcileDraftsForColumns(
       previousDrafts,
@@ -2765,6 +2875,8 @@ export class BrunoTableCellEditRuntime {
     this.saveLockedCellKeys.clear();
     this.saveLockedCellKeysByOperationRow.clear();
     this.batchSaveOperationIds.clear();
+    this.pendingConvergedCellKeysByOperation.clear();
+    this.submittedValuesByOperation.clear();
     this.rowVersionExtractorsByOperation.clear();
     this.valueAuthoritiesByOperation.clear();
     this.batchSaveLockOperationId = undefined;
@@ -3018,6 +3130,12 @@ export class BrunoTableCellEditRuntime {
     entry: DraftEntry | undefined,
   ): Readonly<{ readonly entry: DraftEntry | undefined; readonly prune: boolean }> => {
     if (entry === undefined) return Object.freeze({ entry: undefined, prune: false });
+    if (entry.presentationColumn !== undefined) {
+      return Object.freeze({
+        entry: setDraftBlockedReason(entry, BRUNO_TABLE_CELL_EDIT_SCHEMA_MESSAGE),
+        prune: false,
+      });
+    }
     const row = this.getRow(entry.rowId);
     const column = this.fieldColumnsById.get(entry.columnId);
     if (column === undefined) return Object.freeze({ entry: undefined, prune: true });
@@ -3147,7 +3265,7 @@ export class BrunoTableCellEditRuntime {
   ): BrunoTableCellEditDraftReviewRow | undefined => {
     const serverRow =
       typeof serverCandidate === "object" && serverCandidate !== null ? serverCandidate : undefined;
-    const column = this.fieldColumnsById.get(draft.columnId);
+    const column = draft.presentationColumn ?? this.fieldColumnsById.get(draft.columnId);
     if (column === undefined) return undefined;
     this.draftReviewVersion += 1;
     const reviewVersion = this.draftReviewVersion;
@@ -3229,6 +3347,7 @@ export class BrunoTableCellEditRuntime {
   private readonly reconcileDraftRows = (
     changedRowIds: ReadonlySet<string> | undefined,
     publishTraversalInvalidation: boolean,
+    submittedConvergedKeys: ReadonlySet<string> = new Set<string>(),
   ): boolean => {
     const previousDrafts = this.draftStore.get();
     let nextDrafts: Map<string, DraftEntry> | undefined;
@@ -3257,6 +3376,13 @@ export class BrunoTableCellEditRuntime {
       let reconciledDraft = draft;
       const representative = draft ?? findDraftHistoryEntry(nextUndoStack, nextRedoStack, key);
       if (representative === undefined) continue;
+      if (submittedConvergedKeys.has(key)) {
+        nextDrafts ??= new Map(previousDrafts);
+        nextDrafts.delete(key);
+        convergedKeys.push(key);
+        changedKeys.push(key);
+        continue;
+      }
       const row = this.getRow(representative.rowId);
       if (this.draftReviewSubscriberCount > 0) {
         reviewServerRows.set(key, row);
@@ -3266,7 +3392,9 @@ export class BrunoTableCellEditRuntime {
       }
       const column = this.fieldColumnsById.get(representative.columnId);
       let blockedReason: string | undefined;
-      if (typeof row !== "object" || row === null) {
+      if (representative.presentationColumn !== undefined) {
+        blockedReason = BRUNO_TABLE_CELL_EDIT_SCHEMA_MESSAGE;
+      } else if (typeof row !== "object" || row === null) {
         blockedReason = BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE;
       } else if (column === undefined) {
         blockedReason = BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE;
@@ -3330,6 +3458,14 @@ export class BrunoTableCellEditRuntime {
         nextRedoStack = transformedRedo;
         changedKeys.push(key);
       }
+    }
+    for (const key of convergedKeys) {
+      const operationId = this.saveLockedCellKeys.get(key);
+      if (operationId === undefined || !this.batchSaveOperationIds.has(operationId)) continue;
+      const operationKeys =
+        this.pendingConvergedCellKeysByOperation.get(operationId) ?? new Set<string>();
+      operationKeys.add(key);
+      this.pendingConvergedCellKeysByOperation.set(operationId, operationKeys);
     }
     if (
       nextDrafts === undefined &&
@@ -3486,12 +3622,18 @@ export class BrunoTableCellEditRuntime {
                   ...(saveFailed ? { saveFailed: true } : {}),
                   ...(saveSucceeded ? { saveSucceeded: true } : {}),
                   draft: draft.mine,
+                  ...(draft.presentationColumn === undefined
+                    ? {}
+                    : { draftPresentationColumn: draft.presentationColumn }),
                 })
               : this.getDraftProjection(draft);
     return Object.freeze({
       active: true,
       hasDraft: draft !== undefined,
       ...(draft === undefined ? {} : { draft: draft.mine }),
+      ...(draft?.presentationColumn === undefined
+        ? {}
+        : { draftPresentationColumn: draft.presentationColumn }),
       ...(acceptedOverlayEntry === undefined
         ? {}
         : {
@@ -3513,7 +3655,14 @@ export class BrunoTableCellEditRuntime {
   private readonly getDraftProjection = (draft: DraftEntry): BrunoTableCellEditProjection => {
     const cached = this.draftProjectionCache.get(draft);
     if (cached !== undefined) return cached;
-    const projection = Object.freeze({ active: false, hasDraft: true, draft: draft.mine });
+    const projection = Object.freeze({
+      active: false,
+      hasDraft: true,
+      draft: draft.mine,
+      ...(draft.presentationColumn === undefined
+        ? {}
+        : { draftPresentationColumn: draft.presentationColumn }),
+    });
     this.draftProjectionCache.set(draft, projection);
     return projection;
   };
@@ -3538,7 +3687,8 @@ export class BrunoTableCellEditRuntime {
       previous.saveSucceeded === next.saveSucceeded &&
       Object.is(previous.draft, next.draft) &&
       Object.is(previous.acceptedOverlay, next.acceptedOverlay) &&
-      previous.acceptedOverlayPresentationColumn === next.acceptedOverlayPresentationColumn
+      previous.acceptedOverlayPresentationColumn === next.acceptedOverlayPresentationColumn &&
+      previous.draftPresentationColumn === next.draftPresentationColumn
     ) {
       return;
     }
@@ -3755,9 +3905,7 @@ export class BrunoTableCellEditRuntime {
     this.rejectedOperations = next;
     batch(() => {
       for (const operationId of changedOperationIds) {
-        this.rejectedOperationStores
-          .get(operationId)
-          ?.setState(() => this.rejectedOperations.has(operationId));
+        this.publishRejectedOperation(operationId);
       }
       for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
     });
@@ -3822,7 +3970,7 @@ export class BrunoTableCellEditRuntime {
       changedKeys,
     );
     batch(() => {
-      this.rejectedOperationStores.get(operationId)?.setState(() => false);
+      this.publishRejectedOperation(operationId);
       for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
     });
     for (const key of changedKeys) this.releaseUnusedCellStore(key);
@@ -3866,9 +4014,7 @@ export class BrunoTableCellEditRuntime {
     this.rejectedOperations = next;
     batch(() => {
       for (const operationId of changedOperationIds) {
-        this.rejectedOperationStores
-          .get(operationId)
-          ?.setState(() => this.rejectedOperations.has(operationId));
+        this.publishRejectedOperation(operationId);
       }
       for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
     });
@@ -3924,6 +4070,11 @@ export class BrunoTableCellEditRuntime {
 
   private readonly startSuccessFlash = (operationId: string, keys: ReadonlySet<string>): void => {
     for (const key of keys) {
+      const saveOwner = this.saveLockedCellKeys.get(key);
+      if (saveOwner !== undefined && saveOwner !== operationId) continue;
+      if ([...(this.rejectedCellKeys.get(key) ?? [])].some((owner) => owner !== operationId)) {
+        continue;
+      }
       if ((this.cellSubscriberCounts.get(key) ?? 0) === 0) continue;
       this.successFlashOperationByKey.set(key, operationId);
       this.successFlashDeadlinesByKey.set(key, Date.now() + 2_000);
@@ -3994,16 +4145,47 @@ function reconcileDraftEntryForColumns(
   context: DraftColumnReconciliationContext,
   refreshPermission: boolean,
 ): DraftEntry | undefined {
-  const plan = context.plans.get(draft.columnId);
-  if (plan === undefined || plan.kind === "drop") return undefined;
+  let plan = context.plans.get(draft.columnId);
+  let syntheticReconnect = false;
+  const retainedPresentationColumn =
+    draft.presentationColumn ?? context.protectedPresentationColumns.get(key);
+  if (plan === undefined || plan.kind === "drop") {
+    if (retainedPresentationColumn === undefined) return undefined;
+    const nextColumn = context.nextColumns.get(draft.columnId);
+    if (nextColumn === undefined || nextColumn.field !== retainedPresentationColumn.field) {
+      return Object.freeze({
+        ...draft,
+        presentationColumn: retainedPresentationColumn,
+        blockedReason: BRUNO_TABLE_CELL_EDIT_SCHEMA_MESSAGE,
+      });
+    }
+    const transformValues =
+      !sameBlankPolicy(retainedPresentationColumn, nextColumn) ||
+      retainedPresentationColumn.semantics.decodeRuntimeAuthority !==
+        nextColumn.semantics.decodeRuntimeAuthority;
+    plan = Object.freeze({
+      kind: "retain",
+      previousColumn: retainedPresentationColumn,
+      nextColumn,
+      transformValues,
+      refreshPermission: true,
+      checkConvergence: true,
+    });
+    syntheticReconnect = true;
+  }
   if (plan.checkConvergence) context.semanticKeys.add(key);
   let decodedDraft = draft;
+  if (!plan.transformValues && syntheticReconnect && draft.presentationColumn !== undefined) {
+    const { presentationColumn: _presentationColumn, ...currentDraft } = draft;
+    decodedDraft = Object.freeze(currentDraft);
+  }
   if (plan.transformValues) {
     const cached = context.migratedValues.get(draft);
     if (cached === null) return undefined;
     if (cached !== undefined) decodedDraft = cached;
     else {
-      const { previousColumn, nextColumn } = plan;
+      const { nextColumn } = plan;
+      const previousColumn = draft.presentationColumn ?? plan.previousColumn;
       const decodedBase = reconcileDraftValueForColumns(draft.base, previousColumn, nextColumn);
       const decodedMine = reconcileDraftValueForColumns(draft.mine, previousColumn, nextColumn);
       const decodedConflict =
@@ -4015,8 +4197,19 @@ function reconcileDraftEntryForColumns(
         decodedMine._tag === "Failure" ||
         decodedConflict?._tag === "Failure"
       ) {
-        context.migratedValues.set(draft, null);
-        return undefined;
+        const presentationColumn =
+          draft.presentationColumn ?? context.protectedPresentationColumns.get(key);
+        if (presentationColumn === undefined) {
+          context.migratedValues.set(draft, null);
+          return undefined;
+        }
+        const retained = Object.freeze({
+          ...draft,
+          presentationColumn,
+          blockedReason: BRUNO_TABLE_CELL_EDIT_SCHEMA_MESSAGE,
+        });
+        context.migratedValues.set(draft, retained);
+        return retained;
       }
       const nextConflict =
         draft.conflict === undefined || decodedConflict === undefined
@@ -4024,13 +4217,15 @@ function reconcileDraftEntryForColumns(
           : Object.is(decodedConflict.value, draft.conflict.server)
             ? draft.conflict
             : Object.freeze({ ...draft.conflict, server: decodedConflict.value });
+      const { presentationColumn: _presentationColumn, ...draftWithoutPresentationColumn } = draft;
       decodedDraft =
         Object.is(decodedBase.value, draft.base) &&
         Object.is(decodedMine.value, draft.mine) &&
-        nextConflict === draft.conflict
+        nextConflict === draft.conflict &&
+        draft.presentationColumn === undefined
           ? draft
           : Object.freeze({
-              ...draft,
+              ...draftWithoutPresentationColumn,
               base: decodedBase.value,
               mine: decodedMine.value,
               ...(nextConflict === undefined ? {} : { conflict: nextConflict }),

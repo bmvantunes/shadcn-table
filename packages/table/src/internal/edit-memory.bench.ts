@@ -92,9 +92,13 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       Object.freeze({ value: "server", revision: 1n }),
     ]),
   );
+  let saveRowReads = 0;
   const saveReconciliationRuntime = new BrunoTableCellEditRuntime({
     columns,
-    getRow: (rowId) => saveRows.get(rowId),
+    getRow: (rowId) => {
+      saveRowReads += 1;
+      return saveRows.get(rowId);
+    },
     getRowVersion: (candidate) => (candidate as Readonly<{ readonly revision: bigint }>).revision,
   });
   const saveChangeRows = [...saveRows].map(([rowId, baseRow]) =>
@@ -133,6 +137,7 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       const previousCount =
         saveReconciliationRuntime.getAcceptedOverlayCountForOperation("save-operation");
       saveRows.set(rowId, Object.freeze({ value: "submitted", revision: 2n }));
+      saveRowReads = 0;
       const startedAt = performance.now();
       saveReconciliationRuntime.reconcileSourceRows(new Set([rowId]));
       recordBudgetSample(
@@ -148,6 +153,9 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       }
       if (!saveReconciliationRuntime.isEditable(rowId, "COL_ID_VALUE")) {
         throw new Error("One-row Save reconciliation retained its Immediate lock.");
+      }
+      if (saveRowReads !== 1) {
+        throw new Error("One-row Immediate Save reconciliation visited unrelated source rows.");
       }
     },
     { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
@@ -180,7 +188,9 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         performance.now() - startedAt,
       );
       if (rejectedRowReads !== 1) {
-        throw new Error("One-row rejected Save reconciliation visited unrelated source rows.");
+        throw new Error(
+          `One-row rejected Save reconciliation read ${String(rejectedRowReads)} source rows.`,
+        );
       }
       if (
         rejectedReconciliationRuntime.getCellSnapshot(rowId, "COL_ID_VALUE").saveFailed === true
@@ -188,7 +198,21 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         throw new Error("One-row rejected Save reconciliation retained converged evidence.");
       }
     },
-    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+    {
+      iterations: 100,
+      time: 0,
+      warmupIterations: 2,
+      warmupTime: 0,
+      teardown: (_task, mode) => {
+        if (mode !== "run") return;
+        saveReconciliationRuntime.activate();
+        rejectedReconciliationRuntime.activate();
+        saveReconciliationRuntime.dispose();
+        rejectedReconciliationRuntime.dispose();
+        saveRows.clear();
+        rejectedRows.clear();
+      },
+    },
   );
 
   bench(

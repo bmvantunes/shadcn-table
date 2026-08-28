@@ -3373,7 +3373,7 @@ describe("BrunoTable Cell Edit Session", () => {
         false,
       );
 
-      expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toEqual({
+      expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toStrictEqual({
         active: false,
         hasDraft: false,
         hasAcceptedOverlay: true,

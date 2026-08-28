@@ -5461,7 +5461,8 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     [potentialCellEdit, column.columnId, rowId],
   );
   const edit = useSyncExternalStore(subscribeEdit, getEditSnapshot, getEditSnapshot);
-  const effectivePresentationColumn = edit.acceptedOverlayPresentationColumn ?? column;
+  const effectivePresentationColumn =
+    edit.acceptedOverlayPresentationColumn ?? edit.draftPresentationColumn ?? column;
   const rowAware = cellPresentationUsesRawRow(effectivePresentationColumn);
   const subscribe = useMemo(
     () => (listener: () => void) =>
@@ -5480,7 +5481,8 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
   const rowSnapshot = rowAware ? (snapshot as BrunoTableRowCellSnapshot) : undefined;
-  const presentationColumn = edit.acceptedOverlayPresentationColumn ?? snapshot.column;
+  const presentationColumn =
+    edit.acceptedOverlayPresentationColumn ?? edit.draftPresentationColumn ?? snapshot.column;
   const row = rowSnapshot?.row;
   const draftReviewSource = isBrunoTableCellEditDraftReviewSourceRow(row) ? row : undefined;
   const subscribeDraftReview = useMemo(
