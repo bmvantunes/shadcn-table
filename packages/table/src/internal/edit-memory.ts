@@ -229,7 +229,7 @@ export class BrunoTableEditMemoryRuntime {
     };
   };
 
-  public readonly registerResetControl = (element: HTMLButtonElement): (() => void) => {
+  public readonly registerResetControl = (element: Element): (() => void) => {
     this.resetControls.add(element);
     if (this.cellEdit !== undefined) {
       this.unregisterResetControls.set(element, this.cellEdit.registerResetControl(element));

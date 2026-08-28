@@ -171,8 +171,8 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
     runtime.getResetReviewRowsSnapshot,
     runtime.getResetReviewRowsSnapshot,
   );
-  const resetControlRef = useCallback(
-    (element: HTMLButtonElement | null) =>
+  const resetSurfaceRef = useCallback(
+    (element: HTMLDivElement | null) =>
       element === null ? undefined : runtime.registerResetControl(element),
     [runtime],
   );
@@ -180,6 +180,8 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
   const historyLabel = `${String(historyCount)} Batch history ${historyCount === 1 ? "command" : "commands"}`;
   return (
     <AlertDialogContent
+      data-bruno-cell-edit-reset=""
+      ref={resetSurfaceRef}
       className="max-w-4xl sm:max-w-4xl"
       style={{
         width: "min(56rem, calc(100vw - 2rem))",
@@ -196,19 +198,12 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
       </AlertDialogHeader>
       {renderReview(rows)}
       <AlertDialogFooter>
-        <Button
-          data-bruno-cell-edit-reset=""
-          ref={resetControlRef}
-          variant="outline"
-          onClick={runtime.closeResetReview}
-        >
+        <Button variant="outline" onClick={runtime.closeResetReview}>
           Keep Editing
         </Button>
         <Button
           aria-describedby={descriptionId}
-          data-bruno-cell-edit-reset=""
           disabled={!canResetAll}
-          ref={resetControlRef}
           variant="destructive"
           onClick={() => {
             runtime.confirmResetAllChanges();

@@ -380,6 +380,7 @@ const BrunoTableResetReviewValue = memo(function BrunoTableResetReviewValue({
   const snapshot = useSyncExternalStore(row.subscribe, row.getSnapshot, row.getSnapshot);
   const sourceRow = kind === "server" ? snapshot.serverRow : snapshot.projectedRow;
   if (sourceRow === undefined) return "Row missing";
+  if (kind === "server" && !snapshot.serverValueAvailable) return "Unavailable";
   const value = kind === "server" ? snapshot.serverNow : snapshot.mine;
   const content =
     kind === "mine" && snapshot.candidateText !== undefined

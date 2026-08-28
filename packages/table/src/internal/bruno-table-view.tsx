@@ -538,6 +538,18 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
     () => () => tableElement.current?.focus({ preventScroll: true }),
     [],
   );
+  useLayoutEffect(
+    () =>
+      editMemory?.registerGridFocusCommand(() => {
+        const owner = tableElement.current;
+        const grid = [
+          ...(owner?.querySelectorAll<HTMLElement>("[data-bruno-scroll-owner]") ?? []),
+        ].find((candidate) => candidate.closest("[data-bruno-table]") === owner);
+        if (grid === undefined || grid === null) focusFallback();
+        else grid.focus({ preventScroll: true });
+      }),
+    [editMemory, focusFallback],
+  );
   return (
     <section
       ref={tableElement}
@@ -2845,13 +2857,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       startReplaceFromProducedTextRef.current(text),
     );
   }, [cellEdit]);
-  useLayoutEffect(
-    () =>
-      editMemory?.registerGridFocusCommand(() =>
-        gridElement.current?.focus({ preventScroll: true }),
-      ),
-    [editMemory],
-  );
   useLayoutEffect(() => {
     const grid = gridElement.current;
     if (grid === null || editMemory === undefined) return;
@@ -5435,6 +5440,8 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     draftReviewKind === "server" ? draftReview?.serverRow : draftReview?.projectedRow;
   const draftReviewValue =
     draftReviewKind === "server" ? draftReview?.serverNow : draftReview?.mine;
+  const draftReviewValueUnavailable =
+    draftReviewKind === "server" && draftReview?.serverValueAvailable === false;
   const unavailable =
     presentationColumn === undefined ||
     (rowAware ? rowSnapshot?.kind === "unavailable" : cellSnapshot?.kind === "unavailable");
@@ -5444,8 +5451,9 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const sourceValue = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
   const value = edit.hasDraft ? edit.draft : sourceValue;
   const invalid = isBrunoTableInvalidCellValue(value) ? value : undefined;
-  const className =
-    draftReviewKind !== undefined && draftReview !== undefined && draftReviewRow !== undefined
+  const className = draftReviewValueUnavailable
+    ? undefined
+    : draftReviewKind !== undefined && draftReview !== undefined && draftReviewRow !== undefined
       ? resolveProxyCellClassName(draftReview.column, draftReviewRow, draftReviewValue)
       : invalid || unavailable || rowMissing || presentationColumn === undefined
         ? undefined

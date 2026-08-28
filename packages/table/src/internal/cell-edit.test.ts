@@ -174,6 +174,127 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftReviewSnapshot()).toMatchObject([{ mine: 8, blockedReason: undefined }]);
   });
 
+  it("prunes undo-only return-to-base history after authoritative convergence", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("4")).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 2 });
+
+    current = Object.freeze({ ...row, score: 4 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ undoCount: 0, redoCount: 0 });
+    expect(runtime.undoBatchDraft()).toBe(false);
+  });
+
+  it("prunes undo convergence when unrelated redo history exists", () => {
+    const rowA = Object.freeze({ ...row, id: "row-a" });
+    const rowB = Object.freeze({ ...row, id: "row-b" });
+    const liveRows = new Map<string, Row>([
+      [rowA.id, rowA],
+      [rowB.id, rowB],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(rowA.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(rowA.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("4")).toBe(true);
+    expect(runtime.start(rowB.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ undoCount: 2, redoCount: 1 });
+
+    liveRows.set(rowA.id, Object.freeze({ ...rowA, score: 4 }));
+    runtime.reconcileSourceRows(new Set([rowA.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ undoCount: 0, redoCount: 1 });
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot(rowB.id, "COL_ID_SCORE")).toBe(8);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(false);
+    expect(runtime.getDraftSnapshot(rowA.id, "COL_ID_SCORE")).toBeUndefined();
+  });
+
+  it("rebases an open session when its admitted draft converges authoritatively", () => {
+    const admitted = Object.freeze({ ...row, score: 4 });
+    const converged = Object.freeze({ ...row, score: 7 });
+    let current: Row = admitted;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate === converged ? 2n : 1n),
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate("8", false);
+
+    current = converged;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.reconcileActiveRow(new Set([row.id]));
+    expect(runtime.commit("8")).toBe(true);
+
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        baseRow: converged,
+        expectedVersion: 2n,
+        base: 7,
+        mine: 8,
+      },
+    ]);
+  });
+
+  it("blocks a converged open session until Row Version rebasing succeeds", () => {
+    const admitted = Object.freeze({ ...row, score: 4 });
+    const converged = Object.freeze({ ...row, score: 7 });
+    let current: Row = admitted;
+    let extractorAvailable = true;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => {
+        if (!extractorAvailable) throw new Error("Row Version unavailable");
+        return candidate === converged ? 2n : 1n;
+      },
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate("8", false);
+
+    current = converged;
+    extractorAvailable = false;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.reconcileActiveRow(new Set([row.id]));
+    expect(runtime.commit("8")).toBe(false);
+    expect(runtime.getActiveCandidateSnapshot()).toMatchObject({ rawText: "8" });
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: expect.stringContaining("Row Version"),
+    });
+
+    extractorAvailable = true;
+    runtime.reconcileActiveRow(new Set([row.id]));
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { baseRow: converged, expectedVersion: 2n, base: 7, mine: 8 },
+    ]);
+  });
+
   it("keeps the latest Mine when the source publishes an older history value", () => {
     let current: Row = row;
     const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
@@ -2456,16 +2577,34 @@ describe("BrunoTable Cell Edit Session", () => {
 
     current = undefined;
     runtime.reconcileActiveRow(new Set(["row"]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
     expect(runtime.getDraftReviewSnapshot()).toMatchObject([
       { status: "This row was removed from the server. Changes cannot be saved." },
     ]);
 
     current = { value: -1 };
     runtime.reconcileActiveRow(new Set(["row"]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
     expect(runtime.getDraftReviewSnapshot()).toMatchObject([
       { status: "This cell is no longer editable." },
     ]);
     expect(validate).not.toHaveBeenCalled();
     unsubscribe();
+  });
+
+  it("does not double-count a blocked draft and active candidate for the same cell", () => {
+    let current: Row | undefined = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate("8", false);
+
+    current = undefined;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.reconcileActiveRow(new Set([row.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1, reviewCount: 1 });
   });
 });

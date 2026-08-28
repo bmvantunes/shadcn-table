@@ -4,8 +4,8 @@ import { userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 import { StrictMode } from "react";
 
-import { BrunoTableClient } from "./index";
-import type { BrunoTableColumns } from "./public-types";
+import { BrunoTableClient, BrunoTableToolbar } from "./index";
+import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
 
 type Row = Readonly<{
   readonly id: string;
@@ -310,6 +310,13 @@ test("reviews and resets a lone invalid active candidate", async () => {
     .element(reviewGrid.getByRole("gridcell", { name: "Choose a valid name.", exact: true }))
     .toBeVisible();
 
+  expect(
+    review
+      .element()
+      .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true })),
+  ).toBe(true);
+  await expect.element(review).toBeVisible();
+
   await userEvent.keyboard("{Escape}");
   await expect.element(review).not.toBeInTheDocument();
   const retainedEditor = screen.getByRole("textbox", { name: "Edit Name" });
@@ -555,6 +562,102 @@ test("Reset Review applies a row-aware source value formatter to Server and Your
     .toBeVisible();
 });
 
+test("Reset Review contains unavailable Server values before typed presentation callbacks", async () => {
+  type DecodedRow = Readonly<{
+    readonly id: string;
+    readonly value: string;
+    readonly revision: bigint;
+  }>;
+  const decodeRuntime = (input: unknown) =>
+    input === "unavailable"
+      ? ({ _tag: "Failure", message: "Unavailable source value." } as const)
+      : typeof input === "string"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected text." } as const);
+  const valueType: BrunoTableValueType<string, "text", "text"> = {
+    codecId: "test/reset-review-unavailable",
+    codecVersion: 1,
+    filterFamily: "text",
+    editorFamily: "text",
+    cellAlign: "start",
+    editorLayout: "inline",
+    defaultWidth: 120,
+    decodeRuntime,
+    equivalent: Object.is,
+    compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+    formatCanonicalText: String,
+    parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+    formatDisplay: String,
+    encodePersisted: String,
+    decodePersisted: decodeRuntime,
+  };
+  const valueFormatter = vi.fn(({ value }: { readonly value: string }) => {
+    if (value === undefined) throw new Error("typed formatter received unavailable evidence");
+    return `Formatted ${value}`;
+  });
+  const cellClassName = vi.fn(({ value }: { readonly value: string }) => {
+    if (value === undefined) throw new Error("typed class callback received unavailable evidence");
+    return `value-${value}`;
+  });
+  const decodedColumns = [
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType,
+      isEditable: true,
+      valueFormatter,
+      cellClassName,
+    },
+  ] as const satisfies BrunoTableColumns<DecodedRow>;
+  const initialRows: readonly DecodedRow[] = [{ id: "row", value: "server", revision: 1n }];
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_RESET_UNAVAILABLE"
+      columns={decodedColumns}
+      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      clientSource={{ rows: initialRows, totalRows: 1, version: 1, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />,
+  );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_RESET_UNAVAILABLE" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Value" }), "mine");
+  await userEvent.keyboard("{Enter}");
+
+  const unavailableRows: readonly DecodedRow[] = [
+    { id: "row", value: "unavailable", revision: 2n },
+  ];
+  await screen.rerender(
+    <BrunoTableClient
+      tableId="TABLE_ID_RESET_UNAVAILABLE"
+      columns={decodedColumns}
+      initialOrderBy={[{ columnId: "COL_ID_VALUE", direction: "asc" }]}
+      clientSource={{ rows: unavailableRows, totalRows: 1, version: 2, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+
+  const review = screen.getByRole("alertdialog", { name: "Reset Review" }).getByRole("grid");
+  await expect
+    .element(review.getByRole("gridcell", { name: "Unavailable", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(review.getByRole("gridcell", { name: "Formatted mine", exact: true }))
+    .toBeVisible();
+  expect(valueFormatter.mock.calls.some(([context]) => context.value === undefined)).toBe(false);
+  expect(cellClassName.mock.calls.some(([context]) => context.value === undefined)).toBe(false);
+});
+
 test("keeps consumer serverText and mineText fields on their configured presentation path", async () => {
   type CollisionRow = Readonly<{
     readonly id: string;
@@ -631,6 +734,94 @@ test("keeps Reset Review modal focus contained and restores the opener in Strict
   await expect.element(dialog).not.toBeInTheDocument();
   await expect.element(reset).toHaveFocus();
   await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
+});
+
+test("restores focus to the owning grid instead of an earlier toolbar grid", async () => {
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_RESET_OWNED_GRID_FOCUS"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    >
+      <BrunoTableToolbar>
+        <div aria-label="Consumer toolbar grid" role="grid" tabIndex={0} />
+      </BrunoTableToolbar>
+    </BrunoTableClient>,
+  );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_RESET_OWNED_GRID_FOCUS" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+  const confirmReset = screen.getByRole("button", { name: "Reset All Changes" });
+  confirmReset.element().scrollIntoView({ block: "center" });
+  (confirmReset.element() as HTMLButtonElement).click();
+
+  await expect.element(grid).toHaveFocus();
+  await expect
+    .element(screen.getByRole("grid", { name: "Consumer toolbar grid" }))
+    .not.toHaveFocus();
+});
+
+test("restores owning table focus after Reset when an empty body has no grid", async () => {
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_RESET_EMPTY_FOCUS"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    >
+      <BrunoTableToolbar>
+        <div aria-label="Consumer toolbar grid" role="grid" tabIndex={0} />
+      </BrunoTableToolbar>
+    </BrunoTableClient>,
+  );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_RESET_EMPTY_FOCUS" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  await screen.rerender(
+    <BrunoTableClient
+      tableId="TABLE_ID_RESET_EMPTY_FOCUS"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: [] as readonly Row[], totalRows: 0, version: 2, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    >
+      <BrunoTableToolbar>
+        <div aria-label="Consumer toolbar grid" role="grid" tabIndex={0} />
+      </BrunoTableToolbar>
+    </BrunoTableClient>,
+  );
+  await expect.element(grid).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+  const confirmReset = screen.getByRole("button", { name: "Reset All Changes" });
+  confirmReset.element().scrollIntoView({ block: "center" });
+  (confirmReset.element() as HTMLButtonElement).click();
+
+  await expect
+    .element(screen.getByRole("region", { name: "TABLE_ID_RESET_EMPTY_FOCUS" }))
+    .toHaveFocus();
+  await expect
+    .element(screen.getByRole("grid", { name: "Consumer toolbar grid" }))
+    .not.toHaveFocus();
 });
 
 test("keeps bounded Batch undo and redo local to the current unsaved session", async () => {

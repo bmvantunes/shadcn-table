@@ -36,6 +36,7 @@ type ActiveSession = Readonly<{
   readonly rowMissing: boolean;
   readonly invalidMessage?: string;
   readonly permissionMessage?: string;
+  readonly rowVersionMessage?: string;
 }>;
 
 export type BrunoTableCellEditDraftSnapshot = Readonly<{
@@ -66,6 +67,7 @@ export type BrunoTableCellEditDraftReviewRow = BrunoTableCellEditDraftSnapshot &
     readonly serverRow: object | undefined;
     readonly projectedRow: object;
     readonly serverNow: unknown;
+    readonly serverValueAvailable: boolean;
     readonly blockedReason: string | undefined;
     readonly candidateText?: string;
     readonly candidateInvalid?: boolean;
@@ -252,7 +254,7 @@ type CommitEvaluation =
   | Readonly<{
       readonly kind: "invalid";
       readonly message: string;
-      readonly reason?: "permission" | "rowMissing";
+      readonly reason?: "permission" | "rowMissing" | "rowVersion";
     }>
   | Readonly<{
       readonly kind: "accepted";
@@ -293,6 +295,9 @@ type CellEditEvent =
       readonly type: "RECONCILE_ROW";
       readonly row: unknown;
       readonly sourceValue: CanonicalSourceValue;
+      readonly expectedVersion: unknown;
+      readonly rebaseFromConvergedDraft: boolean;
+      readonly rebaseFailed: boolean;
     }>
   | Readonly<{ readonly type: "RECONCILE_COLUMN"; readonly column: CompiledFieldColumn }>;
 
@@ -345,18 +350,36 @@ const brunoTableCellEditMachine = createMachine({
             session: ({ context, event }) => {
               const session = context.session;
               if (session === undefined) return undefined;
-              return typeof event.row === "object" && event.row !== null
-                ? reconcileSessionPermission(
-                    Object.freeze({
-                      ...session,
-                      row: event.row,
-                      rowMissing: false,
-                      sourceValue:
-                        event.sourceValue._tag === "Success" ? event.sourceValue.value : undefined,
-                      sourceValueAvailable: event.sourceValue._tag === "Success",
-                    }),
-                  )
-                : Object.freeze({ ...session, rowMissing: true });
+              if (typeof event.row !== "object" || event.row === null) {
+                return Object.freeze({ ...session, rowMissing: true });
+              }
+              const sourceValue =
+                event.sourceValue._tag === "Success" ? event.sourceValue.value : undefined;
+              const rowVersionMessage = event.rebaseFailed
+                ? BRUNO_TABLE_CELL_EDIT_ROW_VERSION_MESSAGE
+                : event.rebaseFromConvergedDraft
+                  ? undefined
+                  : session.rowVersionMessage;
+              const { rowVersionMessage: _previousRowVersionMessage, ...retainedSession } = session;
+              return reconcileSessionPermission(
+                Object.freeze({
+                  ...retainedSession,
+                  row: event.row,
+                  rowMissing: false,
+                  sourceValue,
+                  sourceValueAvailable: event.sourceValue._tag === "Success",
+                  ...(rowVersionMessage === undefined ? {} : { rowVersionMessage }),
+                  ...(event.rebaseFromConvergedDraft
+                    ? {
+                        baseRow: event.row,
+                        baseValue: sourceValue,
+                        before: sourceValue,
+                        beforeFromDraft: false,
+                        expectedVersion: event.expectedVersion,
+                      }
+                    : {}),
+                }),
+              );
             },
           }),
         },
@@ -408,7 +431,9 @@ const brunoTableCellEditMachine = createMachine({
                   ? Object.freeze({ ...session, permissionMessage: evaluation.message })
                   : evaluation.reason === "rowMissing"
                     ? session
-                    : Object.freeze({ ...session, invalidMessage: evaluation.message });
+                    : evaluation.reason === "rowVersion"
+                      ? session
+                      : Object.freeze({ ...session, invalidMessage: evaluation.message });
             },
             affectedCellKeys: [],
             draftPatch: undefined,
@@ -483,6 +508,8 @@ export const BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH = 65_536;
 const BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE = "This cell is no longer editable.";
 const BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE =
   "This row was removed from the server. Changes cannot be saved.";
+const BRUNO_TABLE_CELL_EDIT_ROW_VERSION_MESSAGE =
+  "The latest Row Version is unavailable. Try again after the source updates.";
 
 function reconcileSessionPermission(session: ActiveSession): ActiveSession {
   const permissionMessage = isSessionEditable(session)
@@ -535,6 +562,13 @@ function evaluateCandidate(
       kind: "invalid",
       message: BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE,
       reason: "rowMissing",
+    });
+  }
+  if (session.rowVersionMessage !== undefined) {
+    return Object.freeze({
+      kind: "invalid",
+      message: session.rowVersionMessage,
+      reason: "rowVersion",
     });
   }
   if (!isSessionEditable(session)) {
@@ -894,7 +928,8 @@ function historyKeysInvalidatedByColumns(
   return invalidated;
 }
 
-function redoHistoryMineConverged(
+function retainedHistoryMineConverged(
+  undoStack: readonly DraftHistoryCommand[],
   redoStack: readonly DraftHistoryCommand[],
   key: string,
   column: CompiledFieldColumn,
@@ -905,10 +940,16 @@ function redoHistoryMineConverged(
     if (command === undefined) continue;
     const patch = command.patches.get(key);
     if (patch === undefined) continue;
-    return (
-      patch.after !== undefined &&
-      safeEquivalentEditValue(column, patch.after.mine, sourceValue) === true
-    );
+    const authoredValue = patch.after === undefined ? patch.before?.base : patch.after.mine;
+    return safeEquivalentEditValue(column, authoredValue, sourceValue) === true;
+  }
+  for (let index = undoStack.length - 1; index >= 0; index -= 1) {
+    const command = undoStack[index];
+    if (command === undefined) continue;
+    const patch = command.patches.get(key);
+    if (patch === undefined) continue;
+    const authoredValue = patch.after === undefined ? patch.before?.base : patch.after.mine;
+    return safeEquivalentEditValue(column, authoredValue, sourceValue) === true;
   }
   return false;
 }
@@ -1462,10 +1503,33 @@ export class BrunoTableCellEditRuntime {
       (changedRowIds === undefined || changedRowIds.has(session.rowId))
     ) {
       const row = this.getRow(session.rowId);
+      const sourceValue = this.readCanonicalSourceValue(session.rowId, row, session.column);
+      const activeKey = cellKey(session.rowId, session.column.columnId);
+      const convergedAdmittedDraft =
+        session.beforeFromDraft &&
+        !this.draftStore.get().has(activeKey) &&
+        sourceValue._tag === "Success" &&
+        safeEquivalentEditValue(session.column, session.before, sourceValue.value) === true;
+      let expectedVersion = session.expectedVersion;
+      let rebaseFromConvergedDraft = false;
+      let rebaseFailed = false;
+      if (convergedAdmittedDraft) {
+        try {
+          expectedVersion =
+            typeof row === "object" && row !== null ? this.getRowVersion?.(row) : undefined;
+          rebaseFromConvergedDraft = true;
+        } catch {
+          rebaseFromConvergedDraft = false;
+          rebaseFailed = true;
+        }
+      }
       this.actor.send({
         type: "RECONCILE_ROW",
         row,
-        sourceValue: this.readCanonicalSourceValue(session.rowId, row, session.column),
+        sourceValue,
+        expectedVersion,
+        rebaseFromConvergedDraft,
+        rebaseFailed,
       });
     }
   };
@@ -1767,7 +1831,7 @@ export class BrunoTableCellEditRuntime {
         ? undefined
         : session.rowMissing
           ? session.invalidMessage
-          : (session.permissionMessage ?? session.invalidMessage);
+          : (session.permissionMessage ?? session.rowVersionMessage ?? session.invalidMessage);
     const next =
       session === undefined
         ? IDLE_SESSION
@@ -1870,6 +1934,17 @@ export class BrunoTableCellEditRuntime {
         ? 1
         : 0;
     validationCount += activeCandidateValidationCount;
+    const session = this.actor.getSnapshot().context.session;
+    const activeCandidateBlockedCount =
+      activeCandidatePending &&
+      session !== undefined &&
+      (session.rowMissing ||
+        session.permissionMessage !== undefined ||
+        session.rowVersionMessage !== undefined) &&
+      (this.activeCellKey === undefined || !this.blockedDraftKeys.has(this.activeCellKey))
+        ? 1
+        : 0;
+    blockedCount += activeCandidateBlockedCount;
     const previous = this.activityStore.get();
     if (
       previous.activeEditor === activeEditor &&
@@ -2136,6 +2211,7 @@ export class BrunoTableCellEditRuntime {
       serverRow,
       projectedRow: projectedSource,
       serverNow: canonical._tag === "Success" ? canonical.value : undefined,
+      serverValueAvailable: canonical._tag === "Success",
       blockedReason: draft.blockedReason,
     });
     return reviewRow;
@@ -2158,6 +2234,7 @@ export class BrunoTableCellEditRuntime {
     const candidateStatus = session.rowMissing
       ? BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE
       : (session.permissionMessage ??
+        session.rowVersionMessage ??
         session.invalidMessage ??
         (candidate.nativeInvalid ? "Enter a valid number." : "Active candidate"));
     const activeDraft: DraftEntry = Object.freeze({
@@ -2228,7 +2305,13 @@ export class BrunoTableCellEditRuntime {
           ((draft !== undefined &&
             safeEquivalentEditValue(column, draft.mine, source.value) === true) ||
             (draft === undefined &&
-              redoHistoryMineConverged(nextRedoStack, key, column, source.value)))
+              retainedHistoryMineConverged(
+                nextUndoStack,
+                nextRedoStack,
+                key,
+                column,
+                source.value,
+              )))
         ) {
           nextDrafts ??= new Map(previousDrafts);
           nextDrafts.delete(key);
