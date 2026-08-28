@@ -250,6 +250,27 @@ type CanonicalSourceValue =
   | Readonly<{ readonly _tag: "Success"; readonly value: unknown }>
   | Readonly<{ readonly _tag: "Failure" }>;
 
+function readCanonicalSourceValueFromRawRow(
+  row: unknown,
+  column: CompiledColumn | undefined,
+): CanonicalSourceValue {
+  if (column?.kind !== "field" || typeof row !== "object" || row === null) {
+    return Object.freeze({ _tag: "Failure" });
+  }
+  try {
+    const raw = Reflect.get(row, column.field);
+    if (raw === null || raw === undefined) {
+      return Object.freeze({ _tag: "Success", value: raw });
+    }
+    const decoded = column.semantics.decodeRuntime(raw);
+    return decoded._tag === "Success" && "value" in decoded
+      ? Object.freeze({ _tag: "Success", value: decoded.value })
+      : Object.freeze({ _tag: "Failure" });
+  } catch {
+    return Object.freeze({ _tag: "Failure" });
+  }
+}
+
 type CommitEvaluation =
   | Readonly<{
       readonly kind: "invalid";
@@ -837,6 +858,36 @@ function pruneDraftHistory(
   return retained;
 }
 
+function pruneDraftHistoryBulk(
+  commands: readonly DraftHistoryCommand[],
+  convergedCellKeys: ReadonlySet<string>,
+): readonly DraftHistoryCommand[] {
+  if (convergedCellKeys.size === 0) return commands;
+  let changed = false;
+  const retained: DraftHistoryCommand[] = [];
+  for (const command of commands) {
+    let commandChanged = false;
+    const nextPatches = new DraftHistoryPatchMapBuilder();
+    for (const [key, patch] of command.patches) {
+      if (convergedCellKeys.has(key)) {
+        commandChanged = true;
+        continue;
+      }
+      nextPatches.set(key, patch);
+    }
+    if (!commandChanged) {
+      retained.push(command);
+      continue;
+    }
+    changed = true;
+    const patches = nextPatches.build();
+    if (patches.size > 0) {
+      retained.push(Object.freeze({ lineage: command.lineage, patches }));
+    }
+  }
+  return changed ? Object.freeze(retained) : commands;
+}
+
 function transformDraftHistoryCell(
   commands: readonly DraftHistoryCommand[],
   key: string,
@@ -897,35 +948,132 @@ function findDraftHistoryEntry(
   return undefined;
 }
 
-function historyKeysInvalidatedByColumns(
-  commands: readonly DraftHistoryCommand[],
+type DraftColumnReconciliationPlan =
+  | Readonly<{ readonly kind: "drop" }>
+  | Readonly<{
+      readonly kind: "retain";
+      readonly previousColumn: CompiledFieldColumn;
+      readonly nextColumn: CompiledFieldColumn;
+      readonly transformValues: boolean;
+      readonly refreshPermission: boolean;
+      readonly checkConvergence: boolean;
+    }>;
+
+type DraftColumnReconciliationContext = Readonly<{
+  readonly plans: ReadonlyMap<string, DraftColumnReconciliationPlan>;
+  readonly getRow: (rowId: string) => unknown;
+  readonly rows: Map<string, unknown>;
+  readonly migratedValues: WeakMap<DraftEntry, DraftEntry | null>;
+  readonly semanticKeys: Set<string>;
+  readonly draftChangesRequired: boolean;
+  readonly historyChangesRequired: boolean;
+}>;
+
+function createDraftColumnReconciliationContext(
   previousColumns: ReadonlyMap<string, CompiledFieldColumn>,
   nextColumns: ReadonlyMap<string, CompiledFieldColumn>,
-): Set<string> {
-  const invalidated = new Set<string>();
+  getRow: (rowId: string) => unknown,
+): DraftColumnReconciliationContext {
+  const plans = new Map<string, DraftColumnReconciliationPlan>();
+  let draftChangesRequired = false;
+  let historyChangesRequired = false;
+  for (const [columnId, previousColumn] of previousColumns) {
+    const nextColumn = nextColumns.get(columnId);
+    if (nextColumn === undefined || previousColumn.field !== nextColumn.field) {
+      plans.set(columnId, Object.freeze({ kind: "drop" }));
+      draftChangesRequired = true;
+      historyChangesRequired = true;
+      continue;
+    }
+    const transformValues =
+      !sameBlankPolicy(previousColumn, nextColumn) ||
+      previousColumn.semantics.decodeRuntimeAuthority !==
+        nextColumn.semantics.decodeRuntimeAuthority;
+    const refreshPermission =
+      transformValues || previousColumn.isEditable !== nextColumn.isEditable;
+    const checkConvergence =
+      transformValues ||
+      previousColumn.semantics.groupedRetentionAuthority.equivalent !==
+        nextColumn.semantics.groupedRetentionAuthority.equivalent;
+    draftChangesRequired ||= transformValues || refreshPermission || checkConvergence;
+    historyChangesRequired ||= transformValues || checkConvergence;
+    plans.set(
+      columnId,
+      Object.freeze({
+        kind: "retain",
+        previousColumn,
+        nextColumn,
+        transformValues,
+        refreshPermission,
+        checkConvergence,
+      }),
+    );
+  }
+  return Object.freeze({
+    plans,
+    getRow,
+    rows: new Map<string, unknown>(),
+    migratedValues: new WeakMap<DraftEntry, DraftEntry | null>(),
+    semanticKeys: new Set<string>(),
+    draftChangesRequired,
+    historyChangesRequired,
+  });
+}
+
+function reconcileDraftHistoryForColumns(
+  commands: readonly DraftHistoryCommand[],
+  context: DraftColumnReconciliationContext,
+): Readonly<{
+  readonly commands: readonly DraftHistoryCommand[];
+  readonly changedKeys: ReadonlySet<string>;
+}> {
+  if (!context.historyChangesRequired) {
+    return Object.freeze({ commands, changedKeys: new Set<string>() });
+  }
+  let changed = false;
+  const changedKeys = new Set<string>();
+  const nextCommands: DraftHistoryCommand[] = [];
   for (const command of commands) {
+    const nextPatches = new DraftHistoryPatchMapBuilder();
+    let commandChanged = false;
     for (const [key, patch] of command.patches) {
-      if (invalidated.has(key)) continue;
-      const identity = parseCellKey(key);
-      const previousColumn =
-        identity === undefined ? undefined : previousColumns.get(identity.columnId);
-      const nextColumn = identity === undefined ? undefined : nextColumns.get(identity.columnId);
-      const representative = patch.after ?? patch.before;
+      const before =
+        patch.before === undefined
+          ? undefined
+          : reconcileDraftEntryForColumns(key, patch.before, context, false);
+      const after =
+        patch.after === undefined
+          ? undefined
+          : reconcileDraftEntryForColumns(key, patch.after, context, false);
       if (
-        representative === undefined ||
-        nextColumn === undefined ||
-        nextColumn.isEditable === undefined ||
-        nextColumn.isEditable === false ||
-        previousColumn?.field !== nextColumn.field ||
-        !sameBlankPolicy(previousColumn, nextColumn) ||
-        previousColumn.semantics.decodeRuntimeAuthority !==
-          nextColumn.semantics.decodeRuntimeAuthority
+        (patch.before !== undefined && before === undefined) ||
+        (patch.after !== undefined && after === undefined)
       ) {
-        invalidated.add(key);
+        commandChanged = true;
+        changedKeys.add(key);
+        continue;
+      }
+      if (before !== patch.before || after !== patch.after) {
+        commandChanged = true;
+        changedKeys.add(key);
+        nextPatches.set(key, Object.freeze({ cellKey: key, before, after }));
+      } else {
+        nextPatches.set(key, patch);
+      }
+    }
+    if (!commandChanged) nextCommands.push(command);
+    else {
+      changed = true;
+      const patches = nextPatches.build();
+      if (patches.size > 0) {
+        nextCommands.push(Object.freeze({ lineage: command.lineage, patches }));
       }
     }
   }
-  return invalidated;
+  return Object.freeze({
+    commands: changed ? Object.freeze(nextCommands) : commands,
+    changedKeys,
+  });
 }
 
 function retainedHistoryMineConverged(
@@ -1568,22 +1716,62 @@ export class BrunoTableCellEditRuntime {
     this.draftProjectionCache = new WeakMap();
     const nextFieldColumns = indexFieldColumns(columns);
     const previousDrafts = this.draftStore.get();
-    const { drafts: nextDrafts, changedKeys } = reconcileDraftsForColumns(
-      previousDrafts,
+    const reconciliation = createDraftColumnReconciliationContext(
       previousFieldColumns,
       nextFieldColumns,
+      this.getRow,
     );
-    const invalidatedHistoryKeys = new Set([
-      ...historyKeysInvalidatedByColumns(this.undoStack, previousFieldColumns, nextFieldColumns),
-      ...historyKeysInvalidatedByColumns(this.redoStack, previousFieldColumns, nextFieldColumns),
+    const { drafts: migratedDrafts, changedKeys: migratedDraftKeys } = reconcileDraftsForColumns(
+      previousDrafts,
+      reconciliation,
+    );
+    const reconciledUndo = reconcileDraftHistoryForColumns(this.undoStack, reconciliation);
+    const reconciledRedo = reconcileDraftHistoryForColumns(this.redoStack, reconciliation);
+    let nextDrafts = migratedDrafts;
+    let nextUndoStack = reconciledUndo.commands;
+    let nextRedoStack = reconciledRedo.commands;
+    const convergedKeys = new Set<string>();
+    const reconciledCanonicalSources = new Map<string, CanonicalSourceValue>();
+    for (const key of reconciliation.semanticKeys) {
+      const draft = nextDrafts.get(key);
+      const representative = draft ?? findDraftHistoryEntry(nextUndoStack, nextRedoStack, key);
+      if (representative === undefined) continue;
+      const column = nextFieldColumns.get(representative.columnId);
+      const row = getDraftColumnReconciliationRow(reconciliation, representative.rowId);
+      const source = readCanonicalSourceValueFromRawRow(row, column);
+      reconciledCanonicalSources.set(key, source);
+      if (
+        column !== undefined &&
+        source._tag === "Success" &&
+        ((draft !== undefined &&
+          safeEquivalentEditValue(column, draft.mine, source.value) === true) ||
+          (draft === undefined &&
+            retainedHistoryMineConverged(nextUndoStack, nextRedoStack, key, column, source.value)))
+      ) {
+        convergedKeys.add(key);
+      }
+    }
+    if (convergedKeys.size > 0) {
+      const prunedDrafts = new Map(nextDrafts);
+      for (const key of convergedKeys) prunedDrafts.delete(key);
+      nextDrafts = prunedDrafts;
+      nextUndoStack = pruneDraftHistoryBulk(nextUndoStack, convergedKeys);
+      nextRedoStack = pruneDraftHistoryBulk(nextRedoStack, convergedKeys);
+    }
+    const changedDraftKeys = new Set(migratedDraftKeys);
+    for (const key of convergedKeys) {
+      if (migratedDrafts.has(key) || previousDrafts.has(key)) changedDraftKeys.add(key);
+    }
+    const memoryChangedKeys = new Set([
+      ...changedDraftKeys,
+      ...reconciledUndo.changedKeys,
+      ...reconciledRedo.changedKeys,
+      ...convergedKeys,
     ]);
-    const affectedKeys = new Set([...changedKeys, ...invalidatedHistoryKeys]);
-    const nextUndoStack = pruneDraftHistory(this.undoStack, invalidatedHistoryKeys);
-    const nextRedoStack = pruneDraftHistory(this.redoStack, invalidatedHistoryKeys);
     const reviewKeys =
       this.draftReviewSubscriberCount === 0
-        ? affectedKeys
-        : new Set([...affectedKeys, ...this.draftReviewRowsById.keys()]);
+        ? changedDraftKeys
+        : new Set([...changedDraftKeys, ...this.draftReviewRowsById.keys()]);
     const activeSession = this.actor.getSnapshot().context.session;
     const nextActiveColumn =
       activeSession === undefined ? undefined : nextFieldColumns.get(activeSession.column.columnId);
@@ -1604,19 +1792,21 @@ export class BrunoTableCellEditRuntime {
         nextUndoStack !== this.undoStack ||
         nextRedoStack !== this.redoStack
       ) {
-        this.setDraftMemory(nextDrafts, nextUndoStack, nextRedoStack, affectedKeys);
+        this.setDraftMemory(nextDrafts, nextUndoStack, nextRedoStack, memoryChangedKeys);
       }
-      for (const key of affectedKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
-      if (reviewKeys.size > 0) this.publishDraftReview(nextDrafts, reviewKeys);
-      if (affectedKeys.size === 0) return;
-      this.publishActivitySnapshot();
-      for (const key of affectedKeys) {
+      for (const key of changedDraftKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
+      if (reviewKeys.size > 0) {
+        this.publishDraftReview(nextDrafts, reviewKeys, undefined, reconciledCanonicalSources);
+      }
+      if (memoryChangedKeys.size > 0) this.publishActivitySnapshot();
+      if (changedDraftKeys.size === 0) return;
+      for (const key of changedDraftKeys) {
         this.invalidateDraftCell(key, false);
         this.publishCell(key, nextDrafts);
         this.releaseUnusedCellStore(key);
       }
     });
-    if (affectedKeys.size > 0) this.publishTraversalInvalidation();
+    if (changedDraftKeys.size > 0) this.publishTraversalInvalidation();
   };
 
   public readonly commitActiveCandidate = (): boolean => {
@@ -2080,6 +2270,7 @@ export class BrunoTableCellEditRuntime {
     drafts: ReadonlyMap<string, DraftEntry>,
     changedKeys?: ReadonlySet<string>,
     serverRows?: ReadonlyMap<string, unknown>,
+    canonicalSources?: ReadonlyMap<string, CanonicalSourceValue>,
   ): void => {
     if (this.draftReviewSubscriberCount === 0) return;
     const activeKey = this.hasActiveCandidateWork() ? this.activeCellKey : undefined;
@@ -2112,6 +2303,7 @@ export class BrunoTableCellEditRuntime {
               id,
               draft,
               serverRows?.has(id) === true ? serverRows.get(id) : this.getRow(draft.rowId),
+              canonicalSources?.get(id),
             ));
       if (nextRow === undefined) {
         if (this.draftReviewRowsById.delete(id)) membershipChanged = true;
@@ -2176,6 +2368,7 @@ export class BrunoTableCellEditRuntime {
     id: string,
     draft: DraftEntry,
     serverCandidate = this.getRow(draft.rowId),
+    canonicalSource?: CanonicalSourceValue,
   ): BrunoTableCellEditDraftReviewRow | undefined => {
     const serverRow =
       typeof serverCandidate === "object" && serverCandidate !== null ? serverCandidate : undefined;
@@ -2183,7 +2376,8 @@ export class BrunoTableCellEditRuntime {
     if (column === undefined) return undefined;
     this.draftReviewVersion += 1;
     const reviewVersion = this.draftReviewVersion;
-    const canonical = this.readCanonicalSourceValue(draft.rowId, serverRow, column);
+    const canonical =
+      canonicalSource ?? this.readCanonicalSourceValue(draft.rowId, serverRow, column);
     const projectedSource = serverRow ?? draft.baseRow;
     const reviewRow: BrunoTableCellEditDraftReviewRow = Object.freeze({
       id,
@@ -2503,70 +2697,128 @@ function indexFieldColumns(
 
 function reconcileDraftsForColumns(
   drafts: ReadonlyMap<string, DraftEntry>,
-  previousColumns: ReadonlyMap<string, CompiledFieldColumn>,
-  nextColumns: ReadonlyMap<string, CompiledFieldColumn>,
+  context: DraftColumnReconciliationContext,
 ): Readonly<{ readonly drafts: ReadonlyMap<string, DraftEntry>; readonly changedKeys: string[] }> {
+  if (!context.draftChangesRequired) {
+    return Object.freeze({ drafts, changedKeys: [] });
+  }
   let nextDrafts: Map<string, DraftEntry> | undefined;
   const changedKeys: string[] = [];
   for (const [key, draft] of drafts) {
-    const identity = parseCellKey(key);
-    const previousColumn =
-      identity === undefined ? undefined : previousColumns.get(identity.columnId);
-    const nextColumn = identity === undefined ? undefined : nextColumns.get(identity.columnId);
-    if (
-      nextColumn === undefined ||
-      nextColumn.isEditable === undefined ||
-      nextColumn.isEditable === false ||
-      previousColumn?.field !== nextColumn.field
-    ) {
+    const nextDraft = reconcileDraftEntryForColumns(key, draft, context, true);
+    if (nextDraft === undefined) {
       nextDrafts ??= new Map(drafts);
       nextDrafts.delete(key);
       changedKeys.push(key);
       continue;
     }
-    if (
-      previousColumn?.blankValue !== undefined &&
-      Object.is(draft.mine, previousColumn.blankValue.value)
-    ) {
-      if (
-        nextColumn.blankValue !== undefined &&
-        Object.is(previousColumn.blankValue.value, nextColumn.blankValue.value)
-      ) {
-        continue;
-      }
-      nextDrafts ??= new Map(drafts);
-      nextDrafts.delete(key);
-      changedKeys.push(key);
-      continue;
-    }
-    if (
-      previousColumn?.semantics.decodeRuntimeAuthority ===
-      nextColumn.semantics.decodeRuntimeAuthority
-    ) {
-      continue;
-    }
-    const decodedBase = nextColumn.semantics.decodeRuntime(draft.base);
-    const decodedMine = nextColumn.semantics.decodeRuntime(draft.mine);
-    if (decodedBase._tag === "Failure" || decodedMine._tag === "Failure") {
-      nextDrafts ??= new Map(drafts);
-      nextDrafts.delete(key);
-      changedKeys.push(key);
-      continue;
-    }
-    if (Object.is(decodedBase.value, draft.base) && Object.is(decodedMine.value, draft.mine))
-      continue;
+    if (nextDraft === draft) continue;
     nextDrafts ??= new Map(drafts);
-    nextDrafts.set(
-      key,
-      Object.freeze({
-        ...draft,
-        base: decodedBase.value,
-        mine: decodedMine.value,
-      }),
-    );
+    nextDrafts.set(key, nextDraft);
     changedKeys.push(key);
   }
   return Object.freeze({ drafts: nextDrafts ?? drafts, changedKeys });
+}
+
+function reconcileDraftEntryForColumns(
+  key: string,
+  draft: DraftEntry,
+  context: DraftColumnReconciliationContext,
+  refreshPermission: boolean,
+): DraftEntry | undefined {
+  const plan = context.plans.get(draft.columnId);
+  if (plan === undefined || plan.kind === "drop") return undefined;
+  if (plan.checkConvergence) context.semanticKeys.add(key);
+  let decodedDraft = draft;
+  if (plan.transformValues) {
+    const cached = context.migratedValues.get(draft);
+    if (cached === null) return undefined;
+    if (cached !== undefined) decodedDraft = cached;
+    else {
+      const { previousColumn, nextColumn } = plan;
+      const decodedBase = reconcileDraftValueForColumns(draft.base, previousColumn, nextColumn);
+      const decodedMine = reconcileDraftValueForColumns(draft.mine, previousColumn, nextColumn);
+      const decodedConflict =
+        draft.conflict === undefined
+          ? undefined
+          : reconcileDraftValueForColumns(draft.conflict.server, previousColumn, nextColumn);
+      if (
+        decodedBase._tag === "Failure" ||
+        decodedMine._tag === "Failure" ||
+        decodedConflict?._tag === "Failure"
+      ) {
+        context.migratedValues.set(draft, null);
+        return undefined;
+      }
+      const nextConflict =
+        draft.conflict === undefined || decodedConflict === undefined
+          ? draft.conflict
+          : Object.is(decodedConflict.value, draft.conflict.server)
+            ? draft.conflict
+            : Object.freeze({ ...draft.conflict, server: decodedConflict.value });
+      decodedDraft =
+        Object.is(decodedBase.value, draft.base) &&
+        Object.is(decodedMine.value, draft.mine) &&
+        nextConflict === draft.conflict
+          ? draft
+          : Object.freeze({
+              ...draft,
+              base: decodedBase.value,
+              mine: decodedMine.value,
+              ...(nextConflict === undefined ? {} : { conflict: nextConflict }),
+            });
+      context.migratedValues.set(draft, decodedDraft);
+    }
+  }
+  if (!refreshPermission || !plan.refreshPermission) return decodedDraft;
+  const { nextColumn } = plan;
+  const row = getDraftColumnReconciliationRow(context, draft.rowId);
+  const blockedReason =
+    typeof row !== "object" || row === null
+      ? BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE
+      : isDraftEditable(nextColumn, row, decodedDraft.mine)
+        ? undefined
+        : BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE;
+  return setDraftBlockedReason(decodedDraft, blockedReason);
+}
+
+function getDraftColumnReconciliationRow(
+  context: DraftColumnReconciliationContext,
+  rowId: string,
+): unknown {
+  if (context.rows.has(rowId)) return context.rows.get(rowId);
+  const row = context.getRow(rowId);
+  context.rows.set(rowId, row);
+  return row;
+}
+
+function reconcileDraftValueForColumns(
+  value: unknown,
+  previousColumn: CompiledFieldColumn,
+  nextColumn: CompiledFieldColumn,
+): CanonicalSourceValue {
+  if (
+    previousColumn.blankValue !== undefined &&
+    Object.is(value, previousColumn.blankValue.value)
+  ) {
+    return nextColumn.blankValue !== undefined &&
+      Object.is(previousColumn.blankValue.value, nextColumn.blankValue.value)
+      ? Object.freeze({ _tag: "Success", value })
+      : Object.freeze({ _tag: "Failure" });
+  }
+  if (
+    previousColumn.semantics.decodeRuntimeAuthority === nextColumn.semantics.decodeRuntimeAuthority
+  ) {
+    return Object.freeze({ _tag: "Success", value });
+  }
+  try {
+    const decoded = nextColumn.semantics.decodeRuntime(value);
+    return decoded._tag === "Success"
+      ? Object.freeze({ _tag: "Success", value: decoded.value })
+      : Object.freeze({ _tag: "Failure" });
+  } catch {
+    return Object.freeze({ _tag: "Failure" });
+  }
 }
 
 function isCompatibleActiveColumn(

@@ -25,6 +25,39 @@ const columns = [
 
 const rows = [{ id: "ada", name: "Ada", revision: 1n }] as const;
 
+function makeCanonicalTextColumns(lowercase: boolean): BrunoTableColumns<Row> {
+  const decodeRuntime = (input: unknown) =>
+    typeof input === "string"
+      ? ({ _tag: "Success", value: lowercase ? input.toLowerCase() : input } as const)
+      : ({ _tag: "Failure", message: "Expected text." } as const);
+  const valueType: BrunoTableValueType<string> = {
+    codecId: lowercase ? "test/browser-lowercase" : "test/browser-identity",
+    codecVersion: 1,
+    filterFamily: "text",
+    editorFamily: "text",
+    cellAlign: "start",
+    editorLayout: "inline",
+    defaultWidth: 120,
+    decodeRuntime,
+    equivalent: Object.is,
+    compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+    formatCanonicalText: String,
+    parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+    formatDisplay: String,
+    encodePersisted: String,
+    decodePersisted: decodeRuntime,
+  };
+  return [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType,
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<Row>;
+}
+
 test.afterEach(async () => {
   await cleanup();
   vi.restoreAllMocks();
@@ -117,6 +150,136 @@ test("blocks Edit Mode changes while an editor or committed draft owns work", as
   ).toHaveTextContent("1 unsaved change");
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeEnabled();
   await expect.element(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+test("reconciles current draft convergence against replacement column semantics", async () => {
+  const initialColumns = makeCanonicalTextColumns(false);
+  const replacementColumns = makeCanonicalTextColumns(true);
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_COLUMN_DOMAIN_CURRENT"
+      columns={initialColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />,
+  );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_COLUMN_DOMAIN_CURRENT" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "ada");
+  await userEvent.keyboard("{Enter}");
+
+  await screen.rerender(
+    <BrunoTableClient
+      tableId="TABLE_ID_COLUMN_DOMAIN_CURRENT"
+      columns={replacementColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />,
+  );
+
+  await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeDisabled();
+  expect(
+    screen
+      .getByRole("region", { name: "Edit safety" })
+      .element()
+      .querySelector('[aria-live="polite"]'),
+  ).toHaveTextContent("No unsaved changes");
+});
+
+test("reconciles redo-only convergence against replacement column semantics", async () => {
+  const initialColumns = makeCanonicalTextColumns(false);
+  const replacementColumns = makeCanonicalTextColumns(true);
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_COLUMN_DOMAIN_REDO"
+      columns={initialColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />,
+  );
+  const batchEditing = screen.getByRole("switch", { name: "Batch editing" });
+  await userEvent.click(batchEditing);
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_COLUMN_DOMAIN_REDO" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "ada");
+  await userEvent.keyboard("{Enter}");
+  grid.element().focus();
+  await userEvent.keyboard(
+    detectPlatform() === "mac" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+  );
+
+  await screen.rerender(
+    <BrunoTableClient
+      tableId="TABLE_ID_COLUMN_DOMAIN_REDO"
+      columns={replacementColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />,
+  );
+
+  await expect.element(batchEditing).toBeEnabled();
+  expect(grid.element().getAttribute("aria-keyshortcuts")).not.toMatch(/Control\+Shift\+Z/);
+});
+
+test("keeps an open Reset Review in the replacement column value domain", async () => {
+  const initialColumns = makeCanonicalTextColumns(false);
+  const replacementColumns = makeCanonicalTextColumns(true);
+  const save = vi.fn(() => Promise.resolve());
+  const renderTable = (activeColumns: BrunoTableColumns<Row>, version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_COLUMN_DOMAIN_REVIEW"
+      columns={activeColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={save}
+    />
+  );
+  const screen = await render(renderTable(initialColumns, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_COLUMN_DOMAIN_REVIEW" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Mine");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+  const review = screen.getByRole("alertdialog", { name: "Reset Review" }).getByRole("grid");
+  await expect.element(review.getByRole("gridcell", { name: "Ada", exact: true })).toBeVisible();
+
+  await screen.rerender(renderTable(replacementColumns, 1));
+  expect(
+    review.element().querySelector('td[data-bruno-column-id="COL_ID_SERVER_NOW"]'),
+  ).toHaveTextContent("ada");
+  expect(
+    review.element().querySelector('td[data-bruno-column-id="COL_ID_YOURS"]'),
+  ).toHaveTextContent("mine");
+
+  await screen.rerender(renderTable(replacementColumns, 2));
+  expect(
+    review.element().querySelector('td[data-bruno-column-id="COL_ID_SERVER_NOW"]'),
+  ).toHaveTextContent("ada");
+  expect(save).not.toHaveBeenCalled();
 });
 
 test("captures Row Version evidence through the latest extractor", async () => {
