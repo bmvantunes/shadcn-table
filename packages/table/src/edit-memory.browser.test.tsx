@@ -1412,6 +1412,7 @@ test("hosts save failure notifications in the table's owner document", async () 
   const frame = document.createElement("iframe");
   document.body.append(frame);
   const runtime = new BrunoTableEditMemoryRuntime();
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
   let screen: Awaited<ReturnType<typeof render>> | undefined;
   try {
     const ownerDocument = frame.contentDocument;
@@ -1433,21 +1434,28 @@ test("hosts save failure notifications in the table's owner document", async () 
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     });
-    runtime.recordSaveFailure("operation-secondary-document", new Error("Failure."), [
-      {
-        rowId: "ada",
-        baseRow: rows[0],
-        expectedVersion: 1n,
-        changes: [
-          {
-            columnId: "COL_ID_NAME",
-            field: "name",
-            before: "Ada",
-            after: "Augusta",
-          },
-        ],
-      },
-    ]);
+    const OwnerError = ownerDocument.defaultView?.Error;
+    if (OwnerError === undefined) throw new Error("Expected the iframe Error constructor.");
+    runtime.recordSaveFailure(
+      "operation-secondary-document",
+      new OwnerError("Cross-document failure."),
+      [
+        {
+          rowId: "ada",
+          baseRow: rows[0],
+          expectedVersion: 1n,
+          changes: [
+            {
+              columnId: "COL_ID_NAME",
+              field: "name",
+              before: "Ada",
+              after: "Augusta",
+            },
+          ],
+        },
+      ],
+    );
+    expect(runtime.getSaveFailureSnapshot().operations[0]?.message).toBe("Cross-document failure.");
 
     await expect
       .poll(() => {
@@ -1467,10 +1475,20 @@ test("hosts save failure notifications in the table's owner document", async () 
     await expect
       .poll(() => ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]"))
       .toBeNull();
+    expect(
+      consoleError.mock.calls.some((call) =>
+        call.some((value) =>
+          String(value).includes(
+            "Attempted to synchronously unmount a root while React was already rendering",
+          ),
+        ),
+      ),
+    ).toBe(false);
   } finally {
     await screen?.unmount();
     runtime.dispose();
     frame.remove();
+    consoleError.mockRestore();
   }
 });
 

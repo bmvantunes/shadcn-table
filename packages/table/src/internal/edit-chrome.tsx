@@ -12,6 +12,7 @@ import {
 import { Switch } from "@bruno/shadcn/switch";
 import { ScrollArea } from "@bruno/shadcn/scroll-area";
 import { createToastManager, Toaster } from "@bruno/shadcn/toast";
+import { Debouncer } from "@tanstack/react-pacer";
 import {
   memo,
   useCallback,
@@ -40,6 +41,22 @@ type SaveFailureToasterEntry = Readonly<{
 }>;
 
 const saveFailureToastersByDocument = new WeakMap<Document, SaveFailureToasterEntry>();
+const pendingSaveFailureToasterDisposals = new Map<Document, SaveFailureToasterEntry>();
+const saveFailureToasterDisposalQueue = new Debouncer(
+  () => {
+    const pending = [...pendingSaveFailureToasterDisposals];
+    pendingSaveFailureToasterDisposals.clear();
+    for (const [ownerDocument, entry] of pending) {
+      if (entry.owners.size > 0 || saveFailureToastersByDocument.get(ownerDocument) !== entry) {
+        continue;
+      }
+      saveFailureToastersByDocument.delete(ownerDocument);
+      entry.root.unmount();
+      entry.host.remove();
+    }
+  },
+  { wait: 0 },
+);
 let saveFailureToastIdSequence = 0;
 
 function createSaveFailureToasterEntry(ownerDocument: Document): SaveFailureToasterEntry {
@@ -62,12 +79,8 @@ function scheduleSaveFailureToasterDisposal(
   ownerDocument: Document,
   entry: SaveFailureToasterEntry,
 ): void {
-  queueMicrotask(() => {
-    if (entry.owners.size > 0 || saveFailureToastersByDocument.get(ownerDocument) !== entry) return;
-    saveFailureToastersByDocument.delete(ownerDocument);
-    entry.root.unmount();
-    entry.host.remove();
-  });
+  pendingSaveFailureToasterDisposals.set(ownerDocument, entry);
+  saveFailureToasterDisposalQueue.maybeExecute();
 }
 
 function registerSaveFailureToasterOwner(

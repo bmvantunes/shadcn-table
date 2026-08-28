@@ -439,7 +439,9 @@ export class BrunoTableEditMemoryRuntime {
   ): void => {
     let explanation = "The save could not be confirmed.";
     try {
-      const message = reason instanceof Error ? reason.message : undefined;
+      const isError =
+        reason instanceof Error || Object.prototype.toString.call(reason) === "[object Error]";
+      const message = isError ? Reflect.get(reason as object, "message") : undefined;
       if (typeof message === "string" && message.trim().length > 0) {
         explanation = message.trim().slice(0, 500);
       }
