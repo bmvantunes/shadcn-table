@@ -1,0 +1,331 @@
+import { bench, describe } from "vite-plus/test";
+
+import { BrunoTableCellEditRuntime, type BrunoTableCellEditDraftSnapshot } from "./cell-edit";
+import { assertBrunoTableBenchmarkBudget } from "./benchmark-budget";
+import { compileColumns } from "./compile-columns";
+
+const referenceFrameBudgetMs = 8.33;
+const warmupSampleCount = 2;
+const measuredSampleCount = 100;
+const gestureCellCount = 5_000;
+const row = Object.freeze({ value: "server" });
+const isEditable = ({ value }: { readonly value: string }) => value.length > 0;
+const compileBenchmarkColumns = (permission: true | false | typeof isEditable = isEditable) =>
+  compileColumns([
+    {
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      headerName: "Value",
+      valueType: "text",
+      isEditable: permission,
+    },
+  ]);
+const columns = compileBenchmarkColumns();
+const equivalentColumns = [compileBenchmarkColumns(), compileBenchmarkColumns()] as const;
+const blockedColumns = compileBenchmarkColumns(false);
+const changes = Array.from(
+  { length: gestureCellCount },
+  (_unused, index): BrunoTableCellEditDraftSnapshot =>
+    Object.freeze({
+      rowId: `row-${String(index)}`,
+      columnId: "COL_ID_VALUE",
+      field: "value",
+      baseRow: row,
+      expectedVersion: index,
+      base: "server",
+      mine: `draft-${String(index)}`,
+    }),
+);
+const firstChange = changes[0];
+if (firstChange === undefined) throw new Error("Edit-memory benchmark gesture must be non-empty.");
+const gesture: readonly [BrunoTableCellEditDraftSnapshot, ...BrunoTableCellEditDraftSnapshot[]] = [
+  firstChange,
+  ...changes.slice(1),
+];
+
+function createRuntime(onRowRead?: () => void): BrunoTableCellEditRuntime {
+  const runtime = new BrunoTableCellEditRuntime({
+    columns,
+    getRow: () => {
+      onRowRead?.();
+      return row;
+    },
+  });
+  runtime.setBatchHistoryEnabled(true);
+  return runtime;
+}
+
+function recordBudgetSample(
+  name: string,
+  samples: number[],
+  elapsedMs: number,
+  warmups = warmupSampleCount,
+): void {
+  samples.push(elapsedMs);
+  assertBrunoTableBenchmarkBudget(name, samples, {
+    budgetMs: referenceFrameBudgetMs,
+    measuredSampleCount,
+    warmupSampleCount: warmups,
+  });
+}
+
+describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", () => {
+  const applySamples: number[] = [];
+  const undoSamples: number[] = [];
+  const redoSamples: number[] = [];
+  const runtime = createRuntime();
+  let rowReads = 0;
+  const reconciliationRuntime = createRuntime(() => {
+    rowReads += 1;
+  });
+  if (!reconciliationRuntime.applyAcceptedDraftGesture(gesture)) {
+    throw new Error("The reconciliation fixture was not accepted.");
+  }
+
+  bench(
+    "applies, undoes, and redoes one 5,000-cell gesture as one bounded sparse command",
+    () => {
+      runtime.resetAllDrafts();
+      let startedAt = performance.now();
+      if (!runtime.applyAcceptedDraftGesture(gesture)) {
+        throw new Error("The 5,000-cell gesture was not accepted.");
+      }
+      recordBudgetSample("5,000-cell gesture apply", applySamples, performance.now() - startedAt);
+      if (runtime.getActivitySnapshot().draftCount !== gestureCellCount) {
+        throw new Error("The accepted gesture did not publish every sparse draft.");
+      }
+
+      startedAt = performance.now();
+      if (!runtime.undoBatchDraft()) throw new Error("The gesture did not undo atomically.");
+      recordBudgetSample("5,000-cell gesture undo", undoSamples, performance.now() - startedAt);
+      if (runtime.getActivitySnapshot().draftCount !== 0) {
+        throw new Error("Undo retained partial gesture state.");
+      }
+
+      startedAt = performance.now();
+      if (!runtime.redoBatchDraft()) throw new Error("The gesture did not redo atomically.");
+      recordBudgetSample("5,000-cell gesture redo", redoSamples, performance.now() - startedAt);
+      if (runtime.getActivitySnapshot().draftCount !== gestureCellCount) {
+        throw new Error("Redo restored partial gesture state.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+  );
+
+  const preciseReconciliationSamples: number[] = [];
+  bench(
+    "reconciles one precise source Row Identity without materializing Reset Review",
+    () => {
+      const previousRowReads = rowReads;
+      const startedAt = performance.now();
+      reconciliationRuntime.reconcileSourceRows(new Set(["row-2500"]));
+      recordBudgetSample(
+        "one-row sparse draft reconciliation",
+        preciseReconciliationSamples,
+        performance.now() - startedAt,
+      );
+      if (reconciliationRuntime.getActivitySnapshot().draftCount !== gestureCellCount) {
+        throw new Error("Precise reconciliation changed unrelated sparse drafts.");
+      }
+      if (rowReads - previousRowReads !== 1) {
+        throw new Error("Precise reconciliation read outside its one indexed dirty cell.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+  );
+
+  const unknownReconciliationSamples: number[] = [];
+  bench(
+    "reconciles 5,000 sparse drafts after an unknown source publication",
+    () => {
+      const startedAt = performance.now();
+      reconciliationRuntime.reconcileSourceRows(undefined);
+      recordBudgetSample(
+        "unknown sparse draft reconciliation",
+        unknownReconciliationSamples,
+        performance.now() - startedAt,
+      );
+      if (reconciliationRuntime.getActivitySnapshot().draftCount !== gestureCellCount) {
+        throw new Error("Unknown reconciliation lost divergent sparse drafts.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+  );
+
+  const historySourceRows = new Map<string, Readonly<{ readonly value: string }>>();
+  for (let index = 0; index < gestureCellCount; index += 1) {
+    historySourceRows.set(
+      `row-${String(index)}`,
+      Object.freeze({ value: `history-99-${String(index)}` }),
+    );
+  }
+  let historyColumnRowReads = 0;
+  const historyReconciliationRuntime = new BrunoTableCellEditRuntime({
+    columns,
+    getRow: (rowId) => {
+      historyColumnRowReads += 1;
+      return historySourceRows.get(rowId);
+    },
+  });
+  historyReconciliationRuntime.setBatchHistoryEnabled(true);
+  const populateRetainedHistory = (target: BrunoTableCellEditRuntime): void => {
+    for (let commandIndex = 0; commandIndex < 100; commandIndex += 1) {
+      const commandChanges = gesture.map((draft, cellIndex) =>
+        Object.freeze({
+          ...draft,
+          mine: `history-${String(commandIndex)}-${String(cellIndex)}`,
+        }),
+      );
+      const firstCommandChange = commandChanges[0];
+      if (firstCommandChange === undefined) {
+        throw new Error("The retained-history fixture command must be non-empty.");
+      }
+      const commandGesture: readonly [
+        BrunoTableCellEditDraftSnapshot,
+        ...BrunoTableCellEditDraftSnapshot[],
+      ] = [firstCommandChange, ...commandChanges.slice(1)];
+      if (!target.applyAcceptedDraftGesture(commandGesture)) {
+        throw new Error("The retained-history fixture command was not accepted.");
+      }
+    }
+  };
+  populateRetainedHistory(historyReconciliationRuntime);
+  const retainedHistorySamples: number[] = [];
+  let retainedHistoryTargetIndex = 0;
+  bench(
+    "prunes one converged Cell Identity from 100 retained 5,000-cell commands",
+    () => {
+      const targetIndex = retainedHistoryTargetIndex;
+      retainedHistoryTargetIndex += 1;
+      const previousDraftCount = historyReconciliationRuntime.getActivitySnapshot().draftCount;
+      const startedAt = performance.now();
+      historyReconciliationRuntime.reconcileSourceRows(new Set([`row-${String(targetIndex)}`]));
+      const elapsedMs = performance.now() - startedAt;
+      recordBudgetSample(
+        "one-cell retained-history convergence",
+        retainedHistorySamples,
+        elapsedMs,
+        0,
+      );
+      if (
+        historyReconciliationRuntime.getActivitySnapshot().draftCount !==
+        previousDraftCount - 1
+      ) {
+        throw new Error("One-cell convergence changed unrelated retained drafts.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+  );
+
+  let equivalentColumnIndex = 0;
+  const equivalentRecompileSamples: number[] = [];
+  bench(
+    "reconciles an equivalent column over 100 retained 5,000-cell commands without evidence work",
+    () => {
+      const previousMemory = historyReconciliationRuntime.getDraftMemorySnapshot();
+      const previousRowReads = historyColumnRowReads;
+      equivalentColumnIndex = equivalentColumnIndex === 0 ? 1 : 0;
+      const startedAt = performance.now();
+      historyReconciliationRuntime.reconcileColumns(equivalentColumns[equivalentColumnIndex]!);
+      recordBudgetSample(
+        "equivalent retained-history column recompile",
+        equivalentRecompileSamples,
+        performance.now() - startedAt,
+      );
+      if (historyReconciliationRuntime.getDraftMemorySnapshot() !== previousMemory) {
+        throw new Error("Equivalent column recompilation replaced retained edit memory.");
+      }
+      if (historyColumnRowReads !== previousRowReads) {
+        throw new Error("Equivalent column recompilation read retained Row Identities.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+  );
+
+  let permissionRevoked = false;
+  const permissionRecompileSamples: number[] = [];
+  bench(
+    "toggles static permission for 5,000 drafts without traversing 100 retained commands",
+    () => {
+      const previousRowReads = historyColumnRowReads;
+      const retainedDraftCount = historyReconciliationRuntime.getActivitySnapshot().draftCount;
+      permissionRevoked = !permissionRevoked;
+      const startedAt = performance.now();
+      historyReconciliationRuntime.reconcileColumns(
+        permissionRevoked ? blockedColumns : equivalentColumns[0],
+      );
+      permissionRecompileSamples.push(performance.now() - startedAt);
+      assertBrunoTableBenchmarkBudget(
+        "5,000-draft static permission recompile",
+        permissionRecompileSamples,
+        {
+          budgetMs: 100,
+          measuredSampleCount,
+          warmupSampleCount,
+        },
+      );
+      if (historyColumnRowReads - previousRowReads !== retainedDraftCount) {
+        throw new Error("Static permission recompilation traversed retained history occurrences.");
+      }
+      if (historyReconciliationRuntime.getActivitySnapshot().undoCount !== 100) {
+        throw new Error("Static permission recompilation changed retained command count.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+  );
+
+  const massSourceConvergenceSamples: number[] = [];
+  const massSourceConvergenceTargets: BrunoTableCellEditRuntime[] = [];
+  const massSourceConvergenceSampleCount = 3;
+  bench(
+    "clears one 5,000-cell source convergence from 100 retained commands within one frame",
+    () => {
+      const target = massSourceConvergenceTargets.shift();
+      if (target === undefined) {
+        throw new Error("Mass source-convergence benchmark exhausted its prepared fixture.");
+      }
+      const startedAt = performance.now();
+      target.reconcileSourceRows(undefined);
+      massSourceConvergenceSamples.push(performance.now() - startedAt);
+      assertBrunoTableBenchmarkBudget(
+        "5,000-identity retained-history source convergence",
+        massSourceConvergenceSamples,
+        {
+          budgetMs: referenceFrameBudgetMs,
+          measuredSampleCount: massSourceConvergenceSampleCount,
+          warmupSampleCount: 0,
+        },
+      );
+      expectCleanMassConvergence(target);
+      target.dispose();
+    },
+    {
+      setup: () => {
+        for (let index = 0; index <= massSourceConvergenceSampleCount; index += 1) {
+          const target = new BrunoTableCellEditRuntime({
+            columns,
+            getRow: (rowId) => historySourceRows.get(rowId),
+          });
+          target.setBatchHistoryEnabled(true);
+          populateRetainedHistory(target);
+          massSourceConvergenceTargets.push(target);
+        }
+      },
+      teardown: () => {
+        for (const target of massSourceConvergenceTargets) target.dispose();
+        massSourceConvergenceTargets.length = 0;
+      },
+      iterations: massSourceConvergenceSampleCount,
+      time: 0,
+      warmupIterations: 0,
+      warmupTime: 0,
+    },
+  );
+});
+
+function expectCleanMassConvergence(runtime: BrunoTableCellEditRuntime): void {
+  const activity = runtime.getActivitySnapshot();
+  if (activity.draftCount !== 0 || activity.undoCount !== 0 || activity.redoCount !== 0) {
+    throw new Error("Mass column convergence retained sparse edit evidence.");
+  }
+}

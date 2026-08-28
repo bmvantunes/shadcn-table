@@ -7,6 +7,8 @@ import type { BrunoTableColumns, BrunoTableValueType } from "../public-types";
 import {
   BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH,
   BrunoTableCellEditRuntime as BrunoTableCellEditRuntimeBase,
+  isBrunoTableCellEditDraftReviewSourceRow,
+  type BrunoTableCellEditDraftSnapshot,
 } from "./cell-edit";
 import { compileColumns } from "./compile-columns";
 
@@ -60,6 +62,860 @@ afterEach(() => {
 });
 
 describe("BrunoTable Cell Edit Session", () => {
+  it("records bounded Batch draft history and retains redo intent at zero drafts", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBe(7);
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 1,
+      undoCount: 1,
+      redoCount: 0,
+    });
+
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBeUndefined();
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 0,
+      undoCount: 0,
+      redoCount: 1,
+    });
+
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBe(7);
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 1,
+      undoCount: 1,
+      redoCount: 0,
+    });
+  });
+
+  it("retains exact Base, Mine, row, field, and Row Version evidence per sparse draft", () => {
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 17n,
+    });
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        rowId: "row-1",
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        baseRow: row,
+        expectedVersion: 17n,
+        base: 4,
+        mine: 7,
+      },
+    ]);
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        rowId: "row-1",
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        baseRow: row,
+        expectedVersion: 17n,
+        base: 4,
+        mine: 8,
+      },
+    ]);
+  });
+
+  it("keeps the immutable admission Base and Row Version across live source replacement", () => {
+    const admitted = Object.freeze({ ...row, score: 4 });
+    let current: Row = admitted;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate === admitted ? 1n : 2n),
+    });
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    current = Object.freeze({ ...row, score: 6 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { baseRow: admitted, expectedVersion: 1n, base: 4, serverNow: 6, mine: 8 },
+    ]);
+  });
+
+  it("prunes redo-only convergence and revalidates missing-row history before replay", () => {
+    let current: Row | undefined = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    current = Object.freeze({ ...row, score: 7 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ redoCount: 0 });
+    expect(runtime.redoBatchDraft()).toBe(false);
+
+    current = row;
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    current = undefined;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { mine: 8, blockedReason: expect.stringContaining("removed") },
+    ]);
+    current = row;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([{ mine: 8, blockedReason: undefined }]);
+  });
+
+  it("retains the exact authored value for draft-removal history convergence", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    current = Object.freeze({ ...row, score: 6 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("6")).toBe(true);
+    expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBeUndefined();
+
+    current = row;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("row-1", "COL_ID_SCORE")).toBe(7);
+  });
+
+  it("prunes undo-only return-to-base history after authoritative convergence", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("4")).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 2 });
+
+    current = Object.freeze({ ...row, score: 4 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ undoCount: 0, redoCount: 0 });
+    expect(runtime.undoBatchDraft()).toBe(false);
+  });
+
+  it("prunes undo convergence when unrelated redo history exists", () => {
+    const rowA = Object.freeze({ ...row, id: "row-a" });
+    const rowB = Object.freeze({ ...row, id: "row-b" });
+    const liveRows = new Map<string, Row>([
+      [rowA.id, rowA],
+      [rowB.id, rowB],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(rowA.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(rowA.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("4")).toBe(true);
+    expect(runtime.start(rowB.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ undoCount: 2, redoCount: 1 });
+
+    liveRows.set(rowA.id, Object.freeze({ ...rowA, score: 4 }));
+    runtime.reconcileSourceRows(new Set([rowA.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ undoCount: 0, redoCount: 1 });
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot(rowB.id, "COL_ID_SCORE")).toBe(8);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(false);
+    expect(runtime.getDraftSnapshot(rowA.id, "COL_ID_SCORE")).toBeUndefined();
+  });
+
+  it("rebases an open session when its admitted draft converges authoritatively", () => {
+    const admitted = Object.freeze({ ...row, score: 4 });
+    const converged = Object.freeze({ ...row, score: 7 });
+    let current: Row = admitted;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate === converged ? 2n : 1n),
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate("8", false);
+
+    current = converged;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.reconcileActiveRow(new Set([row.id]));
+    expect(runtime.commit("8")).toBe(true);
+
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        baseRow: converged,
+        expectedVersion: 2n,
+        base: 7,
+        mine: 8,
+      },
+    ]);
+  });
+
+  it("blocks a converged open session until Row Version rebasing succeeds", () => {
+    const admitted = Object.freeze({ ...row, score: 4 });
+    const converged = Object.freeze({ ...row, score: 7 });
+    let current: Row = admitted;
+    let extractorAvailable = true;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => {
+        if (!extractorAvailable) throw new Error("Row Version unavailable");
+        return candidate === converged ? 2n : 1n;
+      },
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate("8", false);
+
+    current = converged;
+    extractorAvailable = false;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.reconcileActiveRow(new Set([row.id]));
+    expect(runtime.commit("8")).toBe(false);
+    expect(runtime.getActiveCandidateSnapshot()).toMatchObject({ rawText: "8" });
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: expect.stringContaining("Row Version"),
+    });
+
+    extractorAvailable = true;
+    runtime.reconcileActiveRow(new Set([row.id]));
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { baseRow: converged, expectedVersion: 2n, base: 7, mine: 8 },
+    ]);
+  });
+
+  it("keeps the latest Mine when the source publishes an older history value", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+
+    current = Object.freeze({ ...row, score: 7 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBe(8);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 2 });
+  });
+
+  it("reconciles redo-only evidence on an unknown source publication", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    current = Object.freeze({ ...row, score: 7 });
+    runtime.reconcileSourceRows(undefined);
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, redoCount: 0 });
+    expect(runtime.redoBatchDraft()).toBe(false);
+  });
+
+  it("prunes redo history when the source reaches the chronologically latest Mine", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ redoCount: 2 });
+
+    current = Object.freeze({ ...row, score: 8 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ redoCount: 0 });
+    expect(runtime.redoBatchDraft()).toBe(false);
+  });
+
+  it("does not record a Batch command for distinct but semantically equivalent Mine values", () => {
+    type ObjectRow = Readonly<{ readonly id: string; readonly value: Readonly<{ id: string }> }>;
+    const objectRow: ObjectRow = Object.freeze({ id: "object-row", value: { id: "base" } });
+    const objectValueType: BrunoTableValueType<Readonly<{ id: string }>> = {
+      codecId: "test/object-equivalence",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "object" && input !== null && "id" in input
+          ? { _tag: "Success", value: { id: String(input.id) } }
+          : { _tag: "Failure", message: "Expected object." },
+      equivalent: (left, right) => left.id === right.id,
+      compare: (left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1),
+      formatCanonicalText: (value) => value.id,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: { id: text } }),
+      formatDisplay: (value) => value.id,
+      encodePersisted: (value) => value.id,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: { id: input } }
+          : { _tag: "Failure", message: "Expected string." },
+    };
+    const objectColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: objectValueType,
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: objectColumns,
+      getRow: () => objectRow,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: objectRow.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: objectRow,
+          expectedVersion: 1n,
+          base: objectRow.value,
+          mine: { id: "mine" },
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: objectRow.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: objectRow,
+          expectedVersion: 1n,
+          base: objectRow.value,
+          mine: { id: "mine" },
+        },
+      ]),
+    ).toBe(false);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
+  });
+
+  it("materializes live Reset Review rows only while the review is observed", () => {
+    const getRow = vi.fn(() => row);
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow });
+
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    getRow.mockClear();
+    expect(runtime.commit("7")).toBe(true);
+    expect(getRow).not.toHaveBeenCalled();
+
+    const reviewSubscriber = vi.fn();
+    const unsubscribe = runtime.subscribeDraftReview(reviewSubscriber);
+    expect(getRow).toHaveBeenCalledOnce();
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(1);
+
+    unsubscribe();
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(1);
+    expect(getRow).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes live Reset Review updates only to the affected row projection", () => {
+    const liveRows = new Map<string, Row>([
+      ["row-a", Object.freeze({ ...row, id: "row-a" })],
+      ["row-b", Object.freeze({ ...row, id: "row-b" })],
+    ]);
+    const getRow = vi.fn((rowId: string) => liveRows.get(rowId));
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row-a",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-a")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 7,
+        },
+        {
+          rowId: "row-b",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-b")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 8,
+        },
+      ]),
+    ).toBe(true);
+    const membershipListener = vi.fn();
+    const unsubscribeMembership = runtime.subscribeDraftReview(membershipListener);
+    const [rowA, rowB] = runtime.getDraftReviewSourceSnapshot();
+    if (rowA === undefined || rowB === undefined) throw new Error("Expected two review rows.");
+    expect(isBrunoTableCellEditDraftReviewSourceRow(rowA)).toBe(true);
+    expect(
+      isBrunoTableCellEditDraftReviewSourceRow({
+        kind: "bruno-table-cell-edit-draft-review-source",
+        getSnapshot: rowA.getSnapshot,
+        subscribe: rowA.subscribe,
+      }),
+    ).toBe(false);
+    expect(
+      isBrunoTableCellEditDraftReviewSourceRow(
+        new Proxy(
+          {},
+          {
+            get: () => {
+              throw new Error("consumer getter must not run");
+            },
+          },
+        ),
+      ),
+    ).toBe(false);
+    const rowAListener = vi.fn();
+    const rowBListener = vi.fn();
+    const unsubscribeRowA = rowA.subscribe(rowAListener);
+    const unsubscribeRowB = rowB.subscribe(rowBListener);
+    getRow.mockClear();
+
+    liveRows.set("row-a", Object.freeze({ ...row, id: "row-a", score: 5 }));
+    runtime.reconcileSourceRows(new Set(["row-a"]));
+
+    expect(getRow).toHaveBeenCalledOnce();
+    expect(membershipListener).not.toHaveBeenCalled();
+    expect(rowAListener).toHaveBeenCalledOnce();
+    expect(rowBListener).not.toHaveBeenCalled();
+    expect(rowA.getSnapshot()).toMatchObject({ serverNow: 5, mine: 7 });
+
+    unsubscribeRowA();
+    unsubscribeRowB();
+    unsubscribeMembership();
+  });
+
+  it("publishes coherent candidate activity and Reset Review evidence in one batch", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    const unsubscribeReview = runtime.subscribeDraftReview(vi.fn());
+    const observedCandidateText: Array<string | undefined> = [];
+    const unsubscribeActivity = runtime.subscribeActivity(() => {
+      observedCandidateText.push(runtime.getDraftReviewSnapshot()[0]?.candidateText);
+    });
+
+    runtime.updateActiveCandidate("7", false);
+
+    expect(observedCandidateText).toEqual(["7"]);
+    unsubscribeActivity();
+    unsubscribeReview();
+  });
+
+  it("refreshes observed Reset Review rows after compatible presentation changes", () => {
+    type TextRow = Readonly<{ readonly id: string; readonly value: string }>;
+    const source: TextRow = Object.freeze({ id: "row", value: "server" });
+    const makeColumns = (headerName: string) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName,
+          valueType: "text",
+          isEditable: true,
+          valueFormatter: ({ value }: { readonly value: string }) => `${headerName}:${value}`,
+        },
+      ] satisfies BrunoTableColumns<TextRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns("Before"),
+      getRow: () => source,
+    });
+    expect(runtime.start(source.id, "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("mine")).toBe(true);
+    const membershipListener = vi.fn();
+    const unsubscribe = runtime.subscribeDraftReview(membershipListener);
+
+    runtime.reconcileColumns(makeColumns("After"));
+
+    expect(membershipListener).toHaveBeenCalledOnce();
+    expect(runtime.getDraftReviewSourceSnapshot()[0]?.columnLabel).toBe("After");
+    expect(runtime.getDraftReviewSourceSnapshot()[0]?.getSnapshot().column.headerName).toBe(
+      "After",
+    );
+    unsubscribe();
+  });
+
+  it("publishes one traversal invalidation for a multi-draft column reconcile", () => {
+    const liveRows = new Map<string, Row>([
+      ["row-a", Object.freeze({ ...row, id: "row-a" })],
+      ["row-b", Object.freeze({ ...row, id: "row-b" })],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row-a",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-a")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 7,
+        },
+        {
+          rowId: "row-b",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-b")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 8,
+        },
+      ]),
+    ).toBe(true);
+    const listener = vi.fn();
+    runtime.subscribeTraversalInvalidation(listener);
+
+    runtime.reconcileColumns(columns.filter((column) => column.columnId !== "COL_ID_SCORE"));
+
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("publishes one traversal invalidation when resetting multiple drafts", () => {
+    const liveRows = new Map<string, Row>([
+      ["row-a", Object.freeze({ ...row, id: "row-a" })],
+      ["row-b", Object.freeze({ ...row, id: "row-b" })],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row-a",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-a")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 7,
+        },
+        {
+          rowId: "row-b",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-b")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 8,
+        },
+      ]),
+    ).toBe(true);
+    const listener = vi.fn();
+    runtime.subscribeTraversalInvalidation(listener);
+
+    expect(runtime.resetAllDrafts()).toBe(2);
+
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("bounds Batch history without copying the complete draft store", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
+    for (let offset = 1n; offset <= 105n; offset += 1n) {
+      expect(runtime.start("row-1", "COL_ID_QUANTITY")).toBe(true);
+      expect(runtime.commit(String(row.quantity + offset))).toBe(true);
+    }
+    expect(runtime.getActivitySnapshot()).toMatchObject({ undoCount: 100, redoCount: 0 });
+  });
+
+  it("records one reversible sparse history command for a 500-cell accepted gesture", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
+    const traversalInvalidation = vi.fn();
+    runtime.subscribeTraversalInvalidation(traversalInvalidation);
+    const changes = Array.from(
+      { length: 500 },
+      (_unused, index): BrunoTableCellEditDraftSnapshot =>
+        Object.freeze({
+          rowId: `row-${String(index)}`,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: BigInt(index),
+          base: 4,
+          mine: 7,
+        }),
+    );
+    const first = changes[0];
+    if (first === undefined) throw new Error("Gesture fixture must be non-empty.");
+    const gesture: readonly [
+      BrunoTableCellEditDraftSnapshot,
+      ...BrunoTableCellEditDraftSnapshot[],
+    ] = [first, ...changes.slice(1)];
+
+    expect(runtime.applyAcceptedDraftGesture(gesture)).toBe(true);
+    expect(traversalInvalidation).toHaveBeenCalledOnce();
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 500, undoCount: 1 });
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(traversalInvalidation).toHaveBeenCalledTimes(2);
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 0,
+      undoCount: 0,
+      redoCount: 1,
+    });
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(traversalInvalidation).toHaveBeenCalledTimes(3);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 500, undoCount: 1 });
+  });
+
+  it("rejects duplicate Cell Identities without creating phantom Batch history", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
+    const draft = {
+      rowId: row.id,
+      columnId: "COL_ID_SCORE",
+      field: "score",
+      baseRow: row,
+      expectedVersion: 1n,
+      base: 4,
+      mine: 7,
+    } as const;
+    expect(runtime.applyAcceptedDraftGesture([draft])).toBe(true);
+    const before = runtime.getDraftMemorySnapshot();
+
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        { ...draft, mine: 8 },
+        { ...draft, mine: 7 },
+      ]),
+    ).toBe(false);
+    expect(runtime.getDraftMemorySnapshot()).toBe(before);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
+  });
+
+  it("reverses complete validation and conflict evidence as one sparse cell state", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 7,
+          validationMessage: "Retained validation evidence",
+          conflict: { server: 6, resolution: "mine" },
+        },
+      ]),
+    ).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ validationCount: 1, conflictCount: 1 });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        validationMessage: "Retained validation evidence",
+        conflict: { server: 6, resolution: "mine" },
+        status: "Retained validation evidence",
+      },
+    ]);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ validationCount: 0, conflictCount: 0 });
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ validationCount: 1, conflictCount: 1 });
+  });
+
+  it("clears stale validation and conflict evidence when Mine changes", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 7,
+          validationMessage: "Old validation evidence",
+          conflict: { server: 6, resolution: "mine" },
+        },
+      ]),
+    ).toBe(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ validationCount: 0, conflictCount: 0 });
+    const corrected = runtime.getDraftReviewSnapshot()[0];
+    expect(corrected).toMatchObject({ mine: 8 });
+    expect(Object.hasOwn(corrected!, "validationMessage")).toBe(false);
+    expect(Object.hasOwn(corrected!, "conflict")).toBe(false);
+
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        mine: 7,
+        validationMessage: "Old validation evidence",
+        conflict: { server: 6, resolution: "mine" },
+      },
+    ]);
+  });
+
+  it("bounds the reverse dependency index to retained draft and history evidence", () => {
+    const rows = new Map<string, Row>();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rows.get(rowId),
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    for (let index = 0; index < 105; index += 1) {
+      const current = Object.freeze({ ...row, id: `row-${String(index)}` });
+      rows.set(current.id, current);
+      expect(runtime.start(current.id, "COL_ID_SCORE")).toBe(true);
+      expect(runtime.commit("7")).toBe(true);
+      expect(runtime.undoBatchDraft()).toBe(true);
+    }
+
+    expect(runtime.getRetainedDraftDependencyCellCount()).toBe(1);
+  });
+
+  it("prunes only a converged cell from a multi-cell history command", () => {
+    const liveRows = new Map<string, Row>([
+      ["row-a", Object.freeze({ ...row, id: "row-a" })],
+      ["row-b", Object.freeze({ ...row, id: "row-b" })],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row-a",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-a")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 7,
+        },
+        {
+          rowId: "row-b",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-b")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 8,
+        },
+      ]),
+    ).toBe(true);
+    liveRows.set("row-a", Object.freeze({ ...row, id: "row-a", score: 7 }));
+    runtime.reconcileSourceRows(new Set(["row-a"]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("row-a", "COL_ID_SCORE")).toBeUndefined();
+    expect(runtime.getDraftSnapshot("row-b", "COL_ID_SCORE")).toBeUndefined();
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("row-a", "COL_ID_SCORE")).toBeUndefined();
+    expect(runtime.getDraftSnapshot("row-b", "COL_ID_SCORE")).toBe(8);
+  });
+
+  it("bulk-prunes converged cells while preserving one divergent history patch", () => {
+    const liveRows = new Map<string, Row>();
+    const changes = Array.from({ length: 34 }, (_, index) => {
+      const rowId = `row-${String(index)}`;
+      const baseRow = Object.freeze({ ...row, id: rowId });
+      liveRows.set(rowId, baseRow);
+      return {
+        rowId,
+        columnId: "COL_ID_SCORE",
+        field: "score" as const,
+        baseRow,
+        expectedVersion: 1n,
+        base: 4,
+        mine: index < 33 ? 7 : 8,
+      };
+    });
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    runtime.setBatchHistoryEnabled(true);
+    const firstChange = changes[0];
+    if (firstChange === undefined) throw new Error("Expected a non-empty bulk gesture.");
+    expect(runtime.applyAcceptedDraftGesture([firstChange, ...changes.slice(1)])).toBe(true);
+    for (let index = 0; index < 33; index += 1) {
+      const rowId = `row-${String(index)}`;
+      liveRows.set(rowId, Object.freeze({ ...row, id: rowId, score: 7 }));
+    }
+
+    runtime.reconcileSourceRows(undefined);
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
+    expect(runtime.getRetainedDraftDependencyCellCount()).toBe(1);
+    for (let index = 0; index < 33; index += 1) {
+      expect(runtime.getDraftSnapshot(`row-${String(index)}`, "COL_ID_SCORE")).toBeUndefined();
+    }
+    expect(runtime.getDraftSnapshot("row-33", "COL_ID_SCORE")).toBe(8);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getRetainedDraftDependencyCellCount()).toBe(1);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    for (let index = 0; index < 33; index += 1) {
+      expect(runtime.getDraftSnapshot(`row-${String(index)}`, "COL_ID_SCORE")).toBeUndefined();
+    }
+    expect(runtime.getDraftSnapshot("row-33", "COL_ID_SCORE")).toBe(8);
+  });
+
+  it("prunes redo evidence when its compiled column authority disappears", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    runtime.reconcileColumns(columns.filter((column) => column.columnId !== "COL_ID_SCORE"));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ redoCount: 0 });
+    expect(runtime.redoBatchDraft()).toBe(false);
+  });
+
   it("seeds current-value editing from the canonical source value and rejects unreadable cells", () => {
     const commit = vi.fn();
     const normalizedValueType: BrunoTableValueType<string> = {
@@ -898,7 +1754,10 @@ describe("BrunoTable Cell Edit Session", () => {
         },
       ]),
     );
-    expect(capabilityRuntime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+    expect(capabilityRuntime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("draft");
+    expect(capabilityRuntime.getDraftReviewSnapshot()).toMatchObject([
+      { mine: "draft", blockedReason: "This cell is no longer editable." },
+    ]);
 
     runtime.reconcileColumns(
       compileColumns([
@@ -912,6 +1771,568 @@ describe("BrunoTable Cell Edit Session", () => {
       ]),
     );
     expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+  });
+
+  it("retains Batch history while static column editability is revoked and restored", () => {
+    const liveRow = { value: "source" };
+    const compileTextColumns = (isEditable: boolean) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "text",
+          isEditable,
+        },
+      ]);
+    const getRow = vi.fn(() => liveRow);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: compileTextColumns(true),
+      getRow,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("draft")).toBe(true);
+
+    const memoryBeforeEquivalentRecompile = runtime.getDraftMemorySnapshot();
+    const activity = vi.fn();
+    const cell = vi.fn();
+    const traversal = vi.fn();
+    const unsubscribers = [
+      runtime.subscribeActivity(activity),
+      runtime.subscribeCell("row", "COL_ID_VALUE", cell),
+      runtime.subscribeTraversalInvalidation(traversal),
+    ];
+    getRow.mockClear();
+    runtime.reconcileColumns(compileTextColumns(true));
+    expect(runtime.getDraftMemorySnapshot()).toBe(memoryBeforeEquivalentRecompile);
+    expect(getRow).not.toHaveBeenCalled();
+    expect(activity).not.toHaveBeenCalled();
+    expect(cell).not.toHaveBeenCalled();
+    expect(traversal).not.toHaveBeenCalled();
+
+    runtime.reconcileColumns(compileTextColumns(false));
+    expect(getRow).toHaveBeenCalledOnce();
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("draft");
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 1,
+      undoCount: 1,
+      blockedCount: 1,
+    });
+
+    runtime.reconcileColumns(compileTextColumns(true));
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { mine: "draft", blockedReason: undefined },
+    ]);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("draft");
+    for (const unsubscribe of unsubscribers) unsubscribe();
+  });
+
+  it("retains compatible Batch history across decoder and blank-policy recompiles", () => {
+    type OptionalTextRow = Readonly<{ readonly value: string | null | undefined }>;
+    const liveRow: OptionalTextRow = { value: "source" };
+    const decoder = (input: unknown) =>
+      typeof input === "string"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected text." } as const);
+    const compileTextColumns = (decodeRuntime: typeof decoder, blankValue: null | undefined) => {
+      const valueType: BrunoTableValueType<string> = {
+        codecId: "test/history-recompile",
+        codecVersion: 1,
+        filterFamily: "text",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: Object.is,
+        compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+        formatCanonicalText: String,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: String,
+        encodePersisted: String,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+          blankValue,
+        },
+      ] satisfies BrunoTableColumns<OptionalTextRow>);
+    };
+
+    for (const replacement of [
+      compileTextColumns((input) => decoder(input), undefined),
+      compileTextColumns(decoder, null),
+    ]) {
+      const runtime = new BrunoTableCellEditRuntime({
+        columns: compileTextColumns(decoder, undefined),
+        getRow: () => liveRow,
+      });
+      runtime.setBatchHistoryEnabled(true);
+      expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+      expect(runtime.commit("draft")).toBe(true);
+
+      runtime.reconcileColumns(replacement);
+      expect(runtime.getActivitySnapshot()).toMatchObject({ undoCount: 1, redoCount: 0 });
+      expect(runtime.undoBatchDraft()).toBe(true);
+      expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBeUndefined();
+      expect(runtime.redoBatchDraft()).toBe(true);
+      expect(runtime.getDraftSnapshot("row", "COL_ID_VALUE")).toBe("draft");
+      runtime.dispose();
+    }
+  });
+
+  it("migrates complete Conflict evidence through compatible column semantics", () => {
+    type ConflictRow = Readonly<{ readonly value: string }>;
+    const liveRow: ConflictRow = { value: "source-a" };
+    const makeColumns = (suffix: "a" | "b") => {
+      const decodeRuntime = (input: unknown) =>
+        typeof input === "string"
+          ? ({
+              _tag: "Success",
+              value: `${input.replace(/-[ab]$/, "")}-${suffix}`,
+            } as const)
+          : ({ _tag: "Failure", message: "Expected text." } as const);
+      const valueType: BrunoTableValueType<string> = {
+        codecId: `test/conflict-migration-${suffix}`,
+        codecVersion: 1,
+        filterFamily: "text",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: Object.is,
+        compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+        formatCanonicalText: String,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: String,
+        encodePersisted: String,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<ConflictRow>);
+    };
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns("a"),
+      getRow: () => liveRow,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: liveRow,
+          expectedVersion: 1,
+          base: "base-a",
+          mine: "mine-a",
+          conflict: { server: "server-a", resolution: "mine" },
+        },
+      ]),
+    ).toBe(true);
+
+    runtime.reconcileColumns(makeColumns("b"));
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        base: "base-b",
+        mine: "mine-b",
+        conflict: { server: "server-b", resolution: "mine" },
+      },
+    ]);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        base: "base-b",
+        mine: "mine-b",
+        conflict: { server: "server-b", resolution: "mine" },
+      },
+    ]);
+  });
+
+  it("prunes semantic convergence from current and redo-only history on column recompile", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    const liveRow: CanonicalRow = { value: "A" };
+    const makeColumns = (canonicalize: boolean) => {
+      const decodeRuntime = (input: unknown) =>
+        typeof input === "string"
+          ? ({ _tag: "Success", value: canonicalize ? input.toLowerCase() : input } as const)
+          : ({ _tag: "Failure", message: "Expected text." } as const);
+      const valueType: BrunoTableValueType<string> = {
+        codecId: canonicalize ? "test/lowercase" : "test/identity",
+        codecVersion: 1,
+        filterFamily: "text",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: Object.is,
+        compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+        formatCanonicalText: String,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: String,
+        encodePersisted: String,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    };
+
+    for (const undoBeforeRecompile of [false, true]) {
+      const runtime = new BrunoTableCellEditRuntime({
+        columns: makeColumns(false),
+        getRow: () => liveRow,
+      });
+      runtime.setBatchHistoryEnabled(true);
+      expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+      expect(runtime.commit("a")).toBe(true);
+      if (undoBeforeRecompile) expect(runtime.undoBatchDraft()).toBe(true);
+      const cell = vi.fn();
+      const traversal = vi.fn();
+      const unsubscribeCell = runtime.subscribeCell("row", "COL_ID_VALUE", cell);
+      const unsubscribeTraversal = runtime.subscribeTraversalInvalidation(traversal);
+
+      runtime.reconcileColumns(makeColumns(true));
+
+      expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+      expect(runtime.getActivitySnapshot()).toMatchObject({
+        draftCount: 0,
+        undoCount: 0,
+        redoCount: 0,
+      });
+      expect(runtime.undoBatchDraft()).toBe(false);
+      expect(runtime.redoBatchDraft()).toBe(false);
+      if (undoBeforeRecompile) {
+        expect(cell).not.toHaveBeenCalled();
+        expect(traversal).not.toHaveBeenCalled();
+      } else {
+        expect(cell).toHaveBeenCalledOnce();
+        expect(traversal).toHaveBeenCalledOnce();
+      }
+      unsubscribeCell();
+      unsubscribeTraversal();
+      runtime.dispose();
+    }
+  });
+
+  it("prunes a draft that becomes semantically equal to its Base on column recompile", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    const liveRow: CanonicalRow = { value: "B" };
+    const decodeRuntime = (input: unknown) =>
+      typeof input === "string"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected text." } as const);
+    const makeColumns = (caseInsensitive: boolean) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: {
+            codecId: "test/base-equivalence-convergence",
+            codecVersion: 1,
+            filterFamily: "text",
+            editorFamily: "text",
+            cellAlign: "start",
+            editorLayout: "inline",
+            defaultWidth: 120,
+            decodeRuntime,
+            equivalent: caseInsensitive
+              ? (left: string, right: string) => left.toLowerCase() === right.toLowerCase()
+              : Object.is,
+            compare: (left: string, right: string) => (left === right ? 0 : left < right ? -1 : 1),
+            formatCanonicalText: String,
+            parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+            formatDisplay: String,
+            encodePersisted: String,
+            decodePersisted: decodeRuntime,
+          },
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns(false),
+      getRow: () => liveRow,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: { value: "A" },
+          expectedVersion: 1,
+          base: "A",
+          mine: "a",
+        },
+      ]),
+    ).toBe(true);
+
+    runtime.reconcileColumns(makeColumns(true));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 0,
+      undoCount: 0,
+      redoCount: 0,
+    });
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+    expect(runtime.undoBatchDraft()).toBe(false);
+    runtime.dispose();
+  });
+
+  it("publishes equivalence-only redo convergence and removes its retained dependency", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    const rows = new Map<string, CanonicalRow>([
+      ["drop", { value: "B" }],
+      ["keep", { value: "source" }],
+    ]);
+    const decodeRuntime = (input: unknown) =>
+      typeof input === "string"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected text." } as const);
+    const makeColumns = (caseInsensitive: boolean) => {
+      const valueType: BrunoTableValueType<string> = {
+        codecId: "test/equivalence-only-convergence",
+        codecVersion: 1,
+        filterFamily: "text",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: caseInsensitive
+          ? (left, right) => left.toLowerCase() === right.toLowerCase()
+          : Object.is,
+        compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+        formatCanonicalText: String,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: String,
+        encodePersisted: String,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    };
+    const getRow = vi.fn((rowId: string) => rows.get(rowId));
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns(false),
+      getRow,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "drop",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: { value: "A" },
+          expectedVersion: 1,
+          base: "A",
+          mine: "a",
+        },
+        {
+          rowId: "keep",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rows.get("keep")!,
+          expectedVersion: 1,
+          base: "source",
+          mine: "draft",
+        },
+      ]),
+    ).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    const cell = vi.fn();
+    const traversal = vi.fn();
+    const unsubscribers = [
+      runtime.subscribeCell("drop", "COL_ID_VALUE", cell),
+      runtime.subscribeTraversalInvalidation(traversal),
+    ];
+
+    runtime.reconcileColumns(makeColumns(true));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ redoCount: 1 });
+    expect(cell).not.toHaveBeenCalled();
+    expect(traversal).not.toHaveBeenCalled();
+    getRow.mockClear();
+    runtime.reconcileSourceRows(new Set(["drop"]));
+    expect(getRow).not.toHaveBeenCalled();
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("drop", "COL_ID_VALUE")).toBeUndefined();
+    expect(runtime.getDraftSnapshot("keep", "COL_ID_VALUE")).toBe("draft");
+    for (const unsubscribe of unsubscribers) unsubscribe();
+
+    const singleRuntime = new BrunoTableCellEditRuntime({
+      columns: makeColumns(false),
+      getRow: () => rows.get("drop"),
+    });
+    singleRuntime.setBatchHistoryEnabled(true);
+    expect(
+      singleRuntime.applyAcceptedDraftGesture([
+        {
+          rowId: "drop",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: { value: "A" },
+          expectedVersion: 1,
+          base: "A",
+          mine: "a",
+        },
+      ]),
+    ).toBe(true);
+    expect(singleRuntime.undoBatchDraft()).toBe(true);
+    const activity = vi.fn();
+    const singleCell = vi.fn();
+    const singleTraversal = vi.fn();
+    const singleUnsubscribers = [
+      singleRuntime.subscribeActivity(activity),
+      singleRuntime.subscribeCell("drop", "COL_ID_VALUE", singleCell),
+      singleRuntime.subscribeTraversalInvalidation(singleTraversal),
+    ];
+    singleRuntime.reconcileColumns(makeColumns(true));
+    expect(singleRuntime.getActivitySnapshot()).toMatchObject({ redoCount: 0 });
+    expect(singleRuntime.redoBatchDraft()).toBe(false);
+    expect(activity).toHaveBeenCalledOnce();
+    expect(singleCell).not.toHaveBeenCalled();
+    expect(singleTraversal).not.toHaveBeenCalled();
+    for (const unsubscribe of singleUnsubscribers) unsubscribe();
+  });
+
+  it("partially migrates one multi-cell command with one coherent publication", () => {
+    type MigrationRow = Readonly<{ readonly value: string }>;
+    const rows = new Map<string, MigrationRow>([
+      ["drop", { value: "source-drop-a" }],
+      ["keep", { value: "source-keep-a" }],
+    ]);
+    const makeColumns = (migrate: boolean) => {
+      const decodeRuntime = (input: unknown) => {
+        if (typeof input !== "string" || (migrate && input.startsWith("reject"))) {
+          return { _tag: "Failure", message: "Rejected." } as const;
+        }
+        return {
+          _tag: "Success",
+          value: migrate ? `${input.replace(/-[ab]$/, "")}-b` : input,
+        } as const;
+      };
+      const valueType: BrunoTableValueType<string> = {
+        codecId: migrate ? "test/partial-b" : "test/partial-a",
+        codecVersion: 1,
+        filterFamily: "text",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: Object.is,
+        compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+        formatCanonicalText: String,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: String,
+        encodePersisted: String,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<MigrationRow>);
+    };
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns(false),
+      getRow: (rowId) => rows.get(rowId),
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "drop",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rows.get("drop")!,
+          expectedVersion: 1,
+          base: "base-drop-a",
+          mine: "mine-drop-a",
+          conflict: { server: "reject-a" },
+        },
+        {
+          rowId: "keep",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rows.get("keep")!,
+          expectedVersion: 1,
+          base: "base-keep-a",
+          mine: "mine-keep-a",
+        },
+      ]),
+    ).toBe(true);
+    runtime.getDraftReviewSnapshot();
+    const activity = vi.fn();
+    const review = vi.fn();
+    const traversal = vi.fn();
+    const droppedCell = vi.fn();
+    const keptCell = vi.fn();
+    const unsubscribers = [
+      runtime.subscribeActivity(activity),
+      runtime.subscribeDraftReview(review),
+      runtime.subscribeTraversalInvalidation(traversal),
+      runtime.subscribeCell("drop", "COL_ID_VALUE", droppedCell),
+      runtime.subscribeCell("keep", "COL_ID_VALUE", keptCell),
+    ];
+
+    runtime.reconcileColumns(makeColumns(true));
+
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { rowId: "keep", base: "base-keep-b", mine: "mine-keep-b" },
+    ]);
+    expect(activity).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledOnce();
+    expect(traversal).toHaveBeenCalledOnce();
+    expect(droppedCell).toHaveBeenCalledOnce();
+    expect(keptCell).toHaveBeenCalledOnce();
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("drop", "COL_ID_VALUE")).toBeUndefined();
+    expect(runtime.getDraftSnapshot("keep", "COL_ID_VALUE")).toBeUndefined();
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot("drop", "COL_ID_VALUE")).toBeUndefined();
+    expect(runtime.getDraftSnapshot("keep", "COL_ID_VALUE")).toBe("mine-keep-b");
+    for (const unsubscribe of unsubscribers) unsubscribe();
   });
 
   it("preserves nullish blank drafts only across an unchanged explicit blank policy", () => {
@@ -1611,5 +3032,245 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.reconcileColumns(columnsA);
     expect(runtime.isEditable("row", "COL_ID_VALUE")).toBe(true);
     expect(decodeA).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-decodes both Base and Mine when decoder authority changes", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    const makeColumns = (suffix: string, rejectBase = false) => {
+      const decodeRuntime = (input: unknown) =>
+        rejectBase && String(input).startsWith("base")
+          ? ({ _tag: "Failure", message: "rejected" } as const)
+          : ({
+              _tag: "Success",
+              value: `${String(input).replace(/-[ab]$/, "")}-${suffix}`,
+            } as const);
+      const valueType: BrunoTableValueType<string> = {
+        codecId: `test/redecode-${suffix}`,
+        codecVersion: 1,
+        filterFamily: "equality",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: Object.is,
+        compare: () => 0 as const,
+        formatCanonicalText: (value) => value,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: (value) => value,
+        encodePersisted: (value) => value,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    };
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns("a"),
+      getRow: () => ({ value: "server-a" }),
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: { value: "base-a" },
+          expectedVersion: 1,
+          base: "base-a",
+          mine: "mine-a",
+        },
+      ]),
+    ).toBe(true);
+
+    runtime.reconcileColumns(makeColumns("b"));
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({ base: "base-b", mine: "mine-b" });
+
+    runtime.reconcileColumns(makeColumns("c", true));
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+  });
+
+  it("drops a draft when a replacement runtime decoder throws", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    const makeColumns = (throws: boolean) => {
+      const decodeRuntime = (input: unknown) => {
+        if (throws) throw new Error("consumer decoder escaped");
+        return { _tag: "Success", value: String(input) } as const;
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: {
+            codecId: throws ? "test/throwing-decoder" : "test/stable-decoder",
+            codecVersion: 1,
+            filterFamily: "text",
+            editorFamily: "text",
+            cellAlign: "start",
+            editorLayout: "inline",
+            defaultWidth: 120,
+            decodeRuntime,
+            equivalent: Object.is,
+            compare: () => 0 as const,
+            formatCanonicalText: String,
+            parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+            formatDisplay: String,
+            encodePersisted: String,
+            decodePersisted: decodeRuntime,
+          },
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    };
+    const source: CanonicalRow = { value: "base" };
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns(false),
+      getRow: () => source,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("mine")).toBe(true);
+
+    expect(() => runtime.reconcileColumns(makeColumns(true))).not.toThrow();
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+  });
+
+  it("reuses retained invalid-candidate evidence while Reset Review is observed", () => {
+    type ValidatedRow = Readonly<{ readonly value: number }>;
+    const validate = vi.fn(({ value }: { readonly value: number }) =>
+      value <= 10 ? undefined : "Too large.",
+    );
+    const validatedColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: true,
+        validate,
+      },
+    ] satisfies BrunoTableColumns<ValidatedRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: validatedColumns,
+      getRow: () => ({ value: 4 }),
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("11", false);
+    expect(runtime.commit("11")).toBe(false);
+    expect(validate).toHaveBeenCalledOnce();
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+
+    expect(validate).toHaveBeenCalledOnce();
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { candidateText: "11", candidateInvalid: true, status: "Too large." },
+    ]);
+    unsubscribe();
+  });
+
+  it("projects retained native-invalid and source-blocking candidate evidence", () => {
+    type CandidateRow = Readonly<{ readonly value: number }>;
+    let current: CandidateRow | undefined = { value: 4 };
+    const validate = vi.fn(() => undefined);
+    const candidateColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: ({ value }: { readonly value: number }) => value >= 0,
+        validate,
+      },
+    ] satisfies BrunoTableColumns<CandidateRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: candidateColumns,
+      getRow: () => current,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("not-a-number", true);
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+
+    expect(validate).not.toHaveBeenCalled();
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        candidateText: "not-a-number",
+        candidateInvalid: true,
+        status: "Enter a valid number.",
+      },
+    ]);
+
+    current = undefined;
+    runtime.reconcileActiveRow(new Set(["row"]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { status: "This row was removed from the server. Changes cannot be saved." },
+    ]);
+
+    current = { value: -1 };
+    runtime.reconcileActiveRow(new Set(["row"]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { status: "This cell is no longer editable." },
+    ]);
+    expect(validate).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("does not publish untouched permission loss as candidate work", () => {
+    type CandidateRow = Readonly<{ readonly value: number }>;
+    let current: CandidateRow = { value: 4 };
+    const candidateColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: ({ value }: { readonly value: number }) => value >= 0,
+      },
+    ] satisfies BrunoTableColumns<CandidateRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: candidateColumns,
+      getRow: () => current,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+
+    current = { value: -1 };
+    runtime.reconcileActiveRow(new Set(["row"]));
+
+    expect(runtime.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      invalidMessage: "This cell is no longer editable.",
+    });
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      activeEditor: true,
+      activeCandidatePending: false,
+      reviewCount: 0,
+      blockedCount: 0,
+    });
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+    unsubscribe();
+  });
+
+  it("does not double-count a blocked draft and active candidate for the same cell", () => {
+    let current: Row | undefined = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate("8", false);
+
+    current = undefined;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.reconcileActiveRow(new Set([row.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1, reviewCount: 1 });
   });
 });

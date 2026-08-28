@@ -10,6 +10,7 @@ import {
 } from "./cell-edit-traversal";
 
 type Listener = () => void;
+const brunoTableCellEditDraftReviewSources = new WeakSet<object>();
 
 export type BrunoTableCellEditChange = Readonly<{
   readonly rowId: string;
@@ -23,35 +24,259 @@ type ActiveSession = Readonly<{
   readonly rowId: string;
   readonly column: CompiledFieldColumn;
   readonly row: object;
+  readonly baseRow: object;
+  readonly baseValue: unknown;
   readonly before: unknown;
   readonly beforeFromDraft: boolean;
   readonly sourceValue: unknown;
   readonly sourceValueAvailable: boolean;
+  readonly expectedVersion: unknown;
   readonly initialText: string;
   readonly selectInitialText: boolean;
   readonly rowMissing: boolean;
   readonly invalidMessage?: string;
   readonly permissionMessage?: string;
+  readonly rowVersionMessage?: string;
 }>;
 
-type DraftEntry = Readonly<{
-  readonly value: unknown;
-  readonly projection: BrunoTableCellEditProjection;
+export type BrunoTableCellEditDraftSnapshot = Readonly<{
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly field: string;
+  readonly baseRow: object;
+  readonly expectedVersion: unknown;
+  readonly base: unknown;
+  readonly mine: unknown;
+  readonly validationMessage?: string;
+  readonly conflict?: Readonly<{
+    readonly server: unknown;
+    readonly resolution?: "mine" | "server";
+  }>;
 }>;
+
+export type BrunoTableCellEditDraftReviewRow = BrunoTableCellEditDraftSnapshot &
+  Readonly<{
+    readonly id: string;
+    readonly reviewVersion: number;
+    readonly headerName: string;
+    readonly columnLabel: string;
+    readonly serverText: "";
+    readonly mineText: "";
+    readonly status: string;
+    readonly column: CompiledFieldColumn;
+    readonly serverRow: object | undefined;
+    readonly projectedRow: object;
+    readonly serverNow: unknown;
+    readonly serverValueAvailable: boolean;
+    readonly blockedReason: string | undefined;
+    readonly candidateText?: string;
+    readonly candidateInvalid?: boolean;
+  }>;
+
+export type BrunoTableCellEditDraftReviewSourceRow = Readonly<{
+  readonly kind: "bruno-table-cell-edit-draft-review-source";
+  readonly id: string;
+  readonly rowId: string;
+  readonly columnLabel: string;
+  readonly serverText: "";
+  readonly mineText: "";
+  readonly statusText: "";
+  readonly getSnapshot: () => BrunoTableCellEditDraftReviewRow;
+  readonly subscribe: (listener: Listener) => () => void;
+}>;
+
+export function isBrunoTableCellEditDraftReviewSourceRow(
+  value: unknown,
+): value is BrunoTableCellEditDraftReviewSourceRow {
+  return (
+    typeof value === "object" && value !== null && brunoTableCellEditDraftReviewSources.has(value)
+  );
+}
+
+type DraftEntry = BrunoTableCellEditDraftSnapshot &
+  Readonly<{
+    readonly blockedReason?: string;
+  }>;
 
 type DraftPatch =
-  | Readonly<{ readonly kind: "remove"; readonly cellKey: string }>
-  | Readonly<{ readonly kind: "set"; readonly cellKey: string; readonly value: unknown }>;
+  | Readonly<{ readonly kind: "remove"; readonly cellKey: string; readonly value: unknown }>
+  | Readonly<{
+      readonly kind: "set";
+      readonly cellKey: string;
+      readonly value: unknown;
+      readonly rowId: string;
+      readonly columnId: string;
+      readonly field: string;
+      readonly baseRow: object;
+      readonly expectedVersion: unknown;
+      readonly base: unknown;
+      readonly validationMessage?: string;
+      readonly conflict?: Readonly<{
+        readonly server: unknown;
+        readonly resolution?: "mine" | "server";
+      }>;
+    }>;
+
+type DraftHistoryCellPatch = Readonly<{
+  readonly cellKey: string;
+  readonly before: DraftEntry | undefined;
+  readonly after: DraftEntry | undefined;
+  readonly authoredValue: unknown;
+}>;
+
+const BRUNO_TABLE_DRAFT_HISTORY_PATCH_BUCKET_COUNT = 64;
+
+function draftHistoryPatchBucket(key: string): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0) % BRUNO_TABLE_DRAFT_HISTORY_PATCH_BUCKET_COUNT;
+}
+
+class DraftHistoryPatchMap implements ReadonlyMap<string, DraftHistoryCellPatch> {
+  public static from(
+    patches: Iterable<readonly [string, DraftHistoryCellPatch]>,
+  ): DraftHistoryPatchMap {
+    const buckets = Array.from(
+      { length: BRUNO_TABLE_DRAFT_HISTORY_PATCH_BUCKET_COUNT },
+      () => new Map<string, DraftHistoryCellPatch>(),
+    );
+    let size = 0;
+    for (const [key, patch] of patches) {
+      const bucket = buckets[draftHistoryPatchBucket(key)]!;
+      if (!bucket.has(key)) size += 1;
+      bucket.set(key, patch);
+    }
+    return new DraftHistoryPatchMap(Object.freeze(buckets), size);
+  }
+
+  public constructor(
+    private readonly buckets: readonly ReadonlyMap<string, DraftHistoryCellPatch>[],
+    public readonly size: number,
+  ) {}
+
+  public readonly get = (key: string): DraftHistoryCellPatch | undefined =>
+    this.buckets[draftHistoryPatchBucket(key)]?.get(key);
+
+  public readonly has = (key: string): boolean =>
+    this.buckets[draftHistoryPatchBucket(key)]?.has(key) === true;
+
+  public readonly with = (
+    key: string,
+    patch: DraftHistoryCellPatch | undefined,
+  ): DraftHistoryPatchMap => {
+    const bucketIndex = draftHistoryPatchBucket(key);
+    const previousBucket = this.buckets[bucketIndex];
+    if (previousBucket === undefined) return this;
+    const previous = previousBucket.get(key);
+    if (previous === patch || (previous === undefined && patch === undefined)) return this;
+    const nextBucket = new Map(previousBucket);
+    if (patch === undefined) nextBucket.delete(key);
+    else nextBucket.set(key, patch);
+    const nextBuckets = [...this.buckets];
+    nextBuckets[bucketIndex] = nextBucket;
+    return new DraftHistoryPatchMap(
+      Object.freeze(nextBuckets),
+      this.size + (previous === undefined ? 1 : patch === undefined ? -1 : 0),
+    );
+  };
+
+  public *entries(): MapIterator<[string, DraftHistoryCellPatch]> {
+    for (const bucket of this.buckets) yield* bucket.entries();
+  }
+
+  public *keys(): MapIterator<string> {
+    for (const bucket of this.buckets) yield* bucket.keys();
+  }
+
+  public *values(): MapIterator<DraftHistoryCellPatch> {
+    for (const bucket of this.buckets) yield* bucket.values();
+  }
+
+  public forEach(
+    callback: (
+      value: DraftHistoryCellPatch,
+      key: string,
+      map: ReadonlyMap<string, DraftHistoryCellPatch>,
+    ) => void,
+    thisArgument?: unknown,
+  ): void {
+    for (const [key, value] of this) callback.call(thisArgument, value, key, this);
+  }
+
+  public [Symbol.iterator](): MapIterator<[string, DraftHistoryCellPatch]> {
+    return this.entries();
+  }
+}
+
+class DraftHistoryPatchMapBuilder {
+  private readonly buckets = Array.from(
+    { length: BRUNO_TABLE_DRAFT_HISTORY_PATCH_BUCKET_COUNT },
+    () => new Map<string, DraftHistoryCellPatch>(),
+  );
+  private size = 0;
+
+  public readonly set = (key: string, patch: DraftHistoryCellPatch | undefined): void => {
+    const bucket = this.buckets[draftHistoryPatchBucket(key)]!;
+    const hadKey = bucket.has(key);
+    if (patch === undefined) {
+      if (hadKey) {
+        bucket.delete(key);
+        this.size -= 1;
+      }
+      return;
+    }
+    bucket.set(key, patch);
+    if (!hadKey) this.size += 1;
+  };
+
+  public readonly build = (): DraftHistoryPatchMap =>
+    new DraftHistoryPatchMap(Object.freeze(this.buckets), this.size);
+}
+
+type DraftHistoryCommand = Readonly<{
+  readonly lineage: object;
+  readonly patches: DraftHistoryPatchMap;
+}>;
+
+type DraftMemoryState = Readonly<{
+  readonly drafts: ReadonlyMap<string, DraftEntry>;
+  readonly undoStack: readonly DraftHistoryCommand[];
+  readonly redoStack: readonly DraftHistoryCommand[];
+}>;
 
 type CanonicalSourceValue =
   | Readonly<{ readonly _tag: "Success"; readonly value: unknown }>
   | Readonly<{ readonly _tag: "Failure" }>;
 
+function readCanonicalSourceValueFromRawRow(
+  row: unknown,
+  column: CompiledColumn | undefined,
+): CanonicalSourceValue {
+  if (column?.kind !== "field" || typeof row !== "object" || row === null) {
+    return Object.freeze({ _tag: "Failure" });
+  }
+  try {
+    const raw = Reflect.get(row, column.field);
+    if (raw === null || raw === undefined) {
+      return Object.freeze({ _tag: "Success", value: raw });
+    }
+    const decoded = column.semantics.decodeRuntime(raw);
+    return decoded._tag === "Success" && "value" in decoded
+      ? Object.freeze({ _tag: "Success", value: decoded.value })
+      : Object.freeze({ _tag: "Failure" });
+  } catch {
+    return Object.freeze({ _tag: "Failure" });
+  }
+}
+
 type CommitEvaluation =
   | Readonly<{
       readonly kind: "invalid";
       readonly message: string;
-      readonly reason?: "permission" | "rowMissing";
+      readonly reason?: "permission" | "rowMissing" | "rowVersion";
     }>
   | Readonly<{
       readonly kind: "accepted";
@@ -75,6 +300,7 @@ type CellEditEvent =
       readonly column: CompiledColumn | undefined;
       readonly row: unknown;
       readonly sourceValue: CanonicalSourceValue;
+      readonly expectedVersion: unknown;
       readonly hasDraft: boolean;
       readonly draftValue: unknown;
       readonly mode: "current" | "replace";
@@ -91,6 +317,9 @@ type CellEditEvent =
       readonly type: "RECONCILE_ROW";
       readonly row: unknown;
       readonly sourceValue: CanonicalSourceValue;
+      readonly expectedVersion: unknown;
+      readonly rebaseFromConvergedDraft: boolean;
+      readonly rebaseFailed: boolean;
     }>
   | Readonly<{ readonly type: "RECONCILE_COLUMN"; readonly column: CompiledFieldColumn }>;
 
@@ -143,18 +372,36 @@ const brunoTableCellEditMachine = createMachine({
             session: ({ context, event }) => {
               const session = context.session;
               if (session === undefined) return undefined;
-              return typeof event.row === "object" && event.row !== null
-                ? reconcileSessionPermission(
-                    Object.freeze({
-                      ...session,
-                      row: event.row,
-                      rowMissing: false,
-                      sourceValue:
-                        event.sourceValue._tag === "Success" ? event.sourceValue.value : undefined,
-                      sourceValueAvailable: event.sourceValue._tag === "Success",
-                    }),
-                  )
-                : Object.freeze({ ...session, rowMissing: true });
+              if (typeof event.row !== "object" || event.row === null) {
+                return Object.freeze({ ...session, rowMissing: true });
+              }
+              const sourceValue =
+                event.sourceValue._tag === "Success" ? event.sourceValue.value : undefined;
+              const rowVersionMessage = event.rebaseFailed
+                ? BRUNO_TABLE_CELL_EDIT_ROW_VERSION_MESSAGE
+                : event.rebaseFromConvergedDraft
+                  ? undefined
+                  : session.rowVersionMessage;
+              const { rowVersionMessage: _previousRowVersionMessage, ...retainedSession } = session;
+              return reconcileSessionPermission(
+                Object.freeze({
+                  ...retainedSession,
+                  row: event.row,
+                  rowMissing: false,
+                  sourceValue,
+                  sourceValueAvailable: event.sourceValue._tag === "Success",
+                  ...(rowVersionMessage === undefined ? {} : { rowVersionMessage }),
+                  ...(event.rebaseFromConvergedDraft
+                    ? {
+                        baseRow: event.row,
+                        baseValue: sourceValue,
+                        before: sourceValue,
+                        beforeFromDraft: false,
+                        expectedVersion: event.expectedVersion,
+                      }
+                    : {}),
+                }),
+              );
             },
           }),
         },
@@ -206,7 +453,9 @@ const brunoTableCellEditMachine = createMachine({
                   ? Object.freeze({ ...session, permissionMessage: evaluation.message })
                   : evaluation.reason === "rowMissing"
                     ? session
-                    : Object.freeze({ ...session, invalidMessage: evaluation.message });
+                    : evaluation.reason === "rowVersion"
+                      ? session
+                      : Object.freeze({ ...session, invalidMessage: evaluation.message });
             },
             affectedCellKeys: [],
             draftPatch: undefined,
@@ -256,10 +505,13 @@ function prepareSession(
       rowId: event.rowId,
       column,
       row,
+      baseRow: row,
+      baseValue: sourceValue,
       before,
       beforeFromDraft: event.hasDraft,
       sourceValue,
       sourceValueAvailable: true,
+      expectedVersion: event.expectedVersion,
       initialText:
         event.mode === "replace"
           ? event.producedText
@@ -278,6 +530,8 @@ export const BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH = 65_536;
 const BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE = "This cell is no longer editable.";
 const BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE =
   "This row was removed from the server. Changes cannot be saved.";
+const BRUNO_TABLE_CELL_EDIT_ROW_VERSION_MESSAGE =
+  "The latest Row Version is unavailable. Try again after the source updates.";
 
 function reconcileSessionPermission(session: ActiveSession): ActiveSession {
   const permissionMessage = isSessionEditable(session)
@@ -305,6 +559,17 @@ function isSessionEditable(session: ActiveSession): boolean {
   }
 }
 
+function isDraftEditable(column: CompiledFieldColumn, row: object, value: unknown): boolean {
+  if (!isEditorValueRepresentable(column, value)) return false;
+  if (column.isEditable === true) return true;
+  if (typeof column.isEditable !== "function") return false;
+  try {
+    return Reflect.apply(column.isEditable, undefined, [{ row, value }]) === true;
+  } catch {
+    return false;
+  }
+}
+
 function evaluateCandidate(
   session: ActiveSession | undefined,
   rawText: string,
@@ -319,6 +584,13 @@ function evaluateCandidate(
       kind: "invalid",
       message: BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE,
       reason: "rowMissing",
+    });
+  }
+  if (session.rowVersionMessage !== undefined) {
+    return Object.freeze({
+      kind: "invalid",
+      message: session.rowVersionMessage,
+      reason: "rowVersion",
     });
   }
   if (!isSessionEditable(session)) {
@@ -495,31 +767,416 @@ function getAcceptedEvaluation(
 
 function createAcceptedDraftPatch(context: CellEditContext): DraftPatch {
   const evaluation = getAcceptedEvaluation(context);
+  const session = context.session;
+  if (session === undefined) {
+    throw new TypeError("BrunoTable Cell Edit accepted without session evidence.");
+  }
   return evaluation.removeDraft
-    ? Object.freeze({ kind: "remove", cellKey: evaluation.cellKey })
-    : Object.freeze({ kind: "set", cellKey: evaluation.cellKey, value: evaluation.value });
+    ? Object.freeze({ kind: "remove", cellKey: evaluation.cellKey, value: evaluation.value })
+    : Object.freeze({
+        kind: "set",
+        cellKey: evaluation.cellKey,
+        value: evaluation.value,
+        rowId: session.rowId,
+        columnId: session.column.columnId,
+        field: session.column.field,
+        baseRow: session.baseRow,
+        expectedVersion: session.expectedVersion,
+        base: session.baseValue,
+      });
 }
 
 function applyDraftPatch(
   drafts: ReadonlyMap<string, DraftEntry>,
   patch: DraftPatch,
+  columns: ReadonlyMap<string, CompiledFieldColumn>,
 ): ReadonlyMap<string, DraftEntry> {
   const previous = drafts.get(patch.cellKey);
   if (patch.kind === "remove" && previous === undefined) return drafts;
-  if (patch.kind === "set" && previous !== undefined && Object.is(previous.value, patch.value))
-    return drafts;
+  if (patch.kind === "set" && previous !== undefined) {
+    const column = columns.get(patch.columnId);
+    if (
+      column !== undefined &&
+      safeEquivalentEditValue(column, previous.mine, patch.value) === true
+    ) {
+      return drafts;
+    }
+  }
   const next = new Map(drafts);
   if (patch.kind === "remove") next.delete(patch.cellKey);
   else {
+    const retained =
+      previous === undefined
+        ? {
+            rowId: patch.rowId,
+            columnId: patch.columnId,
+            field: patch.field,
+            baseRow: patch.baseRow,
+            expectedVersion: patch.expectedVersion,
+            base: patch.base,
+            ...(patch.validationMessage === undefined
+              ? {}
+              : { validationMessage: patch.validationMessage }),
+            ...(patch.conflict === undefined ? {} : { conflict: patch.conflict }),
+          }
+        : {
+            rowId: previous.rowId,
+            columnId: previous.columnId,
+            field: previous.field,
+            baseRow: previous.baseRow,
+            expectedVersion: previous.expectedVersion,
+            base: previous.base,
+            ...(patch.validationMessage === undefined
+              ? {}
+              : { validationMessage: patch.validationMessage }),
+            ...(patch.conflict === undefined ? {} : { conflict: patch.conflict }),
+          };
     next.set(
       patch.cellKey,
       Object.freeze({
-        value: patch.value,
-        projection: Object.freeze({ active: false, hasDraft: true, draft: patch.value }),
+        ...retained,
+        mine: patch.value,
       }),
     );
   }
   return next;
+}
+
+function pruneDraftHistory(
+  commands: readonly DraftHistoryCommand[],
+  convergedCellKeys: ReadonlySet<string>,
+): readonly DraftHistoryCommand[] {
+  if (convergedCellKeys.size === 0) return commands;
+  const retained: DraftHistoryCommand[] = [];
+  for (const command of commands) {
+    let patches = command.patches;
+    for (const key of convergedCellKeys) patches = patches.with(key, undefined);
+    if (patches.size === 0) continue;
+    retained.push(
+      patches === command.patches ? command : Object.freeze({ lineage: command.lineage, patches }),
+    );
+  }
+  return retained;
+}
+
+function pruneDraftHistoryBulk(
+  commands: readonly DraftHistoryCommand[],
+  convergedCellKeys: ReadonlySet<string>,
+): readonly DraftHistoryCommand[] {
+  if (convergedCellKeys.size === 0) return commands;
+  let changed = false;
+  const retained: DraftHistoryCommand[] = [];
+  for (const command of commands) {
+    let commandChanged = false;
+    const nextPatches = new DraftHistoryPatchMapBuilder();
+    for (const [key, patch] of command.patches) {
+      if (convergedCellKeys.has(key)) {
+        commandChanged = true;
+        continue;
+      }
+      nextPatches.set(key, patch);
+    }
+    if (!commandChanged) {
+      retained.push(command);
+      continue;
+    }
+    changed = true;
+    const patches = nextPatches.build();
+    if (patches.size > 0) {
+      retained.push(Object.freeze({ lineage: command.lineage, patches }));
+    }
+  }
+  return changed ? Object.freeze(retained) : commands;
+}
+
+function pruneDraftHistoryAdaptive(
+  commands: readonly DraftHistoryCommand[],
+  convergedCellKeys: ReadonlySet<string>,
+): readonly DraftHistoryCommand[] {
+  return convergedCellKeys.size <= BRUNO_TABLE_DRAFT_HISTORY_PATCH_BUCKET_COUNT / 2
+    ? pruneDraftHistory(commands, convergedCellKeys)
+    : pruneDraftHistoryBulk(commands, convergedCellKeys);
+}
+
+function transformDraftHistoryCell(
+  commands: readonly DraftHistoryCommand[],
+  key: string,
+  transform: (entry: DraftEntry | undefined) => DraftEntry | undefined,
+): readonly DraftHistoryCommand[] {
+  let changed = false;
+  const nextCommands: DraftHistoryCommand[] = [];
+  for (const command of commands) {
+    const patch = command.patches.get(key);
+    if (patch === undefined) {
+      nextCommands.push(command);
+      continue;
+    }
+    const before = transform(patch.before);
+    const after = transform(patch.after);
+    if (before === patch.before && after === patch.after) {
+      nextCommands.push(command);
+      continue;
+    }
+    changed = true;
+    const patches = command.patches.with(
+      key,
+      before === undefined && after === undefined
+        ? undefined
+        : Object.freeze({ ...patch, cellKey: key, before, after }),
+    );
+    if (patches.size > 0) {
+      nextCommands.push(Object.freeze({ lineage: command.lineage, patches }));
+    }
+  }
+  return changed ? Object.freeze(nextCommands) : commands;
+}
+
+function setDraftBlockedReason(
+  draft: DraftEntry | undefined,
+  blockedReason: string | undefined,
+): DraftEntry | undefined {
+  if (draft === undefined || draft.blockedReason === blockedReason) return draft;
+  const { blockedReason: _previousBlockedReason, ...retained } = draft;
+  return Object.freeze({
+    ...retained,
+    ...(blockedReason === undefined ? {} : { blockedReason }),
+  });
+}
+
+function findDraftHistoryEntry(
+  undoStack: readonly DraftHistoryCommand[],
+  redoStack: readonly DraftHistoryCommand[],
+  key: string,
+): DraftEntry | undefined {
+  for (const commands of [redoStack, undoStack]) {
+    for (let index = commands.length - 1; index >= 0; index -= 1) {
+      const patch = commands[index]?.patches.get(key);
+      const entry = patch?.after ?? patch?.before;
+      if (entry !== undefined) return entry;
+    }
+  }
+  return undefined;
+}
+
+type DraftColumnReconciliationPlan =
+  | Readonly<{ readonly kind: "drop" }>
+  | Readonly<{
+      readonly kind: "retain";
+      readonly previousColumn: CompiledFieldColumn;
+      readonly nextColumn: CompiledFieldColumn;
+      readonly transformValues: boolean;
+      readonly refreshPermission: boolean;
+      readonly checkConvergence: boolean;
+    }>;
+
+type DraftColumnReconciliationContext = Readonly<{
+  readonly plans: ReadonlyMap<string, DraftColumnReconciliationPlan>;
+  readonly getRow: (rowId: string) => unknown;
+  readonly rows: Map<string, unknown>;
+  readonly migratedValues: WeakMap<DraftEntry, DraftEntry | null>;
+  readonly semanticKeys: Set<string>;
+  readonly draftChangesRequired: boolean;
+  readonly historyChangesRequired: boolean;
+}>;
+
+function createDraftColumnReconciliationContext(
+  previousColumns: ReadonlyMap<string, CompiledFieldColumn>,
+  nextColumns: ReadonlyMap<string, CompiledFieldColumn>,
+  getRow: (rowId: string) => unknown,
+): DraftColumnReconciliationContext {
+  const plans = new Map<string, DraftColumnReconciliationPlan>();
+  let draftChangesRequired = false;
+  let historyChangesRequired = false;
+  for (const [columnId, previousColumn] of previousColumns) {
+    const nextColumn = nextColumns.get(columnId);
+    if (nextColumn === undefined || previousColumn.field !== nextColumn.field) {
+      plans.set(columnId, Object.freeze({ kind: "drop" }));
+      draftChangesRequired = true;
+      historyChangesRequired = true;
+      continue;
+    }
+    const transformValues =
+      !sameBlankPolicy(previousColumn, nextColumn) ||
+      previousColumn.semantics.decodeRuntimeAuthority !==
+        nextColumn.semantics.decodeRuntimeAuthority;
+    const refreshPermission =
+      transformValues || previousColumn.isEditable !== nextColumn.isEditable;
+    const checkConvergence =
+      transformValues ||
+      previousColumn.semantics.groupedRetentionAuthority.equivalent !==
+        nextColumn.semantics.groupedRetentionAuthority.equivalent;
+    draftChangesRequired ||= transformValues || refreshPermission || checkConvergence;
+    historyChangesRequired ||= transformValues || checkConvergence;
+    plans.set(
+      columnId,
+      Object.freeze({
+        kind: "retain",
+        previousColumn,
+        nextColumn,
+        transformValues,
+        refreshPermission,
+        checkConvergence,
+      }),
+    );
+  }
+  return Object.freeze({
+    plans,
+    getRow,
+    rows: new Map<string, unknown>(),
+    migratedValues: new WeakMap<DraftEntry, DraftEntry | null>(),
+    semanticKeys: new Set<string>(),
+    draftChangesRequired,
+    historyChangesRequired,
+  });
+}
+
+function reconcileDraftHistoryForColumns(
+  commands: readonly DraftHistoryCommand[],
+  context: DraftColumnReconciliationContext,
+): Readonly<{
+  readonly commands: readonly DraftHistoryCommand[];
+  readonly changedKeys: ReadonlySet<string>;
+}> {
+  if (!context.historyChangesRequired) {
+    return Object.freeze({ commands, changedKeys: new Set<string>() });
+  }
+  let changed = false;
+  const changedKeys = new Set<string>();
+  const nextCommands: DraftHistoryCommand[] = [];
+  for (const command of commands) {
+    const nextPatches = new DraftHistoryPatchMapBuilder();
+    let commandChanged = false;
+    for (const [key, patch] of command.patches) {
+      const before =
+        patch.before === undefined
+          ? undefined
+          : reconcileDraftEntryForColumns(key, patch.before, context, false);
+      const after =
+        patch.after === undefined
+          ? undefined
+          : reconcileDraftEntryForColumns(key, patch.after, context, false);
+      const representative = patch.after ?? patch.before;
+      const plan =
+        representative === undefined ? undefined : context.plans.get(representative.columnId);
+      const authored =
+        after !== undefined
+          ? ({ _tag: "Success", value: after.mine } as const)
+          : plan?.kind === "retain" && plan.transformValues
+            ? reconcileDraftValueForColumns(
+                patch.authoredValue,
+                plan.previousColumn,
+                plan.nextColumn,
+              )
+            : ({ _tag: "Success", value: patch.authoredValue } as const);
+      if (
+        (patch.before !== undefined && before === undefined) ||
+        (patch.after !== undefined && after === undefined) ||
+        authored._tag === "Failure"
+      ) {
+        commandChanged = true;
+        changedKeys.add(key);
+        continue;
+      }
+      if (
+        before !== patch.before ||
+        after !== patch.after ||
+        !Object.is(authored.value, patch.authoredValue)
+      ) {
+        commandChanged = true;
+        changedKeys.add(key);
+        nextPatches.set(
+          key,
+          Object.freeze({ cellKey: key, before, after, authoredValue: authored.value }),
+        );
+      } else {
+        nextPatches.set(key, patch);
+      }
+    }
+    if (!commandChanged) nextCommands.push(command);
+    else {
+      changed = true;
+      const patches = nextPatches.build();
+      if (patches.size > 0) {
+        nextCommands.push(Object.freeze({ lineage: command.lineage, patches }));
+      }
+    }
+  }
+  return Object.freeze({
+    commands: changed ? Object.freeze(nextCommands) : commands,
+    changedKeys,
+  });
+}
+
+function retainedHistoryMineConverged(
+  undoStack: readonly DraftHistoryCommand[],
+  redoStack: readonly DraftHistoryCommand[],
+  key: string,
+  column: CompiledFieldColumn,
+  sourceValue: unknown,
+): boolean {
+  for (let index = 0; index < redoStack.length; index += 1) {
+    const command = redoStack[index];
+    if (command === undefined) continue;
+    const patch = command.patches.get(key);
+    if (patch === undefined) continue;
+    return safeEquivalentEditValue(column, patch.authoredValue, sourceValue) === true;
+  }
+  for (let index = undoStack.length - 1; index >= 0; index -= 1) {
+    const command = undoStack[index];
+    if (command === undefined) continue;
+    const patch = command.patches.get(key);
+    if (patch === undefined) continue;
+    return safeEquivalentEditValue(column, patch.authoredValue, sourceValue) === true;
+  }
+  return false;
+}
+
+function retainedHistoryMineMatchesBase(
+  undoStack: readonly DraftHistoryCommand[],
+  redoStack: readonly DraftHistoryCommand[],
+  key: string,
+  column: CompiledFieldColumn,
+): boolean {
+  for (let index = 0; index < redoStack.length; index += 1) {
+    const patch = redoStack[index]?.patches.get(key);
+    if (patch === undefined) continue;
+    return (
+      patch.after !== undefined &&
+      safeEquivalentEditValue(column, patch.after.mine, patch.after.base) === true
+    );
+  }
+  for (let index = undoStack.length - 1; index >= 0; index -= 1) {
+    const patch = undoStack[index]?.patches.get(key);
+    if (patch === undefined) continue;
+    return (
+      patch.after !== undefined &&
+      safeEquivalentEditValue(column, patch.after.mine, patch.after.base) === true
+    );
+  }
+  return false;
+}
+
+function createDraftHistoryCommand(
+  first: DraftHistoryCellPatch,
+  ...rest: DraftHistoryCellPatch[]
+): DraftHistoryCommand {
+  const patches = new Map<string, DraftHistoryCellPatch>();
+  patches.set(first.cellKey, first);
+  for (const patch of rest) patches.set(patch.cellKey, patch);
+  return Object.freeze({
+    lineage: Object.freeze({}),
+    patches: DraftHistoryPatchMap.from(patches),
+  });
+}
+
+function createDraftHistoryCommandFromPatches(patches: DraftHistoryPatchMap): DraftHistoryCommand {
+  if (patches.size === 0) {
+    throw new TypeError("BrunoTable Batch History Command requires a non-empty patch set.");
+  }
+  return Object.freeze({
+    lineage: Object.freeze({}),
+    patches,
+  });
 }
 
 export type BrunoTableCellEditSessionSnapshot =
@@ -549,8 +1206,31 @@ export type BrunoTableCellEditMovementOrigin = Readonly<{
   readonly columnId: string;
   readonly retainedRowIndex: number;
 }>;
+export type BrunoTableCellEditActivitySnapshot = Readonly<{
+  readonly activeEditor: boolean;
+  readonly activeCandidatePending: boolean;
+  readonly reviewCount: number;
+  readonly draftCount: number;
+  readonly undoCount: number;
+  readonly redoCount: number;
+  readonly blockedCount: number;
+  readonly validationCount: number;
+  readonly conflictCount: number;
+}>;
 const IDLE_SESSION: BrunoTableCellEditSessionSnapshot = Object.freeze({ kind: "idle" });
 const IDLE_CELL: BrunoTableCellEditProjection = Object.freeze({ active: false, hasDraft: false });
+const IDLE_ACTIVITY: BrunoTableCellEditActivitySnapshot = Object.freeze({
+  activeEditor: false,
+  activeCandidatePending: false,
+  reviewCount: 0,
+  draftCount: 0,
+  undoCount: 0,
+  redoCount: 0,
+  blockedCount: 0,
+  validationCount: 0,
+  conflictCount: 0,
+});
+const BRUNO_TABLE_BATCH_HISTORY_LIMIT = 100;
 type ActiveCandidateSnapshot =
   | Readonly<{ readonly kind: "scalar"; readonly rawText: string; readonly nativeInvalid: boolean }>
   | Readonly<{ readonly kind: "blank"; readonly rawText: ""; readonly nativeInvalid: false }>;
@@ -567,15 +1247,36 @@ export class BrunoTableCellEditRuntime {
   private readonly getCanonicalValue:
     | ((rowId: string, columnId: string) => CanonicalSourceValue)
     | undefined;
+  private getRowVersion: ((row: object) => unknown) | undefined;
   private canonicalSourceValueCache = new WeakMap<
     object,
     Map<unknown, Map<string, CanonicalSourceValue>>
   >();
+  private draftProjectionCache = new WeakMap<DraftEntry, BrunoTableCellEditProjection>();
   private readonly onCommit: (change: BrunoTableCellEditChange) => void;
   private actor = createActor(brunoTableCellEditMachine);
   private actorActive = false;
   private readonly sessionStore = new Store<BrunoTableCellEditSessionSnapshot>(IDLE_SESSION);
-  private readonly draftStore = new Store<ReadonlyMap<string, DraftEntry>>(new Map());
+  private readonly draftMemoryStore = new Store<DraftMemoryState>(
+    Object.freeze({
+      drafts: new Map(),
+      undoStack: Object.freeze([]),
+      redoStack: Object.freeze([]),
+    }),
+  );
+  private readonly draftStore = {
+    get: (): ReadonlyMap<string, DraftEntry> => this.draftMemoryStore.get().drafts,
+  };
+  private readonly activityStore = new Store<BrunoTableCellEditActivitySnapshot>(IDLE_ACTIVITY);
+  private readonly draftReviewStore = new Store<readonly BrunoTableCellEditDraftReviewSourceRow[]>(
+    Object.freeze([]),
+  );
+  private draftReviewSubscriberCount = 0;
+  private draftReviewVersion = 0;
+  private draftReviewRowsById = new Map<string, BrunoTableCellEditDraftReviewSourceRow>();
+  private draftReviewRowStoresById = new Map<string, Store<BrunoTableCellEditDraftReviewRow>>();
+  private draftReviewEntriesById = new Map<string, DraftEntry>();
+  private readonly resetControls = new WeakSet<Element>();
   private readonly candidateStore = new Store<ActiveCandidateSnapshot>(EMPTY_CANDIDATE);
   private readonly cellStores = new Map<string, Store<BrunoTableCellEditProjection>>();
   private readonly cellSubscriberCounts = new Map<string, number>();
@@ -595,12 +1296,27 @@ export class BrunoTableCellEditRuntime {
       ) => boolean)
     | undefined;
   private retainedMovementRowIndex: number | undefined;
+  private batchHistoryEnabled = false;
+  private readonly blockedDraftKeys = new Set<string>();
+  private readonly validationDraftKeys = new Set<string>();
+  private readonly conflictDraftKeys = new Set<string>();
+  private readonly draftEvidenceKeys = new Set<string>();
+  private readonly draftKeysByRowId = new Map<string, string | Set<string>>();
+
+  private get undoStack(): readonly DraftHistoryCommand[] {
+    return this.draftMemoryStore.get().undoStack;
+  }
+
+  private get redoStack(): readonly DraftHistoryCommand[] {
+    return this.draftMemoryStore.get().redoStack;
+  }
 
   public constructor(
     options: Readonly<{
       readonly columns: readonly CompiledColumn[];
       readonly getRow: (rowId: string) => unknown;
       readonly getCanonicalValue?: (rowId: string, columnId: string) => CanonicalSourceValue;
+      readonly getRowVersion?: (row: object) => unknown;
       readonly onCommit?: (change: BrunoTableCellEditChange) => void;
       readonly incrementalTraversal?: boolean;
     }>,
@@ -609,6 +1325,7 @@ export class BrunoTableCellEditRuntime {
     this.fieldColumnsById = indexFieldColumns(options.columns);
     this.getRow = options.getRow;
     this.getCanonicalValue = options.getCanonicalValue;
+    this.getRowVersion = options.getRowVersion;
     this.onCommit = options.onCommit ?? (() => undefined);
     this.traversalIndex = new BrunoTableCellEditTraversalIndex(
       this.getRow,
@@ -632,6 +1349,20 @@ export class BrunoTableCellEditRuntime {
 
   public readonly subscribeSession = (listener: Listener): (() => void) => {
     const subscription = this.sessionStore.subscribe(listener);
+    return () => subscription.unsubscribe();
+  };
+
+  public readonly getActivitySnapshot = (): BrunoTableCellEditActivitySnapshot =>
+    this.activityStore.get();
+
+  public readonly setRowVersionExtractor = (
+    getRowVersion: ((row: object) => unknown) | undefined,
+  ): void => {
+    this.getRowVersion = getRowVersion;
+  };
+
+  public readonly subscribeActivity = (listener: Listener): (() => void) => {
+    const subscription = this.activityStore.subscribe(listener);
     return () => subscription.unsubscribe();
   };
 
@@ -662,10 +1393,39 @@ export class BrunoTableCellEditRuntime {
   };
 
   public readonly getDraftSnapshot = (rowId: string, columnId: string): unknown =>
-    this.draftStore.get().get(cellKey(rowId, columnId))?.value;
+    this.draftStore.get().get(cellKey(rowId, columnId))?.mine;
 
   public readonly getDraftMemorySnapshot = (): ReadonlyMap<string, unknown> =>
     this.draftStore.get();
+
+  public readonly getDraftReviewSnapshot = (): readonly BrunoTableCellEditDraftReviewRow[] =>
+    this.draftReviewSubscriberCount === 0
+      ? Object.freeze(
+          [...this.draftStore.get()].flatMap(([id, draft]) => {
+            const row = this.createDraftReviewRow(id, draft);
+            return row === undefined ? [] : [row];
+          }),
+        )
+      : Object.freeze(this.draftReviewStore.get().map((row) => row.getSnapshot()));
+
+  public readonly getDraftReviewSourceSnapshot =
+    (): readonly BrunoTableCellEditDraftReviewSourceRow[] => this.draftReviewStore.get();
+
+  public readonly subscribeDraftReview = (listener: Listener): (() => void) => {
+    this.draftReviewSubscriberCount += 1;
+    if (this.draftReviewSubscriberCount === 1) this.publishDraftReview(this.draftStore.get());
+    const subscription = this.draftReviewStore.subscribe(listener);
+    return () => {
+      subscription.unsubscribe();
+      this.draftReviewSubscriberCount -= 1;
+      if (this.draftReviewSubscriberCount === 0) {
+        this.draftReviewStore.setState(() => Object.freeze([]));
+        this.draftReviewRowsById.clear();
+        this.draftReviewRowStoresById.clear();
+        this.draftReviewEntriesById.clear();
+      }
+    };
+  };
 
   public readonly captureDraftCommandReader = (): ((
     rowId: string,
@@ -676,12 +1436,30 @@ export class BrunoTableCellEditRuntime {
       const draft = drafts.get(cellKey(rowId, columnId));
       return draft === undefined
         ? Object.freeze({ hasDraft: false })
-        : Object.freeze({ hasDraft: true, value: draft.value });
+        : Object.freeze({ hasDraft: true, value: draft.mine });
     };
   };
 
   public readonly getActiveCandidateSnapshot = (): ActiveCandidateSnapshot =>
     this.candidateStore.get();
+
+  private readonly hasActiveCandidateWork = (session = this.sessionStore.get()): boolean => {
+    if (session.kind !== "editing") return false;
+    const candidate = this.candidateStore.get();
+    const retainedValidationMessage = this.actor.getSnapshot().context.session?.invalidMessage;
+    return (
+      retainedValidationMessage !== undefined ||
+      candidate.nativeInvalid ||
+      candidate.rawText !== session.initialText ||
+      (candidate.kind === "blank" && session.initialText !== "")
+    );
+  };
+
+  private readonly hasInvalidActiveCandidate = (): boolean => {
+    const session = this.actor.getSnapshot().context.session;
+    if (session === undefined || !this.hasActiveCandidateWork()) return false;
+    return session.invalidMessage !== undefined || this.candidateStore.get().nativeInvalid;
+  };
 
   public readonly updateActiveCandidate = (
     rawText: string,
@@ -700,10 +1478,157 @@ export class BrunoTableCellEditRuntime {
       previous.nativeInvalid === next.nativeInvalid
     )
       return;
-    this.candidateStore.setState(() => next);
+    batch(() => {
+      this.candidateStore.setState(() => next);
+      this.publishActivitySnapshot();
+      if (this.activeCellKey !== undefined) {
+        this.publishDraftReview(this.draftStore.get(), new Set([this.activeCellKey]));
+      }
+    });
   };
 
   public readonly getRetainedCellStoreCount = (): number => this.cellStores.size;
+
+  public readonly getRetainedDraftDependencyCellCount = (): number => this.draftEvidenceKeys.size;
+
+  public readonly registerResetControl = (element: Element): (() => void) => {
+    this.resetControls.add(element);
+    return () => this.resetControls.delete(element);
+  };
+
+  public readonly ownsResetControl = (target: EventTarget | null): boolean => {
+    if (!(target instanceof Element)) return false;
+    const control = target.closest("[data-bruno-cell-edit-reset]");
+    return control !== null && this.resetControls.has(control);
+  };
+
+  public readonly setBatchHistoryEnabled = (enabled: boolean): void => {
+    if (this.batchHistoryEnabled === enabled) return;
+    if (!enabled && (this.undoStack.length > 0 || this.redoStack.length > 0)) return;
+    this.batchHistoryEnabled = enabled;
+    this.publishActivitySnapshot();
+  };
+
+  public readonly applyAcceptedDraftGesture = (
+    drafts: readonly [BrunoTableCellEditDraftSnapshot, ...BrunoTableCellEditDraftSnapshot[]],
+  ): boolean => {
+    if (this.getSessionSnapshot().kind === "editing") return false;
+    const previousDrafts = this.draftStore.get();
+    const nextDrafts = new Map(previousDrafts);
+    const historyPatchBuilder = new DraftHistoryPatchMapBuilder();
+    let unchangedGestureKeys: Set<string> | undefined;
+    let draftStatusEvidenceChanged =
+      this.blockedDraftKeys.size > 0 ||
+      this.validationDraftKeys.size > 0 ||
+      this.conflictDraftKeys.size > 0;
+    for (const draft of drafts) {
+      const column = this.fieldColumnsById.get(draft.columnId);
+      if (column?.field !== draft.field) return false;
+      const key = cellKey(draft.rowId, draft.columnId);
+      const before = previousDrafts.get(key);
+      const existing = nextDrafts.get(key);
+      if (existing !== before || unchangedGestureKeys?.has(key) === true) return false;
+      const base = existing?.base ?? draft.base;
+      const equivalentToBase = safeEquivalentEditValue(column, draft.mine, base);
+      if (equivalentToBase === undefined) return false;
+      if (equivalentToBase) nextDrafts.delete(key);
+      else if (
+        existing === undefined ||
+        safeEquivalentEditValue(column, existing.mine, draft.mine) !== true
+      ) {
+        const retained = existing ?? draft;
+        nextDrafts.set(
+          key,
+          existing === undefined
+            ? Object.isFrozen(draft)
+              ? draft
+              : Object.freeze({ ...draft })
+            : Object.freeze({
+                rowId: retained.rowId,
+                columnId: retained.columnId,
+                field: retained.field,
+                baseRow: retained.baseRow,
+                expectedVersion: retained.expectedVersion,
+                base: retained.base,
+                mine: draft.mine,
+                ...(draft.validationMessage === undefined
+                  ? {}
+                  : { validationMessage: draft.validationMessage }),
+                ...(draft.conflict === undefined ? {} : { conflict: draft.conflict }),
+              }),
+        );
+      }
+      const after = nextDrafts.get(key);
+      draftStatusEvidenceChanged ||=
+        after?.blockedReason !== undefined ||
+        after?.validationMessage !== undefined ||
+        after?.conflict !== undefined;
+      historyPatchBuilder.set(
+        key,
+        before === after
+          ? undefined
+          : Object.freeze({ cellKey: key, before, after, authoredValue: draft.mine }),
+      );
+      if (before === after) {
+        unchangedGestureKeys ??= new Set();
+        unchangedGestureKeys.add(key);
+      }
+    }
+    const historyPatches = historyPatchBuilder.build();
+    if (historyPatches.size === 0) return false;
+    if (draftStatusEvidenceChanged) {
+      for (const key of historyPatches.keys()) this.syncBlockedDraftKey(key, nextDrafts.get(key));
+    }
+    const nextUndoStack = this.batchHistoryEnabled
+      ? [...this.undoStack, createDraftHistoryCommandFromPatches(historyPatches)].slice(
+          -BRUNO_TABLE_BATCH_HISTORY_LIMIT,
+        )
+      : this.undoStack;
+    const nextRedoStack = this.batchHistoryEnabled ? [] : this.redoStack;
+    batch(() => {
+      this.setDraftMemory(nextDrafts, nextUndoStack, nextRedoStack, historyPatches.keys());
+      if (this.draftReviewSubscriberCount > 0) {
+        this.publishDraftReview(nextDrafts, new Set(historyPatches.keys()));
+      }
+      for (const patch of historyPatches.values()) {
+        const entry = patch.after ?? patch.before;
+        if (entry !== undefined) {
+          this.traversalIndex.invalidateCell(entry.rowId, entry.columnId);
+        }
+        if (this.cellStores.size > 0) this.publishCell(patch.cellKey, nextDrafts);
+      }
+      this.publishActivitySnapshot();
+    });
+    this.publishTraversalInvalidation();
+    if (this.cellStores.size > 0) {
+      for (const key of historyPatches.keys()) this.releaseUnusedCellStore(key);
+    }
+    return true;
+  };
+
+  public readonly undoBatchDraft = (): boolean => {
+    if (!this.batchHistoryEnabled || this.getSessionSnapshot().kind === "editing") return false;
+    const command = this.undoStack.at(-1);
+    if (command === undefined) return false;
+    this.applyHistoryCommand(command, "before", this.undoStack.slice(0, -1), [
+      ...this.redoStack,
+      command,
+    ]);
+    return true;
+  };
+
+  public readonly redoBatchDraft = (): boolean => {
+    if (!this.batchHistoryEnabled || this.getSessionSnapshot().kind === "editing") return false;
+    const command = this.redoStack.at(-1);
+    if (command === undefined) return false;
+    this.applyHistoryCommand(
+      command,
+      "after",
+      [...this.undoStack, command],
+      this.redoStack.slice(0, -1),
+    );
+    return true;
+  };
 
   public readonly registerActiveCandidate = (
     candidate: Readonly<{
@@ -753,7 +1678,9 @@ export class BrunoTableCellEditRuntime {
   public readonly reconcileTraversal = (
     columns: readonly CompiledColumn[],
     rowSpace: BrunoTableCellEditTraversalRowSpace,
-  ): boolean => this.traversalIndex.reconcile(columns, rowSpace);
+  ): boolean => {
+    return this.traversalIndex.reconcile(columns, rowSpace);
+  };
 
   public readonly buildTraversalSlice = (): boolean => this.traversalIndex.buildNextSlice();
 
@@ -762,9 +1689,11 @@ export class BrunoTableCellEditRuntime {
   public readonly reconcileTraversalRows = (
     changedRowIds: ReadonlySet<string> | undefined,
   ): void => {
-    if (this.traversalIndex.reconcileRows(changedRowIds)) {
-      this.publishTraversalInvalidation();
-    }
+    if (this.traversalIndex.reconcileRows(changedRowIds)) this.publishTraversalInvalidation();
+  };
+
+  public readonly reconcileSourceRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
+    if (this.reconcileDraftRows(changedRowIds, false)) this.publishTraversalInvalidation();
   };
 
   public readonly subscribeTraversalInvalidation = (listener: Listener): (() => void) => {
@@ -779,10 +1708,33 @@ export class BrunoTableCellEditRuntime {
       (changedRowIds === undefined || changedRowIds.has(session.rowId))
     ) {
       const row = this.getRow(session.rowId);
+      const sourceValue = this.readCanonicalSourceValue(session.rowId, row, session.column);
+      const activeKey = cellKey(session.rowId, session.column.columnId);
+      const convergedAdmittedDraft =
+        session.beforeFromDraft &&
+        !this.draftStore.get().has(activeKey) &&
+        sourceValue._tag === "Success" &&
+        safeEquivalentEditValue(session.column, session.before, sourceValue.value) === true;
+      let expectedVersion = session.expectedVersion;
+      let rebaseFromConvergedDraft = false;
+      let rebaseFailed = false;
+      if (convergedAdmittedDraft) {
+        try {
+          expectedVersion =
+            typeof row === "object" && row !== null ? this.getRowVersion?.(row) : undefined;
+          rebaseFromConvergedDraft = true;
+        } catch {
+          rebaseFromConvergedDraft = false;
+          rebaseFailed = true;
+        }
+      }
       this.actor.send({
         type: "RECONCILE_ROW",
         row,
-        sourceValue: this.readCanonicalSourceValue(session.rowId, row, session.column),
+        sourceValue,
+        expectedVersion,
+        rebaseFromConvergedDraft,
+        rebaseFailed,
       });
     }
   };
@@ -814,17 +1766,76 @@ export class BrunoTableCellEditRuntime {
   ): BrunoTableCellEditTraversalDestination | undefined =>
     this.traversalIndex.findRange(range, rowId, columnId, direction);
 
-  public readonly reconcileColumns = (columns: readonly CompiledColumn[]): void => {
+  public readonly reconcileColumns = (
+    columns: readonly CompiledColumn[],
+    getRow: (rowId: string) => unknown = this.getRow,
+  ): void => {
     if (this.columns === columns) return;
     const previousFieldColumns = this.fieldColumnsById;
     this.canonicalSourceValueCache = new WeakMap();
+    this.draftProjectionCache = new WeakMap();
     const nextFieldColumns = indexFieldColumns(columns);
     const previousDrafts = this.draftStore.get();
-    const { drafts: nextDrafts, changedKeys } = reconcileDraftsForColumns(
-      previousDrafts,
+    const reconciliation = createDraftColumnReconciliationContext(
       previousFieldColumns,
       nextFieldColumns,
+      getRow,
     );
+    const { drafts: migratedDrafts, changedKeys: migratedDraftKeys } = reconcileDraftsForColumns(
+      previousDrafts,
+      reconciliation,
+    );
+    const reconciledUndo = reconcileDraftHistoryForColumns(this.undoStack, reconciliation);
+    const reconciledRedo = reconcileDraftHistoryForColumns(this.redoStack, reconciliation);
+    let nextDrafts = migratedDrafts;
+    let nextUndoStack = reconciledUndo.commands;
+    let nextRedoStack = reconciledRedo.commands;
+    const convergedKeys = new Set<string>();
+    const reconciledCanonicalSources = new Map<string, CanonicalSourceValue>();
+    for (const key of reconciliation.semanticKeys) {
+      const draft = nextDrafts.get(key);
+      const representative = draft ?? findDraftHistoryEntry(nextUndoStack, nextRedoStack, key);
+      if (representative === undefined) continue;
+      const column = nextFieldColumns.get(representative.columnId);
+      const row = getDraftColumnReconciliationRow(reconciliation, representative.rowId);
+      const source = readCanonicalSourceValueFromRawRow(row, column);
+      reconciledCanonicalSources.set(key, source);
+      const mineMatchesBase =
+        column !== undefined &&
+        (draft !== undefined
+          ? safeEquivalentEditValue(column, draft.mine, draft.base) === true
+          : retainedHistoryMineMatchesBase(nextUndoStack, nextRedoStack, key, column));
+      const sourceConverged =
+        column !== undefined &&
+        source._tag === "Success" &&
+        (draft !== undefined
+          ? safeEquivalentEditValue(column, draft.mine, source.value) === true
+          : retainedHistoryMineConverged(nextUndoStack, nextRedoStack, key, column, source.value));
+      if (mineMatchesBase || sourceConverged) {
+        convergedKeys.add(key);
+      }
+    }
+    if (convergedKeys.size > 0) {
+      const prunedDrafts = new Map(nextDrafts);
+      for (const key of convergedKeys) prunedDrafts.delete(key);
+      nextDrafts = prunedDrafts;
+      nextUndoStack = pruneDraftHistoryAdaptive(nextUndoStack, convergedKeys);
+      nextRedoStack = pruneDraftHistoryAdaptive(nextRedoStack, convergedKeys);
+    }
+    const changedDraftKeys = new Set(migratedDraftKeys);
+    for (const key of convergedKeys) {
+      if (migratedDrafts.has(key) || previousDrafts.has(key)) changedDraftKeys.add(key);
+    }
+    const memoryChangedKeys = new Set([
+      ...changedDraftKeys,
+      ...reconciledUndo.changedKeys,
+      ...reconciledRedo.changedKeys,
+      ...convergedKeys,
+    ]);
+    const reviewKeys =
+      this.draftReviewSubscriberCount === 0
+        ? changedDraftKeys
+        : new Set([...changedDraftKeys, ...this.draftReviewRowsById.keys()]);
     const activeSession = this.actor.getSnapshot().context.session;
     const nextActiveColumn =
       activeSession === undefined ? undefined : nextFieldColumns.get(activeSession.column.columnId);
@@ -840,14 +1851,26 @@ export class BrunoTableCellEditRuntime {
       } else {
         this.cancel();
       }
-      if (nextDrafts === previousDrafts) return;
-      this.draftStore.setState(() => nextDrafts);
-      for (const key of changedKeys) {
-        this.invalidateDraftCell(key);
+      if (
+        nextDrafts !== previousDrafts ||
+        nextUndoStack !== this.undoStack ||
+        nextRedoStack !== this.redoStack
+      ) {
+        this.setDraftMemory(nextDrafts, nextUndoStack, nextRedoStack, memoryChangedKeys);
+      }
+      for (const key of changedDraftKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
+      if (reviewKeys.size > 0) {
+        this.publishDraftReview(nextDrafts, reviewKeys, undefined, reconciledCanonicalSources);
+      }
+      if (memoryChangedKeys.size > 0) this.publishActivitySnapshot();
+      if (changedDraftKeys.size === 0) return;
+      for (const key of changedDraftKeys) {
+        this.invalidateDraftCell(key, false);
         this.publishCell(key, nextDrafts);
         this.releaseUnusedCellStore(key);
       }
     });
+    if (changedDraftKeys.size > 0) this.publishTraversalInvalidation();
   };
 
   public readonly commitActiveCandidate = (): boolean => {
@@ -861,6 +1884,28 @@ export class BrunoTableCellEditRuntime {
     );
     if (!accepted) candidate.restoreFocus();
     return accepted;
+  };
+
+  public readonly resetAllDrafts = (): number => {
+    this.cancel();
+    const previousDrafts = this.draftStore.get();
+    const affectedKeys = [...this.draftEvidenceKeys];
+    const nextDrafts = new Map<string, DraftEntry>();
+    this.blockedDraftKeys.clear();
+    this.validationDraftKeys.clear();
+    this.conflictDraftKeys.clear();
+    batch(() => {
+      this.setDraftMemory(nextDrafts, [], [], affectedKeys);
+      this.publishDraftReview(nextDrafts, new Set(affectedKeys));
+      this.publishActivitySnapshot();
+      for (const key of affectedKeys) {
+        this.invalidateDraftCell(key, false);
+        this.publishCell(key, nextDrafts);
+      }
+    });
+    if (affectedKeys.length > 0) this.publishTraversalInvalidation();
+    for (const key of affectedKeys) this.releaseUnusedCellStore(key);
+    return previousDrafts.size;
   };
 
   public readonly isEditable = (rowId: string, columnId: string): boolean => {
@@ -886,7 +1931,7 @@ export class BrunoTableCellEditRuntime {
       if (sourceValue._tag !== "Success") return false;
       value = sourceValue.value;
     } else {
-      value = draft.value;
+      value = draft.mine;
     }
     if (!isEditorValueRepresentable(column, value)) return false;
     if (typeof column.isEditable !== "function") return true;
@@ -907,14 +1952,22 @@ export class BrunoTableCellEditRuntime {
     const column = this.fieldColumnsById.get(columnId);
     const row = this.getRow(rowId);
     const draft = this.draftStore.get().get(cellKey(rowId, columnId));
+    let expectedVersion: unknown;
+    try {
+      expectedVersion =
+        typeof row === "object" && row !== null ? this.getRowVersion?.(row) : undefined;
+    } catch {
+      return false;
+    }
     this.actor.send({
       type: "START",
       rowId,
       column,
       row,
       sourceValue: this.readCanonicalSourceValue(rowId, row, column),
+      expectedVersion,
       hasDraft: draft !== undefined,
-      draftValue: draft?.value,
+      draftValue: draft?.mine,
       mode,
       producedText,
     });
@@ -1004,13 +2057,23 @@ export class BrunoTableCellEditRuntime {
     this.actor.stop();
     this.actorActive = false;
     this.sessionStore.setState(() => IDLE_SESSION);
-    this.draftStore.setState(() => new Map());
+    this.setDraftMemory(new Map(), [], [], this.draftEvidenceKeys);
+    this.draftReviewStore.setState(() => Object.freeze([]));
+    this.draftReviewRowsById.clear();
+    this.draftReviewRowStoresById.clear();
+    this.draftReviewEntriesById.clear();
+    this.draftReviewSubscriberCount = 0;
+    this.activityStore.setState(() => IDLE_ACTIVITY);
     this.candidateStore.setState(() => EMPTY_CANDIDATE);
     this.cellStores.clear();
     this.cellSubscriberCounts.clear();
     this.traversalInvalidationListeners.clear();
     this.activeCellKey = undefined;
     this.activeCandidate = undefined;
+    this.blockedDraftKeys.clear();
+    this.validationDraftKeys.clear();
+    this.conflictDraftKeys.clear();
+    this.draftKeysByRowId.clear();
   };
 
   private readonly publishActorDecision = (): void => {
@@ -1022,7 +2085,7 @@ export class BrunoTableCellEditRuntime {
         ? undefined
         : session.rowMissing
           ? session.invalidMessage
-          : (session.permissionMessage ?? session.invalidMessage);
+          : (session.permissionMessage ?? session.rowVersionMessage ?? session.invalidMessage);
     const next =
       session === undefined
         ? IDLE_SESSION
@@ -1054,27 +2117,606 @@ export class BrunoTableCellEditRuntime {
     const nextDrafts =
       draftPatch === undefined || this.appliedDraftPatch === draftPatch
         ? previousDrafts
-        : applyDraftPatch(previousDrafts, draftPatch);
+        : applyDraftPatch(previousDrafts, draftPatch, this.fieldColumnsById);
     if (draftPatch !== undefined) this.appliedDraftPatch = draftPatch;
     if (previousKey !== undefined) affectedKeys.add(previousKey);
     if (nextKey !== undefined) affectedKeys.add(nextKey);
+    const historyCommand =
+      nextDrafts !== previousDrafts && this.batchHistoryEnabled && draftPatch !== undefined
+        ? createDraftHistoryCommand(
+            Object.freeze({
+              cellKey: draftPatch.cellKey,
+              before: previousDrafts.get(draftPatch.cellKey),
+              after: nextDrafts.get(draftPatch.cellKey),
+              authoredValue: draftPatch.value,
+            }),
+          )
+        : undefined;
+    const nextUndoStack =
+      historyCommand === undefined
+        ? this.undoStack
+        : [...this.undoStack, historyCommand].slice(-BRUNO_TABLE_BATCH_HISTORY_LIMIT);
+    const nextRedoStack = historyCommand === undefined ? this.redoStack : [];
     batch(() => {
       if (nextDrafts !== previousDrafts) {
-        this.draftStore.setState(() => nextDrafts);
+        this.setDraftMemory(
+          nextDrafts,
+          nextUndoStack,
+          nextRedoStack,
+          actorContext.affectedCellKeys,
+        );
+        if (draftPatch !== undefined) {
+          this.syncBlockedDraftKey(draftPatch.cellKey, nextDrafts.get(draftPatch.cellKey));
+        }
         for (const key of actorContext.affectedCellKeys) this.invalidateDraftCell(key);
       }
       if (!sameSessionSnapshot(this.sessionStore.get(), next)) {
         this.sessionStore.setState(() => next);
       }
+      this.publishDraftReview(nextDrafts, affectedKeys);
+      this.publishActivity(
+        next.kind === "editing",
+        this.hasActiveCandidateWork(next),
+        nextDrafts.size,
+        this.undoStack.length,
+        this.redoStack.length,
+      );
       for (const key of affectedKeys) this.publishCell(key, nextDrafts);
     });
     for (const key of affectedKeys) this.releaseUnusedCellStore(key);
   };
 
+  private readonly publishActivity = (
+    activeEditor: boolean,
+    activeCandidatePending: boolean,
+    draftCount: number,
+    undoCount = this.undoStack.length,
+    redoCount = this.redoStack.length,
+    blockedCount = this.blockedDraftKeys.size,
+    validationCount = this.validationDraftKeys.size,
+    conflictCount = this.conflictDraftKeys.size,
+  ): void => {
+    const reviewCount =
+      draftCount +
+      (activeCandidatePending &&
+      (this.activeCellKey === undefined || !this.draftStore.get().has(this.activeCellKey))
+        ? 1
+        : 0);
+    const activeCandidateValidationCount =
+      activeCandidatePending &&
+      this.hasInvalidActiveCandidate() &&
+      (this.activeCellKey === undefined || !this.validationDraftKeys.has(this.activeCellKey))
+        ? 1
+        : 0;
+    validationCount += activeCandidateValidationCount;
+    const session = this.actor.getSnapshot().context.session;
+    const activeCandidateBlockedCount =
+      activeCandidatePending &&
+      session !== undefined &&
+      (session.rowMissing ||
+        session.permissionMessage !== undefined ||
+        session.rowVersionMessage !== undefined) &&
+      (this.activeCellKey === undefined || !this.blockedDraftKeys.has(this.activeCellKey))
+        ? 1
+        : 0;
+    blockedCount += activeCandidateBlockedCount;
+    const previous = this.activityStore.get();
+    if (
+      previous.activeEditor === activeEditor &&
+      previous.activeCandidatePending === activeCandidatePending &&
+      previous.reviewCount === reviewCount &&
+      previous.draftCount === draftCount &&
+      previous.undoCount === undoCount &&
+      previous.redoCount === redoCount &&
+      previous.blockedCount === blockedCount &&
+      previous.validationCount === validationCount &&
+      previous.conflictCount === conflictCount
+    )
+      return;
+    this.activityStore.setState(() =>
+      Object.freeze({
+        activeEditor,
+        activeCandidatePending,
+        reviewCount,
+        draftCount,
+        undoCount,
+        redoCount,
+        blockedCount,
+        validationCount,
+        conflictCount,
+      }),
+    );
+  };
+
+  private readonly publishActivitySnapshot = (): void => {
+    this.publishActivity(
+      this.sessionStore.get().kind === "editing",
+      this.hasActiveCandidateWork(this.sessionStore.get()),
+      this.draftStore.get().size,
+      this.undoStack.length,
+      this.redoStack.length,
+      this.blockedDraftKeys.size,
+      this.validationDraftKeys.size,
+      this.conflictDraftKeys.size,
+    );
+  };
+
+  private readonly applyHistoryCommand = (
+    command: DraftHistoryCommand,
+    state: "before" | "after",
+    nextUndoStack: readonly DraftHistoryCommand[],
+    nextRedoStack: readonly DraftHistoryCommand[],
+  ): void => {
+    const nextDrafts = new Map(this.draftStore.get());
+    const prunedKeys = new Set<string>();
+    for (const patch of command.patches.values()) {
+      const requested = patch[state];
+      const { entry, prune } = this.revalidateHistoryEntry(requested);
+      if (prune) prunedKeys.add(patch.cellKey);
+      if (entry === undefined) nextDrafts.delete(patch.cellKey);
+      else nextDrafts.set(patch.cellKey, entry);
+      this.syncBlockedDraftKey(patch.cellKey, entry);
+    }
+    if (prunedKeys.size > 0) {
+      nextUndoStack = pruneDraftHistory(nextUndoStack, prunedKeys);
+      nextRedoStack = pruneDraftHistory(nextRedoStack, prunedKeys);
+    }
+    batch(() => {
+      this.setDraftMemory(nextDrafts, nextUndoStack, nextRedoStack, command.patches.keys());
+      this.publishDraftReview(nextDrafts, new Set(command.patches.keys()));
+      for (const patch of command.patches.values()) {
+        this.invalidateDraftCell(patch.cellKey, false);
+        if (this.cellStores.size > 0) this.publishCell(patch.cellKey, nextDrafts);
+      }
+      this.publishActivitySnapshot();
+    });
+    this.publishTraversalInvalidation();
+    if (this.cellStores.size > 0) {
+      for (const patch of command.patches.values()) this.releaseUnusedCellStore(patch.cellKey);
+    }
+  };
+
+  private readonly setDraftMemory = (
+    drafts: ReadonlyMap<string, DraftEntry>,
+    undoStack: readonly DraftHistoryCommand[] = this.undoStack,
+    redoStack: readonly DraftHistoryCommand[] = this.redoStack,
+    affectedKeys: Iterable<string>,
+  ): void => {
+    const previous = this.draftMemoryStore.get();
+    const next = Object.freeze({
+      drafts,
+      undoStack: Object.freeze([...undoStack]),
+      redoStack: Object.freeze([...redoStack]),
+    });
+    this.draftMemoryStore.setState(() => next);
+    if (drafts.size === 0 && next.undoStack.length === 0 && next.redoStack.length === 0) {
+      this.draftEvidenceKeys.clear();
+      this.draftKeysByRowId.clear();
+      return;
+    }
+    const changedEvidenceKeys = new Set(affectedKeys);
+    const previousCommands = new Map(
+      [...previous.undoStack, ...previous.redoStack].map((command) => [command.lineage, command]),
+    );
+    const nextLineages = new Set(
+      [...next.undoStack, ...next.redoStack].map((command) => command.lineage),
+    );
+    for (const [lineage, command] of previousCommands) {
+      if (!nextLineages.has(lineage)) {
+        for (const key of command.patches.keys()) changedEvidenceKeys.add(key);
+      }
+    }
+    for (const key of changedEvidenceKeys) this.syncDraftEvidenceKey(key, next);
+  };
+
+  private readonly revalidateHistoryEntry = (
+    entry: DraftEntry | undefined,
+  ): Readonly<{ readonly entry: DraftEntry | undefined; readonly prune: boolean }> => {
+    if (entry === undefined) return Object.freeze({ entry: undefined, prune: false });
+    const row = this.getRow(entry.rowId);
+    const column = this.fieldColumnsById.get(entry.columnId);
+    if (column === undefined) return Object.freeze({ entry: undefined, prune: true });
+    if (typeof row !== "object" || row === null) {
+      return Object.freeze({
+        entry: setDraftBlockedReason(entry, BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE),
+        prune: false,
+      });
+    }
+    const source = this.readCanonicalSourceValue(entry.rowId, row, column);
+    if (
+      source._tag === "Success" &&
+      safeEquivalentEditValue(column, entry.mine, source.value) === true
+    ) {
+      return Object.freeze({ entry: undefined, prune: true });
+    }
+    const blockedReason =
+      source._tag !== "Success" || !isDraftEditable(column, row, entry.mine)
+        ? BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE
+        : undefined;
+    return Object.freeze({ entry: setDraftBlockedReason(entry, blockedReason), prune: false });
+  };
+
+  private readonly publishDraftReview = (
+    drafts: ReadonlyMap<string, DraftEntry>,
+    changedKeys?: ReadonlySet<string>,
+    serverRows?: ReadonlyMap<string, unknown>,
+    canonicalSources?: ReadonlyMap<string, CanonicalSourceValue>,
+  ): void => {
+    if (this.draftReviewSubscriberCount === 0) return;
+    const activeKey = this.hasActiveCandidateWork() ? this.activeCellKey : undefined;
+    const keys =
+      changedKeys ??
+      new Set([
+        ...drafts.keys(),
+        ...this.draftReviewRowsById.keys(),
+        ...(activeKey === undefined ? [] : [activeKey]),
+      ]);
+    let membershipChanged = false;
+    for (const id of keys) {
+      const draft = drafts.get(id);
+      const activeRow =
+        activeKey === id ? this.createActiveCandidateReviewRow(id, draft) : undefined;
+      if (draft === undefined && activeRow === undefined) {
+        if (this.draftReviewRowsById.delete(id)) membershipChanged = true;
+        this.draftReviewRowStoresById.delete(id);
+        this.draftReviewEntriesById.delete(id);
+        continue;
+      }
+      const previousSource = this.draftReviewRowsById.get(id);
+      const previousStore = this.draftReviewRowStoresById.get(id);
+      const previousRow = previousStore?.get();
+      const nextRow =
+        activeRow ??
+        (draft === undefined
+          ? undefined
+          : this.createDraftReviewRow(
+              id,
+              draft,
+              serverRows?.has(id) === true ? serverRows.get(id) : this.getRow(draft.rowId),
+              canonicalSources?.get(id),
+            ));
+      if (nextRow === undefined) {
+        if (this.draftReviewRowsById.delete(id)) membershipChanged = true;
+        this.draftReviewRowStoresById.delete(id);
+        this.draftReviewEntriesById.delete(id);
+        continue;
+      }
+      if (
+        previousRow !== undefined &&
+        activeRow === undefined &&
+        this.draftReviewEntriesById.get(id) === draft &&
+        previousRow.serverRow === nextRow.serverRow &&
+        previousRow.column === nextRow.column
+      ) {
+        continue;
+      }
+      if (
+        previousSource === undefined ||
+        previousStore === undefined ||
+        previousSource.rowId !== nextRow.rowId ||
+        previousSource.columnLabel !== nextRow.columnLabel
+      ) {
+        const store = new Store(nextRow);
+        const source: BrunoTableCellEditDraftReviewSourceRow = Object.freeze({
+          kind: "bruno-table-cell-edit-draft-review-source",
+          id,
+          rowId: nextRow.rowId,
+          columnLabel: nextRow.columnLabel,
+          serverText: "",
+          mineText: "",
+          statusText: "",
+          getSnapshot: () => store.get(),
+          subscribe: (listener) => {
+            const subscription = store.subscribe(listener);
+            return () => subscription.unsubscribe();
+          },
+        });
+        brunoTableCellEditDraftReviewSources.add(source);
+        this.draftReviewRowsById.set(id, source);
+        this.draftReviewRowStoresById.set(id, store);
+        membershipChanged = true;
+      } else {
+        previousStore.setState(() => nextRow);
+      }
+      if (draft === undefined) this.draftReviewEntriesById.delete(id);
+      else this.draftReviewEntriesById.set(id, draft);
+    }
+    if (!membershipChanged) return;
+    const rows = Object.freeze(
+      [
+        ...drafts.keys(),
+        ...(activeKey === undefined || drafts.has(activeKey) ? [] : [activeKey]),
+      ].flatMap((id) => {
+        const row = this.draftReviewRowsById.get(id);
+        return row === undefined ? [] : [row];
+      }),
+    );
+    this.draftReviewStore.setState(() => rows);
+  };
+
+  private readonly createDraftReviewRow = (
+    id: string,
+    draft: DraftEntry,
+    serverCandidate = this.getRow(draft.rowId),
+    canonicalSource?: CanonicalSourceValue,
+  ): BrunoTableCellEditDraftReviewRow | undefined => {
+    const serverRow =
+      typeof serverCandidate === "object" && serverCandidate !== null ? serverCandidate : undefined;
+    const column = this.fieldColumnsById.get(draft.columnId);
+    if (column === undefined) return undefined;
+    this.draftReviewVersion += 1;
+    const reviewVersion = this.draftReviewVersion;
+    const canonical =
+      canonicalSource ?? this.readCanonicalSourceValue(draft.rowId, serverRow, column);
+    const projectedSource = serverRow ?? draft.baseRow;
+    const reviewRow: BrunoTableCellEditDraftReviewRow = Object.freeze({
+      id,
+      reviewVersion,
+      rowId: draft.rowId,
+      columnId: draft.columnId,
+      field: draft.field,
+      baseRow: draft.baseRow,
+      expectedVersion: draft.expectedVersion,
+      base: draft.base,
+      mine: draft.mine,
+      ...(draft.validationMessage === undefined
+        ? {}
+        : { validationMessage: draft.validationMessage }),
+      ...(draft.conflict === undefined ? {} : { conflict: draft.conflict }),
+      headerName: column.headerName,
+      columnLabel: column.headerName,
+      serverText: "",
+      mineText: "",
+      status:
+        draft.blockedReason ??
+        draft.validationMessage ??
+        (draft.conflict === undefined ? "Draft" : "Conflict"),
+      column,
+      serverRow,
+      projectedRow: projectedSource,
+      serverNow: canonical._tag === "Success" ? canonical.value : undefined,
+      serverValueAvailable: canonical._tag === "Success",
+      blockedReason: draft.blockedReason,
+    });
+    return reviewRow;
+  };
+
+  private readonly createActiveCandidateReviewRow = (
+    id: string,
+    draft: DraftEntry | undefined,
+  ): BrunoTableCellEditDraftReviewRow | undefined => {
+    const session = this.actor.getSnapshot().context.session;
+    if (
+      session === undefined ||
+      !this.hasActiveCandidateWork() ||
+      cellKey(session.rowId, session.column.columnId) !== id
+    ) {
+      return undefined;
+    }
+    const candidate = this.candidateStore.get();
+    const candidateInvalid = session.invalidMessage !== undefined || candidate.nativeInvalid;
+    const candidateStatus = session.rowMissing
+      ? BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE
+      : (session.permissionMessage ??
+        session.rowVersionMessage ??
+        session.invalidMessage ??
+        (candidate.nativeInvalid ? "Enter a valid number." : "Active candidate"));
+    const activeDraft: DraftEntry = Object.freeze({
+      rowId: session.rowId,
+      columnId: session.column.columnId,
+      field: session.column.field,
+      baseRow: draft?.baseRow ?? session.baseRow,
+      expectedVersion: draft?.expectedVersion ?? session.expectedVersion,
+      base: draft?.base ?? session.baseValue,
+      mine: draft?.mine ?? session.before,
+      ...(draft?.blockedReason === undefined ? {} : { blockedReason: draft.blockedReason }),
+    });
+    const row = this.createDraftReviewRow(id, activeDraft);
+    if (row === undefined) return undefined;
+    return Object.freeze({
+      ...row,
+      status: candidateStatus,
+      candidateText: candidate.rawText,
+      ...(candidateInvalid ? { candidateInvalid: true } : {}),
+    });
+  };
+
+  private readonly reconcileDraftRows = (
+    changedRowIds: ReadonlySet<string> | undefined,
+    publishTraversalInvalidation: boolean,
+  ): boolean => {
+    const previousDrafts = this.draftStore.get();
+    let nextDrafts: Map<string, DraftEntry> | undefined;
+    let nextUndoStack = this.undoStack;
+    let nextRedoStack = this.redoStack;
+    const convergedKeys: string[] = [];
+    const changedKeys: string[] = [];
+    const reviewChangedKeys = new Set<string>();
+    const reviewServerRows = new Map<string, unknown>();
+    const keys =
+      changedRowIds === undefined
+        ? this.draftEvidenceKeys.values()
+        : (function* (
+            byRowId: ReadonlyMap<string, string | ReadonlySet<string>>,
+            rowIds: ReadonlySet<string>,
+          ): Generator<string> {
+            for (const rowId of rowIds) {
+              const rowKeys = byRowId.get(rowId);
+              if (rowKeys === undefined) continue;
+              if (typeof rowKeys === "string") yield rowKeys;
+              else yield* rowKeys;
+            }
+          })(this.draftKeysByRowId, changedRowIds);
+    for (const key of keys) {
+      const draft = previousDrafts.get(key);
+      const representative = draft ?? findDraftHistoryEntry(nextUndoStack, nextRedoStack, key);
+      if (representative === undefined) continue;
+      const row = this.getRow(representative.rowId);
+      if (this.draftReviewSubscriberCount > 0) {
+        reviewServerRows.set(key, row);
+        if (this.draftReviewRowStoresById.get(key)?.get().serverRow !== row) {
+          reviewChangedKeys.add(key);
+        }
+      }
+      const column = this.fieldColumnsById.get(representative.columnId);
+      let blockedReason: string | undefined;
+      if (typeof row !== "object" || row === null) {
+        blockedReason = BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE;
+      } else if (column === undefined) {
+        blockedReason = BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE;
+      } else {
+        const source = this.readCanonicalSourceValue(representative.rowId, row, column);
+        if (
+          source._tag === "Success" &&
+          ((draft !== undefined &&
+            safeEquivalentEditValue(column, draft.mine, source.value) === true) ||
+            (draft === undefined &&
+              retainedHistoryMineConverged(
+                nextUndoStack,
+                nextRedoStack,
+                key,
+                column,
+                source.value,
+              )))
+        ) {
+          nextDrafts ??= new Map(previousDrafts);
+          nextDrafts.delete(key);
+          convergedKeys.push(key);
+          changedKeys.push(key);
+          continue;
+        }
+        if (source._tag !== "Success" || !isDraftEditable(column, row, representative.mine)) {
+          blockedReason = BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE;
+        }
+      }
+      const nextDraft = setDraftBlockedReason(draft, blockedReason);
+      const transformedUndo = transformDraftHistoryCell(nextUndoStack, key, (entry) =>
+        setDraftBlockedReason(entry, blockedReason),
+      );
+      const transformedRedo = transformDraftHistoryCell(nextRedoStack, key, (entry) =>
+        setDraftBlockedReason(entry, blockedReason),
+      );
+      if (nextDraft !== draft) {
+        nextDrafts ??= new Map(previousDrafts);
+        if (nextDraft === undefined) nextDrafts.delete(key);
+        else nextDrafts.set(key, nextDraft);
+      }
+      if (
+        nextDraft !== draft ||
+        transformedUndo !== nextUndoStack ||
+        transformedRedo !== nextRedoStack
+      ) {
+        nextUndoStack = transformedUndo;
+        nextRedoStack = transformedRedo;
+        changedKeys.push(key);
+      }
+    }
+    if (
+      nextDrafts === undefined &&
+      nextUndoStack === this.undoStack &&
+      nextRedoStack === this.redoStack
+    ) {
+      if (reviewChangedKeys.size > 0) {
+        this.publishDraftReview(previousDrafts, reviewChangedKeys, reviewServerRows);
+      }
+      return false;
+    }
+    nextDrafts ??= new Map(previousDrafts);
+    const converged = new Set(convergedKeys);
+    const allRetainedEvidenceConverged =
+      converged.size > 0 && converged.size === this.draftEvidenceKeys.size;
+    const finalUndoStack = allRetainedEvidenceConverged
+      ? Object.freeze([])
+      : pruneDraftHistoryAdaptive(nextUndoStack, converged);
+    const finalRedoStack = allRetainedEvidenceConverged
+      ? Object.freeze([])
+      : pruneDraftHistoryAdaptive(nextRedoStack, converged);
+    if (allRetainedEvidenceConverged) {
+      this.blockedDraftKeys.clear();
+      this.validationDraftKeys.clear();
+      this.conflictDraftKeys.clear();
+    } else {
+      for (const key of changedKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
+    }
+    batch(() => {
+      this.setDraftMemory(nextDrafts, finalUndoStack, finalRedoStack, changedKeys);
+      if (this.draftReviewSubscriberCount > 0) {
+        this.publishDraftReview(
+          nextDrafts,
+          new Set([...changedKeys, ...reviewChangedKeys]),
+          reviewServerRows,
+        );
+      }
+      if (allRetainedEvidenceConverged && changedRowIds === undefined) {
+        this.traversalIndex.reconcileRows(undefined);
+        for (const key of this.cellStores.keys()) this.publishCell(key, nextDrafts);
+      } else {
+        for (const key of changedKeys) {
+          this.invalidateDraftCell(key, false);
+          this.publishCell(key, nextDrafts);
+        }
+      }
+      this.publishActivitySnapshot();
+    });
+    if (publishTraversalInvalidation) this.publishTraversalInvalidation();
+    if (allRetainedEvidenceConverged) {
+      for (const key of this.cellStores.keys()) this.releaseUnusedCellStore(key);
+    } else {
+      for (const key of changedKeys) this.releaseUnusedCellStore(key);
+    }
+    return changedKeys.length > 0;
+  };
+
+  private readonly syncBlockedDraftKey = (key: string, draft: DraftEntry | undefined): void => {
+    if (draft?.blockedReason === undefined) {
+      if (this.blockedDraftKeys.size > 0) this.blockedDraftKeys.delete(key);
+    } else this.blockedDraftKeys.add(key);
+    if (draft?.validationMessage === undefined) {
+      if (this.validationDraftKeys.size > 0) this.validationDraftKeys.delete(key);
+    } else this.validationDraftKeys.add(key);
+    if (draft?.conflict === undefined) {
+      if (this.conflictDraftKeys.size > 0) this.conflictDraftKeys.delete(key);
+    } else this.conflictDraftKeys.add(key);
+  };
+
+  private readonly syncDraftEvidenceKey = (key: string, memory: DraftMemoryState): void => {
+    const draft = memory.drafts.get(key);
+    const retained =
+      draft !== undefined ||
+      memory.undoStack.some((command) => command.patches.has(key)) ||
+      memory.redoStack.some((command) => command.patches.has(key));
+    const wasRetained = this.draftEvidenceKeys.has(key);
+    if (retained === wasRetained) return;
+    const rowId = draft?.rowId ?? parseCellKey(key)?.rowId;
+    if (rowId === undefined) return;
+    if (retained) {
+      this.draftEvidenceKeys.add(key);
+      const rowKeys = this.draftKeysByRowId.get(rowId);
+      if (rowKeys === undefined) this.draftKeysByRowId.set(rowId, key);
+      else if (typeof rowKeys === "string") {
+        if (rowKeys !== key) this.draftKeysByRowId.set(rowId, new Set([rowKeys, key]));
+      } else rowKeys.add(key);
+      return;
+    }
+    this.draftEvidenceKeys.delete(key);
+    const rowKeys = this.draftKeysByRowId.get(rowId);
+    if (typeof rowKeys === "string") {
+      if (rowKeys === key) this.draftKeysByRowId.delete(rowId);
+      return;
+    }
+    rowKeys?.delete(key);
+    if (rowKeys?.size === 0) this.draftKeysByRowId.delete(rowId);
+    else if (rowKeys?.size === 1) {
+      const remaining = rowKeys.values().next().value;
+      if (remaining !== undefined) this.draftKeysByRowId.set(rowId, remaining);
+    }
+  };
+
   private readonly getCellProjection = (key: string): BrunoTableCellEditProjection => {
     const store = this.cellStores.get(key);
     if (store !== undefined) return store.get();
-    return this.draftStore.get().get(key)?.projection ?? IDLE_CELL;
+    const draft = this.draftStore.get().get(key);
+    return draft === undefined ? IDLE_CELL : this.getDraftProjection(draft);
   };
 
   private readonly createCellProjection = (
@@ -1082,12 +2724,21 @@ export class BrunoTableCellEditRuntime {
     drafts = this.draftStore.get(),
   ): BrunoTableCellEditProjection => {
     const draft = drafts.get(key);
-    if (this.activeCellKey !== key) return draft?.projection ?? IDLE_CELL;
+    if (this.activeCellKey !== key)
+      return draft === undefined ? IDLE_CELL : this.getDraftProjection(draft);
     return Object.freeze({
       active: true,
       hasDraft: draft !== undefined,
-      ...(draft === undefined ? {} : { draft: draft.value }),
+      ...(draft === undefined ? {} : { draft: draft.mine }),
     });
+  };
+
+  private readonly getDraftProjection = (draft: DraftEntry): BrunoTableCellEditProjection => {
+    const cached = this.draftProjectionCache.get(draft);
+    if (cached !== undefined) return cached;
+    const projection = Object.freeze({ active: false, hasDraft: true, draft: draft.mine });
+    this.draftProjectionCache.set(draft, projection);
+    return projection;
   };
 
   private readonly installCellStore = (key: string): Store<BrunoTableCellEditProjection> => {
@@ -1116,11 +2767,11 @@ export class BrunoTableCellEditRuntime {
     this.cellStores.delete(key);
   };
 
-  private readonly invalidateDraftCell = (key: string): void => {
+  private readonly invalidateDraftCell = (key: string, publish = true): void => {
     const identity = parseCellKey(key);
     if (identity !== undefined) {
       this.traversalIndex.invalidateCell(identity.rowId, identity.columnId);
-      this.publishTraversalInvalidation();
+      if (publish) this.publishTraversalInvalidation();
     }
   };
 
@@ -1141,67 +2792,128 @@ function indexFieldColumns(
 
 function reconcileDraftsForColumns(
   drafts: ReadonlyMap<string, DraftEntry>,
-  previousColumns: ReadonlyMap<string, CompiledFieldColumn>,
-  nextColumns: ReadonlyMap<string, CompiledFieldColumn>,
+  context: DraftColumnReconciliationContext,
 ): Readonly<{ readonly drafts: ReadonlyMap<string, DraftEntry>; readonly changedKeys: string[] }> {
+  if (!context.draftChangesRequired) {
+    return Object.freeze({ drafts, changedKeys: [] });
+  }
   let nextDrafts: Map<string, DraftEntry> | undefined;
   const changedKeys: string[] = [];
   for (const [key, draft] of drafts) {
-    const identity = parseCellKey(key);
-    const previousColumn =
-      identity === undefined ? undefined : previousColumns.get(identity.columnId);
-    const nextColumn = identity === undefined ? undefined : nextColumns.get(identity.columnId);
-    if (
-      nextColumn === undefined ||
-      nextColumn.isEditable === undefined ||
-      nextColumn.isEditable === false ||
-      previousColumn?.field !== nextColumn.field
-    ) {
+    const nextDraft = reconcileDraftEntryForColumns(key, draft, context, true);
+    if (nextDraft === undefined) {
       nextDrafts ??= new Map(drafts);
       nextDrafts.delete(key);
       changedKeys.push(key);
       continue;
     }
-    if (
-      previousColumn?.blankValue !== undefined &&
-      Object.is(draft.value, previousColumn.blankValue.value)
-    ) {
-      if (
-        nextColumn.blankValue !== undefined &&
-        Object.is(previousColumn.blankValue.value, nextColumn.blankValue.value)
-      ) {
-        continue;
-      }
-      nextDrafts ??= new Map(drafts);
-      nextDrafts.delete(key);
-      changedKeys.push(key);
-      continue;
-    }
-    if (
-      previousColumn?.semantics.decodeRuntimeAuthority ===
-      nextColumn.semantics.decodeRuntimeAuthority
-    ) {
-      continue;
-    }
-    const decoded = nextColumn.semantics.decodeRuntime(draft.value);
-    if (decoded._tag === "Failure") {
-      nextDrafts ??= new Map(drafts);
-      nextDrafts.delete(key);
-      changedKeys.push(key);
-      continue;
-    }
-    if (Object.is(decoded.value, draft.value)) continue;
+    if (nextDraft === draft) continue;
     nextDrafts ??= new Map(drafts);
-    nextDrafts.set(
-      key,
-      Object.freeze({
-        value: decoded.value,
-        projection: Object.freeze({ active: false, hasDraft: true, draft: decoded.value }),
-      }),
-    );
+    nextDrafts.set(key, nextDraft);
     changedKeys.push(key);
   }
   return Object.freeze({ drafts: nextDrafts ?? drafts, changedKeys });
+}
+
+function reconcileDraftEntryForColumns(
+  key: string,
+  draft: DraftEntry,
+  context: DraftColumnReconciliationContext,
+  refreshPermission: boolean,
+): DraftEntry | undefined {
+  const plan = context.plans.get(draft.columnId);
+  if (plan === undefined || plan.kind === "drop") return undefined;
+  if (plan.checkConvergence) context.semanticKeys.add(key);
+  let decodedDraft = draft;
+  if (plan.transformValues) {
+    const cached = context.migratedValues.get(draft);
+    if (cached === null) return undefined;
+    if (cached !== undefined) decodedDraft = cached;
+    else {
+      const { previousColumn, nextColumn } = plan;
+      const decodedBase = reconcileDraftValueForColumns(draft.base, previousColumn, nextColumn);
+      const decodedMine = reconcileDraftValueForColumns(draft.mine, previousColumn, nextColumn);
+      const decodedConflict =
+        draft.conflict === undefined
+          ? undefined
+          : reconcileDraftValueForColumns(draft.conflict.server, previousColumn, nextColumn);
+      if (
+        decodedBase._tag === "Failure" ||
+        decodedMine._tag === "Failure" ||
+        decodedConflict?._tag === "Failure"
+      ) {
+        context.migratedValues.set(draft, null);
+        return undefined;
+      }
+      const nextConflict =
+        draft.conflict === undefined || decodedConflict === undefined
+          ? draft.conflict
+          : Object.is(decodedConflict.value, draft.conflict.server)
+            ? draft.conflict
+            : Object.freeze({ ...draft.conflict, server: decodedConflict.value });
+      decodedDraft =
+        Object.is(decodedBase.value, draft.base) &&
+        Object.is(decodedMine.value, draft.mine) &&
+        nextConflict === draft.conflict
+          ? draft
+          : Object.freeze({
+              ...draft,
+              base: decodedBase.value,
+              mine: decodedMine.value,
+              ...(nextConflict === undefined ? {} : { conflict: nextConflict }),
+            });
+      context.migratedValues.set(draft, decodedDraft);
+    }
+  }
+  if (!refreshPermission || !plan.refreshPermission) return decodedDraft;
+  const { nextColumn } = plan;
+  const row = getDraftColumnReconciliationRow(context, draft.rowId);
+  const blockedReason =
+    typeof row !== "object" || row === null
+      ? BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE
+      : isDraftEditable(nextColumn, row, decodedDraft.mine)
+        ? undefined
+        : BRUNO_TABLE_CELL_EDIT_PERMISSION_MESSAGE;
+  return setDraftBlockedReason(decodedDraft, blockedReason);
+}
+
+function getDraftColumnReconciliationRow(
+  context: DraftColumnReconciliationContext,
+  rowId: string,
+): unknown {
+  if (context.rows.has(rowId)) return context.rows.get(rowId);
+  const row = context.getRow(rowId);
+  context.rows.set(rowId, row);
+  return row;
+}
+
+function reconcileDraftValueForColumns(
+  value: unknown,
+  previousColumn: CompiledFieldColumn,
+  nextColumn: CompiledFieldColumn,
+): CanonicalSourceValue {
+  if (
+    previousColumn.blankValue !== undefined &&
+    Object.is(value, previousColumn.blankValue.value)
+  ) {
+    return nextColumn.blankValue !== undefined &&
+      Object.is(previousColumn.blankValue.value, nextColumn.blankValue.value)
+      ? Object.freeze({ _tag: "Success", value })
+      : Object.freeze({ _tag: "Failure" });
+  }
+  if (
+    previousColumn.semantics.decodeRuntimeAuthority === nextColumn.semantics.decodeRuntimeAuthority
+  ) {
+    return Object.freeze({ _tag: "Success", value });
+  }
+  try {
+    const decoded = nextColumn.semantics.decodeRuntime(value);
+    return decoded._tag === "Success"
+      ? Object.freeze({ _tag: "Success", value: decoded.value })
+      : Object.freeze({ _tag: "Failure" });
+  } catch {
+    return Object.freeze({ _tag: "Failure" });
+  }
 }
 
 function isCompatibleActiveColumn(

@@ -160,6 +160,33 @@ const validEditableClient = (
 );
 void validEditableClient;
 
+const editablePropsWithoutMode = {
+  tableId: "TABLE_ID_JSX_CONSUMER_OWNED_EDIT_MODE",
+  columns,
+  initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+  clientSource,
+  getRowId: (row: Row) => row.id,
+  editable: true,
+  getRowVersion: (row: Row) => row.revision,
+  onSaveEdits: () => Promise.resolve(),
+} as const;
+const invalidControlledEditMode = {
+  ...editablePropsWithoutMode,
+  // @ts-expect-error Edit Mode is owned by the end user inside BrunoTable.
+  editMode: "batch",
+} satisfies BrunoTableClientProps<Row, typeof columns, bigint>;
+const invalidInitialEditMode = {
+  ...editablePropsWithoutMode,
+  // @ts-expect-error Consumers cannot provide an initial Edit Mode.
+  initialEditMode: "batch",
+} satisfies BrunoTableClientProps<Row, typeof columns, bigint>;
+const invalidEditModeCallback = {
+  ...editablePropsWithoutMode,
+  // @ts-expect-error Consumers cannot control Edit Mode changes.
+  onEditModeChange: () => undefined,
+} satisfies BrunoTableClientProps<Row, typeof columns, bigint>;
+void [invalidControlledEditMode, invalidInitialEditMode, invalidEditModeCallback];
+
 const invalidEditableWithoutVersion = (
   <BrunoTableClient
     tableId="TABLE_ID_JSX_EDITABLE_WITHOUT_VERSION"
