@@ -434,11 +434,21 @@ test("Reset preserves the owning table's sorting and Row Selection state", async
 
 test("Reset Review preserves authentic source rows for compiled presentation", async () => {
   class PrototypeRow {
+    readonly #prefix = "Rendered";
+
     public constructor(
       public readonly id: string,
       public readonly name: string,
       public readonly revision: bigint,
     ) {}
+
+    public render(value: string): string {
+      return `${this.#prefix} ${value}`;
+    }
+
+    public className(value: string): string {
+      return `${this.#prefix.toLowerCase()}-${value}`;
+    }
   }
   const formattedColumns = [
     {
@@ -449,11 +459,9 @@ test("Reset Review preserves authentic source rows for compiled presentation", a
       cellAlign: "end",
       isEditable: true,
       cellRenderer: ({ row, value }: { readonly row: PrototypeRow; readonly value: string }) =>
-        row instanceof PrototypeRow && row.name === value
-          ? `Rendered ${row.name}`
-          : "Lost projection",
-      cellClassName: ({ row }: { readonly row: PrototypeRow }) =>
-        row instanceof PrototypeRow ? `source-highlight-${row.name}` : "lost-prototype",
+        row.render(value),
+      cellClassName: ({ row, value }: { readonly row: PrototypeRow; readonly value: string }) =>
+        row.className(value),
     },
   ] satisfies BrunoTableColumns<PrototypeRow>;
   const prototypeRows = [new PrototypeRow("ada", "Ada", 1n)] as const;
@@ -495,15 +503,14 @@ test("Reset Review preserves authentic source rows for compiled presentation", a
     .element()
     .closest<HTMLElement>("[role=gridcell]");
   expect(serverValue).not.toBeNull();
-  expect(serverValue?.className).toContain("source-highlight");
+  expect(serverValue?.className).toContain("rendered-Ada");
   expect(serverValue?.className).toContain("text-end");
   expect(getComputedStyle(serverValue!).textAlign).toBe("end");
   const mineValue = review
     .getByRole("gridcell", { name: "Rendered Augusta", exact: true })
     .element()
     .closest<HTMLElement>("[role=gridcell]");
-  expect(mineValue?.className).toContain("source-highlight-Augusta");
-  expect(review.element().textContent).not.toContain("Lost projection");
+  expect(mineValue?.className).toContain("rendered-Augusta");
 });
 
 test("Reset Review applies a row-aware source value formatter to Server and Yours", async () => {
@@ -515,7 +522,7 @@ test("Reset Review applies a row-aware source value formatter to Server and Your
       valueType: "text",
       isEditable: true,
       valueFormatter: ({ row, value }: { readonly row: Row; readonly value: string }) =>
-        row.name === value ? `Formatted ${row.name}` : "Mismatched projection",
+        `Formatted ${value} for ${row.id}`,
     },
   ] satisfies BrunoTableColumns<Row>;
   const screen = await render(
@@ -541,12 +548,11 @@ test("Reset Review applies a row-aware source value formatter to Server and Your
 
   const review = screen.getByRole("alertdialog", { name: "Reset Review" }).getByRole("grid");
   await expect
-    .element(review.getByRole("gridcell", { name: "Formatted Ada", exact: true }))
+    .element(review.getByRole("gridcell", { name: "Formatted Ada for ada", exact: true }))
     .toBeVisible();
   await expect
-    .element(review.getByRole("gridcell", { name: "Formatted Augusta", exact: true }))
+    .element(review.getByRole("gridcell", { name: "Formatted Augusta for ada", exact: true }))
     .toBeVisible();
-  expect(review.element().textContent).not.toContain("Mismatched projection");
 });
 
 test("keeps consumer serverText and mineText fields on their configured presentation path", async () => {

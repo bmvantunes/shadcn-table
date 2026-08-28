@@ -900,7 +900,7 @@ function redoHistoryMineConverged(
   column: CompiledFieldColumn,
   sourceValue: unknown,
 ): boolean {
-  for (let index = redoStack.length - 1; index >= 0; index -= 1) {
+  for (let index = 0; index < redoStack.length; index += 1) {
     const command = redoStack[index];
     if (command === undefined) continue;
     const patch = command.patches.get(key);
@@ -1514,6 +1514,10 @@ export class BrunoTableCellEditRuntime {
     const affectedKeys = new Set([...changedKeys, ...invalidatedHistoryKeys]);
     const nextUndoStack = pruneDraftHistory(this.undoStack, invalidatedHistoryKeys);
     const nextRedoStack = pruneDraftHistory(this.redoStack, invalidatedHistoryKeys);
+    const reviewKeys =
+      this.draftReviewSubscriberCount === 0
+        ? affectedKeys
+        : new Set([...affectedKeys, ...this.draftReviewRowsById.keys()]);
     const activeSession = this.actor.getSnapshot().context.session;
     const nextActiveColumn =
       activeSession === undefined ? undefined : nextFieldColumns.get(activeSession.column.columnId);
@@ -1537,15 +1541,16 @@ export class BrunoTableCellEditRuntime {
         this.setDraftMemory(nextDrafts, nextUndoStack, nextRedoStack, affectedKeys);
       }
       for (const key of affectedKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
+      if (reviewKeys.size > 0) this.publishDraftReview(nextDrafts, reviewKeys);
       if (affectedKeys.size === 0) return;
-      this.publishDraftReview(nextDrafts, affectedKeys);
       this.publishActivitySnapshot();
       for (const key of affectedKeys) {
-        this.invalidateDraftCell(key);
+        this.invalidateDraftCell(key, false);
         this.publishCell(key, nextDrafts);
         this.releaseUnusedCellStore(key);
       }
     });
+    if (affectedKeys.size > 0) this.publishTraversalInvalidation();
   };
 
   public readonly commitActiveCandidate = (): boolean => {
@@ -2102,17 +2107,6 @@ export class BrunoTableCellEditRuntime {
     const reviewVersion = this.draftReviewVersion;
     const canonical = this.readCanonicalSourceValue(draft.rowId, serverRow, column);
     const projectedSource = serverRow ?? draft.baseRow;
-    const projectedRow = Object.freeze(
-      Object.create(Object.getPrototypeOf(projectedSource), {
-        ...Object.getOwnPropertyDescriptors(projectedSource),
-        [draft.field]: {
-          configurable: true,
-          enumerable: true,
-          value: draft.mine,
-          writable: true,
-        },
-      }) as object,
-    );
     const reviewRow: BrunoTableCellEditDraftReviewRow = Object.freeze({
       id,
       reviewVersion,
@@ -2137,7 +2131,7 @@ export class BrunoTableCellEditRuntime {
         (draft.conflict === undefined ? "Draft" : "Conflict"),
       column,
       serverRow,
-      projectedRow,
+      projectedRow: projectedSource,
       serverNow: canonical._tag === "Success" ? canonical.value : undefined,
       blockedReason: draft.blockedReason,
     });
@@ -2157,13 +2151,12 @@ export class BrunoTableCellEditRuntime {
       return undefined;
     }
     const candidate = this.candidateStore.get();
-    const evaluation = evaluateCandidate(
-      session,
-      candidate.rawText,
-      candidate.nativeInvalid,
-      candidate.kind === "blank" ? "blank" : "scalar",
-    );
-    const candidateInvalid = evaluation.kind === "invalid";
+    const candidateInvalid = session.invalidMessage !== undefined || candidate.nativeInvalid;
+    const candidateStatus = session.rowMissing
+      ? BRUNO_TABLE_CELL_EDIT_ROW_MISSING_MESSAGE
+      : (session.permissionMessage ??
+        session.invalidMessage ??
+        (candidate.nativeInvalid ? "Enter a valid number." : "Active candidate"));
     const activeDraft: DraftEntry = Object.freeze({
       rowId: session.rowId,
       columnId: session.column.columnId,
@@ -2171,18 +2164,16 @@ export class BrunoTableCellEditRuntime {
       baseRow: draft?.baseRow ?? session.baseRow,
       expectedVersion: draft?.expectedVersion ?? session.expectedVersion,
       base: draft?.base ?? session.baseValue,
-      mine: evaluation.kind === "accepted" ? evaluation.value : (draft?.mine ?? session.before),
+      mine: draft?.mine ?? session.before,
       ...(draft?.blockedReason === undefined ? {} : { blockedReason: draft.blockedReason }),
     });
     const row = this.createDraftReviewRow(id, activeDraft);
     if (row === undefined) return undefined;
     return Object.freeze({
       ...row,
-      status:
-        evaluation.kind === "invalid"
-          ? evaluation.message
-          : (session.invalidMessage ?? "Active candidate"),
-      ...(candidateInvalid ? { candidateText: candidate.rawText, candidateInvalid: true } : {}),
+      status: candidateStatus,
+      candidateText: candidate.rawText,
+      ...(candidateInvalid ? { candidateInvalid: true } : {}),
     });
   };
 

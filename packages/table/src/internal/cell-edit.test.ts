@@ -205,6 +205,26 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.redoBatchDraft()).toBe(false);
   });
 
+  it("prunes redo history when the source reaches the chronologically latest Mine", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ redoCount: 2 });
+
+    current = Object.freeze({ ...row, score: 8 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ redoCount: 0 });
+    expect(runtime.redoBatchDraft()).toBe(false);
+  });
+
   it("does not record a Batch command for distinct but semantically equivalent Mine values", () => {
     type ObjectRow = Readonly<{ readonly id: string; readonly value: Readonly<{ id: string }> }>;
     const objectRow: ObjectRow = Object.freeze({ id: "object-row", value: { id: "base" } });
@@ -364,6 +384,78 @@ describe("BrunoTable Cell Edit Session", () => {
     unsubscribeRowA();
     unsubscribeRowB();
     unsubscribeMembership();
+  });
+
+  it("refreshes observed Reset Review rows after compatible presentation changes", () => {
+    type TextRow = Readonly<{ readonly id: string; readonly value: string }>;
+    const source: TextRow = Object.freeze({ id: "row", value: "server" });
+    const makeColumns = (headerName: string) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName,
+          valueType: "text",
+          isEditable: true,
+          valueFormatter: ({ value }: { readonly value: string }) => `${headerName}:${value}`,
+        },
+      ] satisfies BrunoTableColumns<TextRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns("Before"),
+      getRow: () => source,
+    });
+    expect(runtime.start(source.id, "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("mine")).toBe(true);
+    const membershipListener = vi.fn();
+    const unsubscribe = runtime.subscribeDraftReview(membershipListener);
+
+    runtime.reconcileColumns(makeColumns("After"));
+
+    expect(membershipListener).toHaveBeenCalledOnce();
+    expect(runtime.getDraftReviewSourceSnapshot()[0]?.columnLabel).toBe("After");
+    expect(runtime.getDraftReviewSourceSnapshot()[0]?.getSnapshot().column.headerName).toBe(
+      "After",
+    );
+    unsubscribe();
+  });
+
+  it("publishes one traversal invalidation for a multi-draft column reconcile", () => {
+    const liveRows = new Map<string, Row>([
+      ["row-a", Object.freeze({ ...row, id: "row-a" })],
+      ["row-b", Object.freeze({ ...row, id: "row-b" })],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row-a",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-a")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 7,
+        },
+        {
+          rowId: "row-b",
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: liveRows.get("row-b")!,
+          expectedVersion: 1n,
+          base: 4,
+          mine: 8,
+        },
+      ]),
+    ).toBe(true);
+    const listener = vi.fn();
+    runtime.subscribeTraversalInvalidation(listener);
+
+    runtime.reconcileColumns(columns.filter((column) => column.columnId !== "COL_ID_SCORE"));
+
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it("bounds Batch history without copying the complete draft store", () => {
@@ -2196,5 +2288,129 @@ describe("BrunoTable Cell Edit Session", () => {
 
     runtime.reconcileColumns(makeColumns("c", true));
     expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+  });
+
+  it("drops a draft when a replacement runtime decoder throws", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    const makeColumns = (throws: boolean) => {
+      const decodeRuntime = (input: unknown) => {
+        if (throws) throw new Error("consumer decoder escaped");
+        return { _tag: "Success", value: String(input) } as const;
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: {
+            codecId: throws ? "test/throwing-decoder" : "test/stable-decoder",
+            codecVersion: 1,
+            filterFamily: "text",
+            editorFamily: "text",
+            cellAlign: "start",
+            editorLayout: "inline",
+            defaultWidth: 120,
+            decodeRuntime,
+            equivalent: Object.is,
+            compare: () => 0 as const,
+            formatCanonicalText: String,
+            parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+            formatDisplay: String,
+            encodePersisted: String,
+            decodePersisted: decodeRuntime,
+          },
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    };
+    const source: CanonicalRow = { value: "base" };
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns(false),
+      getRow: () => source,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    expect(runtime.commit("mine")).toBe(true);
+
+    expect(() => runtime.reconcileColumns(makeColumns(true))).not.toThrow();
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+  });
+
+  it("reuses retained invalid-candidate evidence while Reset Review is observed", () => {
+    type ValidatedRow = Readonly<{ readonly value: number }>;
+    const validate = vi.fn(({ value }: { readonly value: number }) =>
+      value <= 10 ? undefined : "Too large.",
+    );
+    const validatedColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: true,
+        validate,
+      },
+    ] satisfies BrunoTableColumns<ValidatedRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: validatedColumns,
+      getRow: () => ({ value: 4 }),
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("11", false);
+    expect(runtime.commit("11")).toBe(false);
+    expect(validate).toHaveBeenCalledOnce();
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+
+    expect(validate).toHaveBeenCalledOnce();
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { candidateText: "11", candidateInvalid: true, status: "Too large." },
+    ]);
+    unsubscribe();
+  });
+
+  it("projects retained native-invalid and source-blocking candidate evidence", () => {
+    type CandidateRow = Readonly<{ readonly value: number }>;
+    let current: CandidateRow | undefined = { value: 4 };
+    const validate = vi.fn(() => undefined);
+    const candidateColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "number",
+        isEditable: ({ value }: { readonly value: number }) => value >= 0,
+        validate,
+      },
+    ] satisfies BrunoTableColumns<CandidateRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: candidateColumns,
+      getRow: () => current,
+    });
+    expect(runtime.start("row", "COL_ID_VALUE")).toBe(true);
+    runtime.updateActiveCandidate("not-a-number", true);
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+
+    expect(validate).not.toHaveBeenCalled();
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        candidateText: "not-a-number",
+        candidateInvalid: true,
+        status: "Enter a valid number.",
+      },
+    ]);
+
+    current = undefined;
+    runtime.reconcileActiveRow(new Set(["row"]));
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { status: "This row was removed from the server. Changes cannot be saved." },
+    ]);
+
+    current = { value: -1 };
+    runtime.reconcileActiveRow(new Set(["row"]));
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { status: "This cell is no longer editable." },
+    ]);
+    expect(validate).not.toHaveBeenCalled();
+    unsubscribe();
   });
 });

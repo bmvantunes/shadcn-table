@@ -90,6 +90,14 @@ describe("BrunoTable Edit Memory", () => {
     expect(openConflictReview).toHaveBeenCalledOnce();
     expect(save).toHaveBeenCalledOnce();
 
+    expect(memory.getCanResetSnapshot()).toBe(true);
+    expect(memory.getCanSaveSnapshot()).toBe(true);
+    expect(memory.getHotkeyAvailabilitySnapshot()).toMatchObject({ undo: true });
+    memory.dispose();
+    expect(memory.getCanResetSnapshot()).toBe(false);
+    expect(memory.getCanSaveSnapshot()).toBe(false);
+    expect(memory.getHotkeyAvailabilitySnapshot()).toEqual({ undo: false, redo: false });
+
     modeListener.mockClear();
     statusListener.mockClear();
     resetListener.mockClear();
@@ -105,7 +113,6 @@ describe("BrunoTable Edit Memory", () => {
     unregisterConflictReview();
     for (const unsubscribe of unsubscribers) unsubscribe();
     disconnect();
-    memory.dispose();
     cellEdit.dispose();
   });
 });

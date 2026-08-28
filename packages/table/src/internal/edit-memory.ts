@@ -196,6 +196,9 @@ export class BrunoTableEditMemoryRuntime {
     this.resetFocusFrame = undefined;
     this.modeStore.setState(() => INITIAL_MODE_SNAPSHOT);
     this.reconcileCellEditActivity(CLEAN_CELL_EDIT_ACTIVITY);
+    this.canResetStore.setState(() => false);
+    this.canSaveStore.setState(() => false);
+    this.hotkeyAvailabilityStore.setState(() => NO_EDIT_HOTKEYS);
     this.resetReviewStore.setState(() => CLOSED_RESET_REVIEW);
     this.unsubscribeDraftReview?.();
     this.unsubscribeDraftReview = undefined;
