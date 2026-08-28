@@ -859,6 +859,52 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftSnapshot("row-b", "COL_ID_SCORE")).toBe(8);
   });
 
+  it("bulk-prunes converged cells while preserving one divergent history patch", () => {
+    const liveRows = new Map<string, Row>();
+    const changes = Array.from({ length: 34 }, (_, index) => {
+      const rowId = `row-${String(index)}`;
+      const baseRow = Object.freeze({ ...row, id: rowId });
+      liveRows.set(rowId, baseRow);
+      return {
+        rowId,
+        columnId: "COL_ID_SCORE",
+        field: "score" as const,
+        baseRow,
+        expectedVersion: 1n,
+        base: 4,
+        mine: index < 33 ? 7 : 8,
+      };
+    });
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => liveRows.get(rowId),
+    });
+    runtime.setBatchHistoryEnabled(true);
+    const firstChange = changes[0];
+    if (firstChange === undefined) throw new Error("Expected a non-empty bulk gesture.");
+    expect(runtime.applyAcceptedDraftGesture([firstChange, ...changes.slice(1)])).toBe(true);
+    for (let index = 0; index < 33; index += 1) {
+      const rowId = `row-${String(index)}`;
+      liveRows.set(rowId, Object.freeze({ ...row, id: rowId, score: 7 }));
+    }
+
+    runtime.reconcileSourceRows(undefined);
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
+    expect(runtime.getRetainedDraftDependencyCellCount()).toBe(1);
+    for (let index = 0; index < 33; index += 1) {
+      expect(runtime.getDraftSnapshot(`row-${String(index)}`, "COL_ID_SCORE")).toBeUndefined();
+    }
+    expect(runtime.getDraftSnapshot("row-33", "COL_ID_SCORE")).toBe(8);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getRetainedDraftDependencyCellCount()).toBe(1);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    for (let index = 0; index < 33; index += 1) {
+      expect(runtime.getDraftSnapshot(`row-${String(index)}`, "COL_ID_SCORE")).toBeUndefined();
+    }
+    expect(runtime.getDraftSnapshot("row-33", "COL_ID_SCORE")).toBe(8);
+  });
+
   it("prunes redo evidence when its compiled column authority disappears", () => {
     const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
     runtime.setBatchHistoryEnabled(true);
@@ -1994,10 +2040,76 @@ describe("BrunoTable Cell Edit Session", () => {
     }
   });
 
+  it("prunes a draft that becomes semantically equal to its Base on column recompile", () => {
+    type CanonicalRow = Readonly<{ readonly value: string }>;
+    const liveRow: CanonicalRow = { value: "B" };
+    const decodeRuntime = (input: unknown) =>
+      typeof input === "string"
+        ? ({ _tag: "Success", value: input } as const)
+        : ({ _tag: "Failure", message: "Expected text." } as const);
+    const makeColumns = (caseInsensitive: boolean) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: {
+            codecId: "test/base-equivalence-convergence",
+            codecVersion: 1,
+            filterFamily: "text",
+            editorFamily: "text",
+            cellAlign: "start",
+            editorLayout: "inline",
+            defaultWidth: 120,
+            decodeRuntime,
+            equivalent: caseInsensitive
+              ? (left: string, right: string) => left.toLowerCase() === right.toLowerCase()
+              : Object.is,
+            compare: (left: string, right: string) => (left === right ? 0 : left < right ? -1 : 1),
+            formatCanonicalText: String,
+            parseCanonicalText: (text: string) => ({ _tag: "Success", value: text }) as const,
+            formatDisplay: String,
+            encodePersisted: String,
+            decodePersisted: decodeRuntime,
+          },
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<CanonicalRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns(false),
+      getRow: () => liveRow,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: "row",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: { value: "A" },
+          expectedVersion: 1,
+          base: "A",
+          mine: "a",
+        },
+      ]),
+    ).toBe(true);
+
+    runtime.reconcileColumns(makeColumns(true));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 0,
+      undoCount: 0,
+      redoCount: 0,
+    });
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+    expect(runtime.undoBatchDraft()).toBe(false);
+    runtime.dispose();
+  });
+
   it("publishes equivalence-only redo convergence and removes its retained dependency", () => {
     type CanonicalRow = Readonly<{ readonly value: string }>;
     const rows = new Map<string, CanonicalRow>([
-      ["drop", { value: "A" }],
+      ["drop", { value: "B" }],
       ["keep", { value: "source" }],
     ]);
     const decodeRuntime = (input: unknown) =>
@@ -2046,7 +2158,7 @@ describe("BrunoTable Cell Edit Session", () => {
           rowId: "drop",
           columnId: "COL_ID_VALUE",
           field: "value",
-          baseRow: rows.get("drop")!,
+          baseRow: { value: "A" },
           expectedVersion: 1,
           base: "A",
           mine: "a",
@@ -2088,8 +2200,19 @@ describe("BrunoTable Cell Edit Session", () => {
       getRow: () => rows.get("drop"),
     });
     singleRuntime.setBatchHistoryEnabled(true);
-    expect(singleRuntime.start("drop", "COL_ID_VALUE")).toBe(true);
-    expect(singleRuntime.commit("a")).toBe(true);
+    expect(
+      singleRuntime.applyAcceptedDraftGesture([
+        {
+          rowId: "drop",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: { value: "A" },
+          expectedVersion: 1,
+          base: "A",
+          mine: "a",
+        },
+      ]),
+    ).toBe(true);
     expect(singleRuntime.undoBatchDraft()).toBe(true);
     const activity = vi.fn();
     const singleCell = vi.fn();

@@ -889,6 +889,15 @@ function pruneDraftHistoryBulk(
   return changed ? Object.freeze(retained) : commands;
 }
 
+function pruneDraftHistoryAdaptive(
+  commands: readonly DraftHistoryCommand[],
+  convergedCellKeys: ReadonlySet<string>,
+): readonly DraftHistoryCommand[] {
+  return convergedCellKeys.size <= BRUNO_TABLE_DRAFT_HISTORY_PATCH_BUCKET_COUNT / 2
+    ? pruneDraftHistory(commands, convergedCellKeys)
+    : pruneDraftHistoryBulk(commands, convergedCellKeys);
+}
+
 function transformDraftHistoryCell(
   commands: readonly DraftHistoryCommand[],
   key: string,
@@ -1118,6 +1127,31 @@ function retainedHistoryMineConverged(
     const patch = command.patches.get(key);
     if (patch === undefined) continue;
     return safeEquivalentEditValue(column, patch.authoredValue, sourceValue) === true;
+  }
+  return false;
+}
+
+function retainedHistoryMineMatchesBase(
+  undoStack: readonly DraftHistoryCommand[],
+  redoStack: readonly DraftHistoryCommand[],
+  key: string,
+  column: CompiledFieldColumn,
+): boolean {
+  for (let index = 0; index < redoStack.length; index += 1) {
+    const patch = redoStack[index]?.patches.get(key);
+    if (patch === undefined) continue;
+    return (
+      patch.after !== undefined &&
+      safeEquivalentEditValue(column, patch.after.mine, patch.after.base) === true
+    );
+  }
+  for (let index = undoStack.length - 1; index >= 0; index -= 1) {
+    const patch = undoStack[index]?.patches.get(key);
+    if (patch === undefined) continue;
+    return (
+      patch.after !== undefined &&
+      safeEquivalentEditValue(column, patch.after.mine, patch.after.base) === true
+    );
   }
   return false;
 }
@@ -1731,7 +1765,10 @@ export class BrunoTableCellEditRuntime {
   ): BrunoTableCellEditTraversalDestination | undefined =>
     this.traversalIndex.findRange(range, rowId, columnId, direction);
 
-  public readonly reconcileColumns = (columns: readonly CompiledColumn[]): void => {
+  public readonly reconcileColumns = (
+    columns: readonly CompiledColumn[],
+    getRow: (rowId: string) => unknown = this.getRow,
+  ): void => {
     if (this.columns === columns) return;
     const previousFieldColumns = this.fieldColumnsById;
     this.canonicalSourceValueCache = new WeakMap();
@@ -1741,7 +1778,7 @@ export class BrunoTableCellEditRuntime {
     const reconciliation = createDraftColumnReconciliationContext(
       previousFieldColumns,
       nextFieldColumns,
-      this.getRow,
+      getRow,
     );
     const { drafts: migratedDrafts, changedKeys: migratedDraftKeys } = reconcileDraftsForColumns(
       previousDrafts,
@@ -1762,14 +1799,18 @@ export class BrunoTableCellEditRuntime {
       const row = getDraftColumnReconciliationRow(reconciliation, representative.rowId);
       const source = readCanonicalSourceValueFromRawRow(row, column);
       reconciledCanonicalSources.set(key, source);
-      if (
+      const mineMatchesBase =
+        column !== undefined &&
+        (draft !== undefined
+          ? safeEquivalentEditValue(column, draft.mine, draft.base) === true
+          : retainedHistoryMineMatchesBase(nextUndoStack, nextRedoStack, key, column));
+      const sourceConverged =
         column !== undefined &&
         source._tag === "Success" &&
-        ((draft !== undefined &&
-          safeEquivalentEditValue(column, draft.mine, source.value) === true) ||
-          (draft === undefined &&
-            retainedHistoryMineConverged(nextUndoStack, nextRedoStack, key, column, source.value)))
-      ) {
+        (draft !== undefined
+          ? safeEquivalentEditValue(column, draft.mine, source.value) === true
+          : retainedHistoryMineConverged(nextUndoStack, nextRedoStack, key, column, source.value));
+      if (mineMatchesBase || sourceConverged) {
         convergedKeys.add(key);
       }
     }
@@ -1777,8 +1818,8 @@ export class BrunoTableCellEditRuntime {
       const prunedDrafts = new Map(nextDrafts);
       for (const key of convergedKeys) prunedDrafts.delete(key);
       nextDrafts = prunedDrafts;
-      nextUndoStack = pruneDraftHistoryBulk(nextUndoStack, convergedKeys);
-      nextRedoStack = pruneDraftHistoryBulk(nextRedoStack, convergedKeys);
+      nextUndoStack = pruneDraftHistoryAdaptive(nextUndoStack, convergedKeys);
+      nextRedoStack = pruneDraftHistoryAdaptive(nextRedoStack, convergedKeys);
     }
     const changedDraftKeys = new Set(migratedDraftKeys);
     for (const key of convergedKeys) {
@@ -2574,8 +2615,8 @@ export class BrunoTableCellEditRuntime {
     }
     nextDrafts ??= new Map(previousDrafts);
     const converged = new Set(convergedKeys);
-    const finalUndoStack = pruneDraftHistory(nextUndoStack, converged);
-    const finalRedoStack = pruneDraftHistory(nextRedoStack, converged);
+    const finalUndoStack = pruneDraftHistoryAdaptive(nextUndoStack, converged);
+    const finalRedoStack = pruneDraftHistoryAdaptive(nextRedoStack, converged);
     for (const key of changedKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
     batch(() => {
       this.setDraftMemory(nextDrafts, finalUndoStack, finalRedoStack, changedKeys);

@@ -273,8 +273,6 @@ function BrunoTableClientInstance<
     reconcile();
     return runtime.subscribeRowChanges(reconcile);
   }, [cellEdit, runtime]);
-  useLayoutEffect(() => cellEdit?.reconcileColumns(compiledColumns), [cellEdit, compiledColumns]);
-
   useLayoutEffect(() => {
     const previouslyEnabled = previousRowSelectionEnabled.current;
     previousRowSelectionEnabled.current = rowSelectionEnabled;
@@ -325,10 +323,12 @@ function BrunoTableClientInstance<
       queryConfiguration,
       groupingProjectionActive,
     );
+    cellEdit?.reconcileColumns(compiledColumns, (rowId) => publication.rowSpace?.getRow(rowId));
     if (!groupingProjectionActive) {
       runtime.reconcile(publication, compiledColumns, queryConfiguration, groupRowsColumn.width);
     }
   }, [
+    cellEdit,
     compiledColumns,
     groupRowsColumn,
     props.clientSource,

@@ -3,7 +3,6 @@ import { bench, describe } from "vite-plus/test";
 import { BrunoTableCellEditRuntime, type BrunoTableCellEditDraftSnapshot } from "./cell-edit";
 import { assertBrunoTableBenchmarkBudget } from "./benchmark-budget";
 import { compileColumns } from "./compile-columns";
-import type { BrunoTableValueType } from "../public-types";
 
 const referenceFrameBudgetMs = 8.33;
 const warmupSampleCount = 2;
@@ -24,36 +23,6 @@ const compileBenchmarkColumns = (permission: true | false | typeof isEditable = 
 const columns = compileBenchmarkColumns();
 const equivalentColumns = [compileBenchmarkColumns(), compileBenchmarkColumns()] as const;
 const blockedColumns = compileBenchmarkColumns(false);
-const massConvergenceDecoder = (input: unknown) =>
-  typeof input === "string"
-    ? ({ _tag: "Success", value: input } as const)
-    : ({ _tag: "Failure", message: "Expected text." } as const);
-const massConvergenceValueType: BrunoTableValueType<string> = {
-  codecId: "bench/mass-history-convergence",
-  codecVersion: 1,
-  filterFamily: "text",
-  editorFamily: "text",
-  cellAlign: "start",
-  editorLayout: "inline",
-  defaultWidth: 120,
-  decodeRuntime: massConvergenceDecoder,
-  equivalent: Object.is,
-  compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
-  formatCanonicalText: String,
-  parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
-  formatDisplay: String,
-  encodePersisted: String,
-  decodePersisted: massConvergenceDecoder,
-};
-const massConvergenceColumns = compileColumns([
-  {
-    columnId: "COL_ID_VALUE",
-    field: "value",
-    headerName: "Value",
-    valueType: massConvergenceValueType,
-    isEditable: true,
-  },
-]);
 const changes = Array.from(
   { length: gestureCellCount },
   (_unused, index): BrunoTableCellEditDraftSnapshot =>
@@ -305,21 +274,21 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
     { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
   );
 
-  const massConvergenceSamples: number[] = [];
-  const massConvergenceTargets: BrunoTableCellEditRuntime[] = [];
+  const massSourceConvergenceSamples: number[] = [];
+  const massSourceConvergenceTargets: BrunoTableCellEditRuntime[] = [];
   bench(
-    "bulk-prunes 5,000 converged identities from 100 retained commands linearly",
+    "bulk-prunes one 5,000-cell source convergence from 100 retained commands linearly",
     () => {
-      const target = massConvergenceTargets.shift();
+      const target = massSourceConvergenceTargets.shift();
       if (target === undefined) {
-        throw new Error("Mass convergence benchmark exhausted its prepared fixture.");
+        throw new Error("Mass source-convergence benchmark exhausted its prepared fixture.");
       }
       const startedAt = performance.now();
-      target.reconcileColumns(massConvergenceColumns);
-      massConvergenceSamples.push(performance.now() - startedAt);
+      target.reconcileSourceRows(undefined);
+      massSourceConvergenceSamples.push(performance.now() - startedAt);
       assertBrunoTableBenchmarkBudget(
-        "5,000-identity retained-history column convergence",
-        massConvergenceSamples,
+        "5,000-identity retained-history source convergence",
+        massSourceConvergenceSamples,
         {
           budgetMs: 1_000,
           measuredSampleCount: 1,
@@ -338,12 +307,12 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
           });
           target.setBatchHistoryEnabled(true);
           populateRetainedHistory(target);
-          massConvergenceTargets.push(target);
+          massSourceConvergenceTargets.push(target);
         }
       },
       teardown: () => {
-        for (const target of massConvergenceTargets) target.dispose();
-        massConvergenceTargets.length = 0;
+        for (const target of massSourceConvergenceTargets) target.dispose();
+        massSourceConvergenceTargets.length = 0;
       },
       iterations: 1,
       time: 0,

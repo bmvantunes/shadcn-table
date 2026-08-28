@@ -74,6 +74,41 @@ function makeCanonicalTextColumns(lowercase: boolean): BrunoTableColumns<Row> {
   ] satisfies BrunoTableColumns<Row>;
 }
 
+function makeCaseSensitivityColumns(caseSensitive: boolean): BrunoTableColumns<Row> {
+  const decodeRuntime = (input: unknown) =>
+    typeof input === "string"
+      ? ({ _tag: "Success", value: input } as const)
+      : ({ _tag: "Failure", message: "Expected text." } as const);
+  const valueType: BrunoTableValueType<string> = {
+    codecId: "test/browser-case-sensitivity",
+    codecVersion: 1,
+    filterFamily: "text",
+    editorFamily: "text",
+    cellAlign: "start",
+    editorLayout: "inline",
+    defaultWidth: 120,
+    decodeRuntime,
+    equivalent: caseSensitive
+      ? Object.is
+      : (left, right) => left.toLowerCase() === right.toLowerCase(),
+    compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+    formatCanonicalText: String,
+    parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+    formatDisplay: String,
+    encodePersisted: String,
+    decodePersisted: decodeRuntime,
+  };
+  return [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType,
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<Row>;
+}
+
 test.afterEach(async () => {
   await cleanup();
   vi.restoreAllMocks();
@@ -296,6 +331,43 @@ test("keeps an open Reset Review in the replacement column value domain", async 
     review.element().querySelector('td[data-bruno-column-id="COL_ID_SERVER_NOW"]'),
   ).toHaveTextContent("ada");
   expect(save).not.toHaveBeenCalled();
+});
+
+test("reconciles simultaneous source and column replacements as one coherent snapshot", async () => {
+  const initialRows = [{ id: "ada", name: "base", revision: 1n }] as const;
+  const driftedRows = [{ id: "ada", name: "foo", revision: 2n }] as const;
+  const replacementRows = [{ id: "ada", name: "bar", revision: 3n }] as const;
+  const renderTable = (
+    activeColumns: BrunoTableColumns<Row>,
+    sourceRows: readonly Row[],
+    version: number,
+  ) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_COHERENT_SOURCE_COLUMNS"
+      columns={activeColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />
+  );
+  const screen = await render(renderTable(makeCaseSensitivityColumns(true), initialRows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_COHERENT_SOURCE_COLUMNS" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "FOO");
+  await userEvent.keyboard("{Enter}");
+
+  await screen.rerender(renderTable(makeCaseSensitivityColumns(true), driftedRows, 2));
+  await expect.element(grid.getByRole("gridcell", { name: "FOO", exact: true })).toBeVisible();
+
+  await screen.rerender(renderTable(makeCaseSensitivityColumns(false), replacementRows, 3));
+
+  await expect.element(grid.getByRole("gridcell", { name: "FOO", exact: true })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 });
 
 test("captures Row Version evidence through the latest extractor", async () => {
