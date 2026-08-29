@@ -175,6 +175,110 @@ describe("BrunoTableSaveOperationRuntime", () => {
     await expect(runInvalidHandler(() => hostile as never)).resolves.toBe("Hostile then accessor.");
   });
 
+  it("keeps rejected Cell Identities distinct when their delimiter encodings collide", async () => {
+    type CollisionRow = Readonly<{
+      readonly id: string;
+      readonly left: string;
+      readonly right: string;
+      readonly revision: bigint;
+    }>;
+    const collisionColumns = compileColumns([
+      {
+        columnId: "COL_ID_A\0COL_ID_B",
+        field: "left",
+        headerName: "Left",
+        valueType: "text",
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_B",
+        field: "right",
+        headerName: "Right",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const first = Object.freeze({ id: "a", left: "first", right: "", revision: 1n });
+    const second = Object.freeze({
+      id: "a\0COL_ID_A",
+      left: "",
+      right: "second",
+      revision: 1n,
+    });
+    const rows = new Map<string, CollisionRow>([
+      [first.id, first],
+      [second.id, second],
+    ]);
+    let rejectSave!: (reason: Error) => void;
+    let editMemory!: BrunoTableEditMemoryRuntime;
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns: collisionColumns,
+      getRow: (rowId) => rows.get(rowId),
+      getRowVersion: (candidate) => (candidate as CollisionRow).revision,
+      onCommitGesture: (changes) => editMemory.requestImmediateSave(changes),
+    });
+    editMemory = new BrunoTableEditMemoryRuntime();
+    const saveOperations = new BrunoTableSaveOperationRuntime(cellEdit, editMemory);
+    cellEdit.activate();
+    editMemory.activate();
+    disposers.push(
+      () => cellEdit.dispose(),
+      () => editMemory.dispose(),
+      saveOperations.activate(),
+      editMemory.connectCellEdit(cellEdit),
+      saveOperations.setHandler(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectSave = reject;
+          }),
+      ),
+    );
+
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: first.id,
+          columnId: "COL_ID_A\0COL_ID_B",
+          field: "left",
+          baseRow: first,
+          expectedVersion: first.revision,
+          base: first.left,
+          mine: "first-submitted",
+        },
+        {
+          rowId: second.id,
+          columnId: "COL_ID_B",
+          field: "right",
+          baseRow: second,
+          expectedVersion: second.revision,
+          base: second.right,
+          mine: "second-submitted",
+        },
+      ]),
+    ).toBe(true);
+    rows.set(first.id, Object.freeze({ ...first, left: "first-submitted", revision: 2n }));
+    cellEdit.reconcileSourceRows(new Set([first.id]));
+    rejectSave(new Error("One cell remained unconfirmed."));
+    await vi.waitFor(
+      () => {
+        expect(editMemory.getSaveFailureSnapshot().count).toBe(1);
+      },
+      { interval: 1 },
+    );
+
+    expect(editMemory.getSaveFailureSnapshot().operations[0]?.rows).toEqual([
+      {
+        rowId: second.id,
+        cells: [
+          {
+            columnId: "COL_ID_B",
+            field: "right",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("bounds rejected workflows without consuming pending-operation capacity", async () => {
     let editMemory!: BrunoTableEditMemoryRuntime;
     const cellEdit = new BrunoTableCellEditRuntime({

@@ -405,7 +405,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       columns,
       this.valueCache,
     );
-    this.publication = createPublication(
+    const publication = createPublication(
       sourceSnapshot,
       getRowId,
       columns,
@@ -414,7 +414,17 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.getRowId !== getRowId,
       this.valueCache,
     );
-    this.coherent = nextCoherent(this.coherent, this.publication);
+    const next = nextCoherent(this.coherent, publication);
+    const preciseChangedRowIds = deriveChangedRawRowIds(previousCoherent, next);
+    const changedRowIds =
+      preciseChangedRowIds?.size === 0 &&
+      (this.source.version !== sourceSnapshot.version ||
+        this.source.status !== sourceSnapshot.status)
+        ? undefined
+        : preciseChangedRowIds;
+    this.publication =
+      changedRowIds === undefined ? publication : Object.freeze({ ...publication, changedRowIds });
+    this.coherent = next;
     this.acceptEmptyCoherent();
     if (
       this.coherent !== undefined &&
@@ -668,6 +678,38 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       },
     });
   };
+}
+
+function deriveChangedRawRowIds<TRow>(
+  previous: ClientCoherentSnapshot<TRow> | undefined,
+  next: ClientCoherentSnapshot<TRow> | undefined,
+): ReadonlySet<BrunoTableRowId> | undefined {
+  if (previous === undefined || next === undefined) return undefined;
+  if (previous === next) return new Set();
+  const changed = new Set<BrunoTableRowId>();
+  const completeIdentityReconciliation = previous.identityResolver !== next.identityResolver;
+  const indexes = completeIdentityReconciliation
+    ? Array.from(
+        { length: Math.max(previous.rows.length, next.rows.length) },
+        (_unused, index) => index,
+      )
+    : [
+        ...next.changeFromPrevious.changedIndexes,
+        ...Array.from(
+          { length: Math.abs(previous.rows.length - next.rows.length) },
+          (_unused, offset) => Math.min(previous.rows.length, next.rows.length) + offset,
+        ),
+      ];
+  for (const index of indexes) {
+    const previousRowId = previous.rowIds.get(index);
+    const nextRowId = next.rowIds.get(index);
+    if (previousRowId === nextRowId && previous.rows.get(index) === next.rows.get(index)) {
+      continue;
+    }
+    if (previousRowId !== undefined) changed.add(previousRowId);
+    if (nextRowId !== undefined) changed.add(nextRowId);
+  }
+  return changed;
 }
 
 export type BrunoTableClientRowOrderChangeDetector = (

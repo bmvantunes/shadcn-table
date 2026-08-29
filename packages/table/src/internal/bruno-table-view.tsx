@@ -578,7 +578,9 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
       data-bruno-table={tableId}
       tabIndex={-1}
     >
-      <style>{SAVE_SUCCESS_KEYFRAMES}</style>
+      <style href="bruno-table-save-success" precedence="default">
+        {SAVE_SUCCESS_KEYFRAMES}
+      </style>
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
         <BrunoTableViewCommitDiagnosticProbe commitEvidence={compiledColumns} tableId={tableId} />
       ) : null}

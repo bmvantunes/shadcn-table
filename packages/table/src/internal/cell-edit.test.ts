@@ -3509,46 +3509,23 @@ describe("BrunoTable Cell Edit Session", () => {
       getRow: (rowId) => rowsById.get(rowId),
       getRowVersion: (candidate) => (candidate as Row).quantity,
     });
-    const changeSet = [row, second].map((candidate) => ({
-      rowId: candidate.id,
-      baseRow: candidate,
-      expectedVersion: candidate.quantity,
-      changes: [
-        {
-          columnId: "COL_ID_SCORE",
-          field: "score",
-          before: candidate.score,
-          after: 7,
-        },
-      ] as const,
-    })) as [
-      {
-        readonly rowId: string;
-        readonly baseRow: Row;
-        readonly expectedVersion: bigint;
-        readonly changes: readonly [
-          {
-            readonly columnId: "COL_ID_SCORE";
-            readonly field: "score";
-            readonly before: number;
-            readonly after: number;
-          },
-        ];
-      },
-      {
-        readonly rowId: string;
-        readonly baseRow: Row;
-        readonly expectedVersion: bigint;
-        readonly changes: readonly [
-          {
-            readonly columnId: "COL_ID_SCORE";
-            readonly field: "score";
-            readonly before: number;
-            readonly after: number;
-          },
-        ];
-      },
-    ];
+    const changeSet = Object.freeze(
+      [row, second].map((candidate) =>
+        Object.freeze({
+          rowId: candidate.id,
+          baseRow: candidate,
+          expectedVersion: candidate.quantity,
+          changes: Object.freeze([
+            Object.freeze({
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: candidate.score,
+              after: 7,
+            }),
+          ]),
+        }),
+      ),
+    ) as BrunoTableCellEditSaveChangeSet;
     expect(runtime.beginSaveOperation("operation-delta", changeSet, false)).toBe(true);
     runtime.rejectSave("operation-delta", changeSet, true);
     runtime.completeSaveOperation("operation-delta");
@@ -4174,6 +4151,34 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(onCommitGesture).not.toHaveBeenCalled();
   });
 
+  it("keeps Immediate save preflight closed after live edit permission is revoked", () => {
+    let editable = true;
+    const permissionColumns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        isEditable: () => editable,
+      },
+    ]);
+    const onCommit = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: permissionColumns,
+      getRow: () => row,
+      getRowVersion: () => row.quantity,
+      onCommit,
+    });
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const gesture = [onCommit.mock.calls[0]![0]] as BrunoTableCellEditChangeGesture;
+
+    editable = false;
+
+    expect(runtime.createImmediateSaveChangeSet(gesture)).toBeUndefined();
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+  });
+
   it("expires staggered rejected-cell success flashes independently", () => {
     let unsubscribeA = (): void => undefined;
     let unsubscribeB = (): void => undefined;
@@ -4361,6 +4366,88 @@ describe("BrunoTable Cell Edit Session", () => {
 
     expect(runtime.hasRejectedOperation("operation-0")).toBe(false);
     expect(runtime.getRetainedCellStoreCount()).toBe(0);
+  });
+
+  it("traverses changed rows once when sparse rejected operations overlap a large gesture", () => {
+    const rowCount = 5_000;
+    const rejectedCount = 128;
+    const rows = new Map<string, Row>(
+      Array.from({ length: rowCount }, (_, index) => {
+        const id = `row-${String(index)}`;
+        return [id, Object.freeze({ ...row, id })];
+      }),
+    );
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rows.get(rowId),
+    });
+    for (let index = 0; index < rejectedCount; index += 1) {
+      const current = rows.get(`row-${String(index)}`)!;
+      runtime.rejectSave(
+        `operation-${String(index)}`,
+        [
+          {
+            rowId: current.id,
+            baseRow: current,
+            expectedVersion: current.quantity,
+            changes: [
+              {
+                columnId: "COL_ID_SCORE",
+                field: "score",
+                before: current.score,
+                after: current.score + 1,
+              },
+            ],
+          },
+        ],
+        false,
+      );
+    }
+    class CountingSet extends Set<string> {
+      public iteratorCount = 0;
+
+      public override [Symbol.iterator](): SetIterator<string> {
+        this.iteratorCount += 1;
+        return super[Symbol.iterator]();
+      }
+    }
+    const changedRowIds = new CountingSet(rows.keys());
+
+    runtime.reconcileSourceRows(changedRowIds);
+
+    expect(changedRowIds.iteratorCount).toBeLessThanOrEqual(4);
+  });
+
+  it("retains rejected Batch drafts when their column schema changes after rejection", () => {
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => row.quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet()!;
+    expect(runtime.beginSaveOperation("rejected-batch", changeSet, true)).toBe(true);
+    runtime.rejectSave("rejected-batch", changeSet, false);
+    runtime.completeSaveOperation("rejected-batch");
+
+    runtime.reconcileColumns(columns.filter((column) => column.columnId !== "COL_ID_SCORE"));
+
+    expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBe(7);
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 1,
+      undoCount: 1,
+      blockedCount: 1,
+    });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        rowId: row.id,
+        columnId: "COL_ID_SCORE",
+        mine: 7,
+        blockedReason: expect.stringContaining("Changes cannot be saved"),
+      },
+    ]);
   });
 
   it("safely rebases an unchanged edited field onto the latest row and Row Version", () => {

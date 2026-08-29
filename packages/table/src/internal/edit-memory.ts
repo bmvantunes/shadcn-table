@@ -45,12 +45,9 @@ export type BrunoTableSaveFailureSnapshot = Readonly<{
     readonly message: string;
     readonly rows: readonly Readonly<{
       readonly rowId: string;
-      readonly expectedVersion: unknown;
       readonly cells: readonly Readonly<{
         readonly columnId: string;
         readonly field: string;
-        readonly before: unknown;
-        readonly after: unknown;
       }>[];
     }>[];
   }>[];
@@ -247,7 +244,6 @@ export class BrunoTableEditMemoryRuntime {
       readonly rowsById: Map<
         string,
         Readonly<{
-          readonly expectedVersion: unknown;
           readonly cellsByColumnId: Map<
             string,
             BrunoTableSaveFailureSnapshot["operations"][number]["rows"][number]["cells"][number]
@@ -456,15 +452,12 @@ export class BrunoTableEditMemoryRuntime {
           changeSet.map((row) => [
             row.rowId,
             Object.freeze({
-              expectedVersion: row.expectedVersion,
               cellsByColumnId: new Map(
                 row.changes.map((change) => [
                   change.columnId,
                   Object.freeze({
                     columnId: change.columnId,
                     field: change.field,
-                    before: change.before,
-                    after: change.after,
                   }),
                 ]),
               ),
@@ -895,7 +888,6 @@ export class BrunoTableEditMemoryRuntime {
               [...failure.rowsById].map(([rowId, row]) =>
                 Object.freeze({
                   rowId,
-                  expectedVersion: row.expectedVersion,
                   cells: Object.freeze([...row.cellsByColumnId.values()]),
                 }),
               ),

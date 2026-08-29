@@ -1570,7 +1570,14 @@ export class BrunoTableCellEditRuntime {
     const selectedDrafts = gesture.map((change) =>
       this.draftStore.get().get(cellKey(change.rowId, change.columnId)),
     );
-    if (selectedDrafts.some((draft) => draft === undefined)) return undefined;
+    if (
+      selectedDrafts.some(
+        (draft) =>
+          draft === undefined || draft.blockedReason !== undefined || draft.conflict !== undefined,
+      )
+    ) {
+      return undefined;
+    }
     const preflight = this.preflightSaveDrafts(selectedDrafts as DraftEntry[]);
     if (preflight === undefined) return undefined;
     return this.groupSavePreflightEntries(preflight);
@@ -2576,6 +2583,19 @@ export class BrunoTableCellEditRuntime {
         ?.get(identity.columnId)?.presentationColumn;
       if (presentationColumn !== undefined) {
         protectedPresentationColumns.set(key, presentationColumn);
+      }
+    }
+    for (const operationId of this.rejectedBatchOperationIds) {
+      const evidenceByRow = this.rejectedOperations.get(operationId);
+      if (evidenceByRow === undefined) continue;
+      for (const entry of flattenRejectedEvidence(evidenceByRow)) {
+        const presentationColumn = entry.valueAuthority.presentationColumn;
+        if (presentationColumn !== undefined) {
+          protectedPresentationColumns.set(
+            cellKey(entry.rowId, entry.columnId),
+            presentationColumn,
+          );
+        }
       }
     }
     const reconciliation = createDraftColumnReconciliationContext(
@@ -3940,22 +3960,24 @@ export class BrunoTableCellEditRuntime {
     const clearedConflicts = new Set<string>();
     const convergedBatchKeys = new Set<string>();
     let changed = false;
+    const changedRowsByOperation = new Map<string, Set<string>>();
+    if (changedRowIds !== undefined) {
+      for (const rowId of changedRowIds) {
+        for (const operationId of this.rejectedOperationIdsByRowId.get(rowId) ?? []) {
+          const rowIds = changedRowsByOperation.get(operationId) ?? new Set<string>();
+          rowIds.add(rowId);
+          changedRowsByOperation.set(operationId, rowIds);
+        }
+      }
+    }
     const operationIds =
-      changedRowIds === undefined
-        ? [...this.rejectedOperations.keys()]
-        : [
-            ...new Set(
-              [...changedRowIds].flatMap((rowId) => [
-                ...(this.rejectedOperationIdsByRowId.get(rowId) ?? []),
-              ]),
-            ),
-          ];
+      changedRowIds === undefined ? this.rejectedOperations.keys() : changedRowsByOperation.keys();
     for (const operationId of operationIds) {
       const evidenceByRow = this.rejectedOperations.get(operationId);
       if (evidenceByRow === undefined) continue;
       let operationChanged = false;
       const convergedKeys = new Set<string>();
-      const rowIds = changedRowIds ?? new Set(evidenceByRow.keys());
+      const rowIds = changedRowsByOperation.get(operationId) ?? evidenceByRow.keys();
       for (const rowId of rowIds) {
         const evidence = evidenceByRow.get(rowId);
         if (evidence === undefined) continue;

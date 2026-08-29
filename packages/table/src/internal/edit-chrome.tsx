@@ -470,7 +470,7 @@ const BrunoTableSaveFailureDetails = memo(function BrunoTableSaveFailureDetails(
               <ul className="mt-1 flex list-[circle] flex-col gap-1 ps-5">
                 {operation.rows.flatMap((row) =>
                   row.cells.map((cell) => (
-                    <li key={`${row.rowId}\0${cell.columnId}`}>
+                    <li key={JSON.stringify([row.rowId, cell.columnId])}>
                       Row {row.rowId}, column {cell.columnId} (field {cell.field}).
                     </li>
                   )),

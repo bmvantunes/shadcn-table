@@ -51,13 +51,10 @@ describe("BrunoTable Edit Memory", () => {
     const rows = [
       {
         rowId: "row-1",
-        expectedVersion: 1n,
         cells: [
           {
             columnId: "COL_ID_VALUE",
             field: "value",
-            before: "before",
-            after: "after",
           },
         ],
       },
@@ -83,6 +80,40 @@ describe("BrunoTable Edit Memory", () => {
 
     memory.dismissSaveFailures();
     expect(memory.getSaveFailureSnapshot()).toEqual({ count: 0, messages: [], operations: [] });
+  });
+
+  it("retains only rendered identity evidence for rejected-operation details", () => {
+    const memory = new BrunoTableEditMemoryRuntime();
+    disposers.push(() => memory.dispose());
+    memory.activate();
+    memory.recordSaveFailure("operation-1", new Error("Save failed."), [
+      {
+        rowId: "row-1",
+        baseRow: { id: "row-1" },
+        expectedVersion: { opaque: "version" },
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: { arbitrary: "before" },
+            after: { arbitrary: "after" },
+          },
+        ],
+      },
+    ]);
+
+    expect(memory.getSaveFailureSnapshot().operations).toEqual([
+      {
+        operationId: "operation-1",
+        message: "Save failed.",
+        rows: [
+          {
+            rowId: "row-1",
+            cells: [{ columnId: "COL_ID_VALUE", field: "value" }],
+          },
+        ],
+      },
+    ]);
   });
 
   it("prunes rejected details by Cell Identity without waking the compact summary", () => {
@@ -142,13 +173,10 @@ describe("BrunoTable Edit Memory", () => {
     expect(after.operations[0]?.rows).toEqual([
       {
         rowId: "row-2",
-        expectedVersion: 1n,
         cells: [
           {
             columnId: "COL_ID_VALUE",
             field: "value",
-            before: "before-2",
-            after: "after-2",
           },
         ],
       },

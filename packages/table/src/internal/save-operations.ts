@@ -272,14 +272,17 @@ export class BrunoTableSaveOperationRuntime {
     if (operation.actor.getSnapshot().value !== "rejected") return;
     this.publishCapacityAvailability();
     const remainingCells = this.cellEdit.getRejectedOperationCells(operation.operationId);
-    const remainingCellKeys = new Set(
-      remainingCells.map((cell) => `${cell.rowId}\0${cell.columnId}`),
-    );
+    const remainingColumnIdsByRowId = new Map<string, Set<string>>();
+    for (const cell of remainingCells) {
+      const columnIds = remainingColumnIdsByRowId.get(cell.rowId) ?? new Set<string>();
+      columnIds.add(cell.columnId);
+      remainingColumnIdsByRowId.set(cell.rowId, columnIds);
+    }
     this.editMemory.removeSaveFailureCells(
       operation.operationId,
       changeSet.flatMap((row) =>
         row.changes.flatMap((change) =>
-          remainingCellKeys.has(`${row.rowId}\0${change.columnId}`)
+          remainingColumnIdsByRowId.get(row.rowId)?.has(change.columnId) === true
             ? []
             : [Object.freeze({ rowId: row.rowId, columnId: change.columnId })],
         ),
