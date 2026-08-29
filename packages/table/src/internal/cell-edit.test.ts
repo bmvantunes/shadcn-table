@@ -223,6 +223,191 @@ describe("BrunoTable Cell Edit Session", () => {
     });
   });
 
+  it("reconciles a nullable Mine when the live source converges", () => {
+    type NullableRow = Readonly<{
+      readonly id: string;
+      readonly value: number | null | undefined;
+    }>;
+    for (const blankValue of [null, undefined] as const) {
+      let current: NullableRow = Object.freeze({
+        id: `nullable-live-${String(blankValue)}`,
+        value: 1,
+      });
+      const nullableColumns = compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "number",
+          isEditable: true,
+          blankValue,
+        },
+      ] satisfies BrunoTableColumns<NullableRow>);
+      const runtime = new BrunoTableCellEditRuntime({
+        columns: nullableColumns,
+        getRow: () => current,
+      });
+      runtime.setBatchHistoryEnabled(true);
+
+      expect(runtime.start(current.id, "COL_ID_VALUE")).toBe(true);
+      expect(runtime.commit("", false, "blank")).toBe(true);
+      expect(runtime.getCellSnapshot(current.id, "COL_ID_VALUE")).toMatchObject({
+        hasDraft: true,
+        draft: blankValue,
+      });
+
+      current = Object.freeze({ ...current, value: blankValue });
+      runtime.reconcileSourceRows(new Set([current.id]));
+
+      expect(runtime.getActivitySnapshot()).toMatchObject({
+        draftCount: 0,
+        undoCount: 0,
+        redoCount: 0,
+      });
+      runtime.dispose();
+    }
+  });
+
+  it("reconciles source divergence captured while the first editor remains open", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.reconcileActiveRow(new Set([row.id]));
+    expect(runtime.commit("7")).toBe(true);
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 1 });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        base: 4,
+        mine: 7,
+        conflict: { server: 5, serverVersion: row.quantity + 1n },
+      },
+    ]);
+  });
+
+  it("limits active-editor catch-up to the newly committed Cell Identity", () => {
+    type TwoCellRow = Readonly<{
+      readonly id: string;
+      readonly first: string;
+      readonly second: string;
+      readonly version: number;
+    }>;
+    const firstEquivalent = vi.fn(Object.is);
+    const secondEquivalent = vi.fn(Object.is);
+    const textValueType = (
+      codecId: string,
+      equivalent: (left: string, right: string) => boolean,
+    ): BrunoTableValueType<string> => ({
+      codecId,
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: String,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected persisted text." },
+    });
+    const twoCellColumns = compileColumns([
+      {
+        columnId: "COL_ID_FIRST",
+        field: "first",
+        headerName: "First",
+        valueType: textValueType("test/candidate-first", firstEquivalent),
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_SECOND",
+        field: "second",
+        headerName: "Second",
+        valueType: textValueType("test/candidate-second", secondEquivalent),
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<TwoCellRow>);
+    let current: TwoCellRow = Object.freeze({
+      id: "two-cell",
+      first: "first-base",
+      second: "second-base",
+      version: 1,
+    });
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: twoCellColumns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as TwoCellRow).version,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(current.id, "COL_ID_SECOND")).toBe(true);
+    expect(runtime.commit("second-mine")).toBe(true);
+
+    expect(runtime.start(current.id, "COL_ID_FIRST")).toBe(true);
+    current = Object.freeze({ ...current, first: "first-server", version: 2 });
+    runtime.reconcileActiveRow(new Set([current.id]));
+    firstEquivalent.mockClear();
+    secondEquivalent.mockClear();
+
+    expect(runtime.commit("first-mine")).toBe(true);
+
+    expect(secondEquivalent).not.toHaveBeenCalled();
+    expect(runtime.getDraftSnapshot(current.id, "COL_ID_SECOND")).toBe("second-mine");
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 2, conflictCount: 1 });
+  });
+
+  it("preserves live conflict evidence when Yours is edited again", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(1);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 1 });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        base: 4,
+        mine: 8,
+        conflict: { server: 5, serverVersion: row.quantity + 1n },
+      },
+    ]);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { mine: 7, conflict: { server: 5, serverVersion: row.quantity + 1n } },
+    ]);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { mine: 8, conflict: { server: 5, serverVersion: row.quantity + 1n } },
+    ]);
+  });
+
   it("retains conflicted Batch work while live permission is blocked and recovers sparsely", () => {
     type PermissionRow = Readonly<{
       readonly id: string;
@@ -1228,9 +1413,9 @@ describe("BrunoTable Cell Edit Session", () => {
       {
         mine: 7,
         validationMessage: "Old validation evidence",
-        conflict: { server: 6, resolution: "mine" },
       },
     ]);
+    expect(runtime.getDraftReviewSnapshot()[0]).not.toHaveProperty("conflict");
   });
 
   it("bounds the reverse dependency index to retained draft and history evidence", () => {
@@ -4264,6 +4449,56 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.undoBatchDraft()).toBe(true);
     expect(runtime.redoBatchDraft()).toBe(true);
     expect(runtime.getDraftReviewSnapshot()[0]).not.toHaveProperty("conflict");
+  });
+
+  it("reconciles a rejected Batch draft immediately after releasing its save lock", () => {
+    let current: Row = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    expect(runtime.beginSaveOperation("rejected-batch-lock", changeSet!, true)).toBe(true);
+
+    current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(0);
+    runtime.reconcileColumns(
+      compileColumns([
+        {
+          columnId: "COL_ID_QUANTITY",
+          field: "quantity",
+          headerName: "Quantity",
+          valueType: "bigint",
+          isEditable: true,
+        },
+        {
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          headerName: "Score",
+          valueType: "number",
+          isEditable: ({ value }: { readonly value: number }) => value >= 0,
+          validate: ({ value }: { readonly value: number }) =>
+            value <= 10 ? undefined : "Score must be at most 10.",
+        },
+      ]),
+    );
+
+    runtime.rejectSave("rejected-batch-lock", changeSet!, false);
+    runtime.completeSaveOperation("rejected-batch-lock");
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 1 });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        mine: 7,
+        conflict: { server: 5, serverVersion: row.quantity + 1n },
+      },
+    ]);
   });
 
   it("preserves undefined server values in rejected Batch conflict history", () => {

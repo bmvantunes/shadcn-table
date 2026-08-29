@@ -4157,10 +4157,19 @@ test("exposes live conflict and permission-block evidence without replacing Your
     .element(conflictMarker!)
     .toHaveAttribute("title", "Conflicts with the latest server value");
   await expect.element(conflictedCell).toHaveAttribute("data-bruno-edit-blocked", "");
+  const editStateDescriptionId = conflictedCell.element().getAttribute("aria-describedby");
+  expect(editStateDescriptionId).not.toBeNull();
+  const editStateDescription = document.getElementById(editStateDescriptionId!);
+  expect(editStateDescription).not.toBeNull();
+  await expect.element(editStateDescription!).toHaveClass("sr-only");
+  await expect
+    .element(editStateDescription!)
+    .toHaveTextContent(
+      "This cell is no longer editable. The server value also conflicts with your unsaved change.",
+    );
   await expect
     .element(conflictedCell)
-    .toHaveAttribute(
-      "aria-description",
+    .toHaveAccessibleDescription(
       "This cell is no longer editable. The server value also conflicts with your unsaved change.",
     );
   await expect
@@ -4175,6 +4184,19 @@ test("exposes live conflict and permission-block evidence without replacing Your
   await expect
     .element(screen.getByRole("region", { name: "Edit safety" }))
     .toHaveTextContent("1 conflict · 1 unsaved");
+
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  const conflictEditor = screen.getByRole("textbox", { name: "Edit Name" });
+  await expect
+    .element(conflictEditor)
+    .toHaveAccessibleDescription("The server value conflicts with your unsaved change.");
+  const activeConflictMarker = conflictedCell
+    .element()
+    .querySelector<HTMLElement>("[data-bruno-edit-conflict-indicator]");
+  expect(activeConflictMarker).not.toBeNull();
+  await expect.element(activeConflictMarker!).toBeVisible();
+  await userEvent.keyboard("{Escape}");
 
   await screen.rerender(renderTable([{ id: "ada", name: "Augusta", revision: 0n }] as const, 4));
   const convergedCell = grid.getByRole("gridcell", { name: "Augusta", exact: true });

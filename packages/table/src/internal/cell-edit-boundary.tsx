@@ -22,6 +22,7 @@ const scalarEditorOption = (index: number): string => `scalar:${String(index)}`;
 type BrunoTableCellEditBoundaryProps = Readonly<{
   readonly column: CompiledColumn;
   readonly runtime: BrunoTableCellEditRuntime;
+  readonly describedById?: string | undefined;
   readonly onCommittedOutsideCellPointer?: ((rowId: string, columnId: string) => void) | undefined;
   readonly yieldGridTabStop?: ((grid: HTMLElement) => void) | undefined;
 }>;
@@ -30,6 +31,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
   memo(function BrunoTableCellEditBoundary({
     column,
     runtime,
+    describedById,
     onCommittedOutsideCellPointer,
     yieldGridTabStop,
   }: BrunoTableCellEditBoundaryProps): ReactElement | null {
@@ -47,6 +49,11 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
     const invalidMessage = session.kind === "editing" ? session.invalidMessage : undefined;
     const candidate = runtime.getActiveCandidateSnapshot();
     const errorId = invalidMessage === undefined ? undefined : generatedErrorId;
+    const controlDescriptionIds = [describedById, errorId].filter(
+      (id): id is string => id !== undefined,
+    );
+    const controlDescription =
+      controlDescriptionIds.length === 0 ? undefined : controlDescriptionIds.join(" ");
     const selectInitialTextOnMount = useRef(
       session.kind === "editing" && session.selectInitialText,
     );
@@ -319,7 +326,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         {column.semantics.editorFamily === "boolean" && !renderBooleanSelect ? (
           <input
             ref={attachControl}
-            aria-describedby={errorId}
+            aria-describedby={controlDescription}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
             defaultChecked={candidate.rawText === booleanEditorValues?.[1]}
@@ -334,7 +341,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         ) : renderBooleanSelect ? (
           <select
             ref={attachControl}
-            aria-describedby={errorId}
+            aria-describedby={controlDescription}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
             defaultValue={
@@ -364,7 +371,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
           column.semantics.selectCanonicalOptions !== undefined ? (
           <select
             ref={attachControl}
-            aria-describedby={errorId}
+            aria-describedby={controlDescription}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
             defaultValue={
@@ -402,7 +409,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         ) : (
           <input
             ref={attachControl}
-            aria-describedby={errorId}
+            aria-describedby={controlDescription}
             aria-invalid={invalidMessage === undefined ? undefined : true}
             aria-label={`Edit ${column.headerName}`}
             defaultValue={candidate.rawText}

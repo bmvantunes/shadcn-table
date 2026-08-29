@@ -916,7 +916,11 @@ function applyDraftPatch(
             ...(patch.validationMessage === undefined
               ? {}
               : { validationMessage: patch.validationMessage }),
-            ...(patch.conflict === undefined ? {} : { conflict: patch.conflict }),
+            ...(patch.conflict === undefined
+              ? previous.conflict === undefined
+                ? {}
+                : { conflict: previous.conflict }
+              : { conflict: patch.conflict }),
           };
     next.set(
       patch.cellKey,
@@ -1897,6 +1901,7 @@ export class BrunoTableCellEditRuntime {
     const changedKeys = new Set<string>();
     const locksByRow = this.saveLockedCellKeysByOperationRow.get(operationId);
     const batchOperation = this.batchSaveOperationIds.has(operationId);
+    const rejectedEvidence = this.rejectedOperations.get(operationId);
     for (const rowKeys of locksByRow?.values() ?? []) {
       for (const key of rowKeys) {
         this.saveLockedCellKeys.delete(key);
@@ -1922,6 +1927,31 @@ export class BrunoTableCellEditRuntime {
       this.rejectedOperationStores.delete(operationId);
     }
     if (!changed) return;
+    if (rejectedEvidence !== undefined) {
+      const rejectedKeysWithStableSemantics = new Set<string>();
+      for (const evidence of rejectedEvidence.values()) {
+        for (const entry of evidence) {
+          if (
+            entry.valueAuthority.presentationColumn !== undefined &&
+            hasStableDraftReconciliationSemantics(
+              entry.valueAuthority.presentationColumn,
+              this.fieldColumnsById.get(entry.columnId),
+            )
+          ) {
+            rejectedKeysWithStableSemantics.add(cellKey(entry.rowId, entry.columnId));
+          }
+        }
+      }
+      if (rejectedKeysWithStableSemantics.size > 0) {
+        this.reconcileDraftRows(
+          undefined,
+          false,
+          new Set(),
+          undefined,
+          rejectedKeysWithStableSemantics,
+        );
+      }
+    }
     for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
     this.traversalIndex.reconcileRows(
       batchOperation ? undefined : new Set(locksByRow?.keys() ?? []),
@@ -2952,10 +2982,36 @@ export class BrunoTableCellEditRuntime {
     if (actorSnapshot.value !== "editing" || actorSnapshot.context.session === undefined) {
       return false;
     }
+    const admittedSession = actorSnapshot.context.session;
+    const admittedDraft = this.draftStore
+      .get()
+      .get(cellKey(admittedSession.rowId, admittedSession.column.columnId));
     this.actor.send({ type: "COMMIT", rawText, nativeInvalid, intent });
     const result = this.actor.getSnapshot();
     if (result.value !== "idle") return false;
-    if (result.context.acceptedChange !== undefined) this.onCommit(result.context.acceptedChange);
+    if (result.context.acceptedChange !== undefined) {
+      this.onCommit(result.context.acceptedChange);
+      const sourceChangedDuringSession =
+        admittedSession.sourceValueAvailable &&
+        safeEquivalentEditValue(
+          admittedSession.column,
+          admittedSession.baseValue,
+          admittedSession.sourceValue,
+        ) === false;
+      if (
+        this.batchHistoryEnabled &&
+        (sourceChangedDuringSession || admittedDraft?.conflict !== undefined)
+      ) {
+        const admittedKey = cellKey(admittedSession.rowId, admittedSession.column.columnId);
+        this.reconcileDraftRows(
+          new Set([admittedSession.rowId]),
+          false,
+          new Set(),
+          new Map([[admittedSession.rowId, admittedSession.row]]),
+          new Set([admittedKey]),
+        );
+      }
+    }
     return true;
   };
 
@@ -3790,6 +3846,8 @@ export class BrunoTableCellEditRuntime {
     changedRowIds: ReadonlySet<string> | undefined,
     publishTraversalInvalidation: boolean,
     submittedConvergedKeys: ReadonlySet<string> = new Set<string>(),
+    authoritativeRows?: ReadonlyMap<string, unknown>,
+    candidateKeys?: ReadonlySet<string>,
   ): boolean => {
     const previousDrafts = this.draftStore.get();
     let nextDrafts: Map<string, DraftEntry> | undefined;
@@ -3803,19 +3861,21 @@ export class BrunoTableCellEditRuntime {
     const rowVersions = new Map<string, unknown>();
     const visitedRowIds = new Set<string>();
     const keys =
-      changedRowIds === undefined
-        ? this.draftEvidenceKeys.values()
-        : (function* (
-            byRowId: ReadonlyMap<string, string | ReadonlySet<string>>,
-            rowIds: ReadonlySet<string>,
-          ): Generator<string> {
-            for (const rowId of rowIds) {
-              const rowKeys = byRowId.get(rowId);
-              if (rowKeys === undefined) continue;
-              if (typeof rowKeys === "string") yield rowKeys;
-              else yield* rowKeys;
-            }
-          })(this.draftKeysByRowId, changedRowIds);
+      candidateKeys !== undefined
+        ? candidateKeys.values()
+        : changedRowIds === undefined
+          ? this.draftEvidenceKeys.values()
+          : (function* (
+              byRowId: ReadonlyMap<string, string | ReadonlySet<string>>,
+              rowIds: ReadonlySet<string>,
+            ): Generator<string> {
+              for (const rowId of rowIds) {
+                const rowKeys = byRowId.get(rowId);
+                if (rowKeys === undefined) continue;
+                if (typeof rowKeys === "string") yield rowKeys;
+                else yield* rowKeys;
+              }
+            })(this.draftKeysByRowId, changedRowIds);
     for (const key of keys) {
       const draft = previousDrafts.get(key);
       let reconciledDraft = draft;
@@ -3827,7 +3887,9 @@ export class BrunoTableCellEditRuntime {
         changedKeys.push(key);
         continue;
       }
-      const row = this.getRow(representative.rowId);
+      const row = authoritativeRows?.has(representative.rowId)
+        ? authoritativeRows.get(representative.rowId)
+        : this.getRow(representative.rowId);
       if (this.draftReviewSubscriberCount > 0) {
         reviewServerRows.set(key, row);
         if (this.draftReviewRowStoresById.get(key)?.get().serverRow !== row) {
@@ -3841,7 +3903,7 @@ export class BrunoTableCellEditRuntime {
           ? this.readCanonicalSourceValue(representative.rowId, row, column)
           : ({ _tag: "Failure" } as const);
       const replayPatch = draft === undefined ? this.findIndexedReplayPatch(key) : undefined;
-      const currentMine = draft?.mine ?? replayPatch?.authoredValue;
+      const currentMine = draft === undefined ? replayPatch?.authoredValue : draft.mine;
       const mineEquivalent =
         source._tag === "Success" &&
         column !== undefined &&
@@ -4841,6 +4903,21 @@ function isCompatibleActiveColumn(
     sameBlankPolicy(previousColumn, nextColumn) &&
     nextColumn.isEditable !== undefined &&
     nextColumn.isEditable !== false
+  );
+}
+
+function hasStableDraftReconciliationSemantics(
+  previousColumn: CompiledFieldColumn,
+  nextColumn: CompiledFieldColumn | undefined,
+): boolean {
+  return (
+    nextColumn !== undefined &&
+    previousColumn.field === nextColumn.field &&
+    sameBlankPolicy(previousColumn, nextColumn) &&
+    previousColumn.semantics.decodeRuntimeAuthority ===
+      nextColumn.semantics.decodeRuntimeAuthority &&
+    previousColumn.semantics.groupedRetentionAuthority.equivalent ===
+      nextColumn.semantics.groupedRetentionAuthority.equivalent
   );
 }
 

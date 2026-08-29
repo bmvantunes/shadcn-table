@@ -54,6 +54,7 @@ import {
   forwardRef,
   memo,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -5401,6 +5402,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     onCommittedOutsideCellPointer,
     yieldGridTabStop,
   } = props;
+  const generatedEditStateDescriptionId = useId();
   const cellEdit = useContext(BrunoTableCellEditContext);
   const potentialCellEdit =
     cellEdit !== undefined &&
@@ -5560,13 +5562,17 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
       : edit.conflicted
         ? `${edit.blockedReason} The server value also conflicts with your unsaved change.`
         : edit.blockedReason;
+  const editStateDescriptionId =
+    editStateDescription === undefined
+      ? undefined
+      : `${id ?? generatedEditStateDescriptionId}-edit-state-description`;
   const cellStyle: CSSProperties = {
     boxSizing: "border-box",
     height: ROW_HEIGHT,
     maxHeight: ROW_HEIGHT,
     overflow: edit.active ? "visible" : "hidden",
     padding: 0,
-    position: edit.active || edit.saveSucceeded ? "relative" : undefined,
+    position: edit.active || edit.conflicted || edit.saveSucceeded ? "relative" : undefined,
     textAlign:
       draftReviewKind === undefined
         ? presentationColumn?.semantics.cellAlign
@@ -5579,6 +5585,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     edit.active && cellEdit !== undefined && renderActiveEditor ? (
       <BrunoTableCellEditBoundary
         column={column}
+        describedById={editStateDescriptionId}
         onCommittedOutsideCellPointer={onCommittedOutsideCellPointer}
         runtime={cellEdit}
         yieldGridTabStop={yieldGridTabStop}
@@ -5611,16 +5618,6 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
             !
           </span>
         ) : null}
-        {edit.conflicted ? (
-          <span
-            aria-hidden="true"
-            className={`absolute inset-y-0 flex items-center text-destructive ${edit.saveFailed ? "end-6" : "end-1"}`}
-            data-bruno-edit-conflict-indicator=""
-            title="Conflicts with the latest server value"
-          >
-            <WarningDiamondIcon size={16} weight="fill" />
-          </span>
-        ) : null}
       </div>
     );
   return (
@@ -5630,7 +5627,7 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
       data-bruno-row-id={rowId}
       data-bruno-row-index={logicalRowIndex}
       aria-colindex={columnIndex === undefined ? undefined : columnIndex + 1}
-      aria-description={editStateDescription}
+      aria-describedby={editStateDescriptionId}
       aria-busy={edit.savePending || undefined}
       className={className}
       data-bruno-edit-blocked={edit.blockedReason === undefined ? undefined : ""}
@@ -5648,6 +5645,11 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
           : cellStyle
       }
     >
+      {editStateDescriptionId === undefined ? null : (
+        <span aria-hidden="true" className="sr-only" id={editStateDescriptionId}>
+          {editStateDescription}
+        </span>
+      )}
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
         <BrunoTableCellCommitDiagnosticProbe
           columnId={column.columnId}
@@ -5657,6 +5659,16 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
         />
       ) : null}
       {cellContent}
+      {edit.conflicted ? (
+        <span
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-y-0 flex items-center text-destructive ${edit.saveFailed ? "end-6" : "end-1"}`}
+          data-bruno-edit-conflict-indicator=""
+          title="Conflicts with the latest server value"
+        >
+          <WarningDiamondIcon size={16} weight="fill" />
+        </span>
+      ) : null}
     </td>
   );
 });
