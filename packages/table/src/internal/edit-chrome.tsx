@@ -183,15 +183,17 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
         : "Batch save accepted · waiting for live confirmation",
     );
   }
+  const safetyStatus =
+    statusParts.length === 0
+      ? undefined
+      : status.blockedCount === 0 && status.validationCount === 0 && status.conflictCount === 0
+        ? `${String(pendingCount)} unsaved ${pendingCount === 1 ? "change" : "changes"}`
+        : statusParts.join(" · ");
+  const visibleStatus =
+    safetyStatus === undefined ? saveWorkParts : [...saveWorkParts, safetyStatus];
   return (
     <span aria-live="polite">
-      {saveWorkParts.length > 0
-        ? saveWorkParts.join(" · ")
-        : statusParts.length === 0
-          ? "No unsaved changes"
-          : status.blockedCount === 0 && status.validationCount === 0 && status.conflictCount === 0
-            ? `${String(pendingCount)} unsaved ${pendingCount === 1 ? "change" : "changes"}`
-            : statusParts.join(" · ")}
+      {visibleStatus.length === 0 ? "No unsaved changes" : visibleStatus.join(" · ")}
     </span>
   );
 });

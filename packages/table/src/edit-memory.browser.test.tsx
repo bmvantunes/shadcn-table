@@ -429,6 +429,56 @@ test("retains an Immediate Accepted Overlay and operation gate through live conf
     .toHaveAttribute("data-bruno-save-success");
 });
 
+test("keeps edit warnings visible while an Immediate save is pending", async () => {
+  const warningColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      validate: ({ value }: { readonly value: string }) =>
+        value === "invalid" ? "Choose a valid name." : undefined,
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const warningRows = [
+    { id: "ada", name: "Ada", revision: 1n },
+    { id: "grace", name: "Grace", revision: 1n },
+  ] as const;
+  const onSaveEdits = vi.fn(() => new Promise<void>(() => undefined));
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_IMMEDIATE_SAVE_WARNINGS"
+      columns={warningColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{
+        rows: warningRows,
+        totalRows: warningRows.length,
+        version: 1,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />,
+  );
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_IMMEDIATE_SAVE_WARNINGS" });
+  await userEvent.click(grid.getByRole("gridcell", { name: "Ada", exact: true }));
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(grid.getByRole("gridcell", { name: "Grace", exact: true }));
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "invalid");
+  await userEvent.keyboard("{Enter}");
+
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 Immediate save pending · 1 invalid · 2 unsaved");
+  expect(onSaveEdits).toHaveBeenCalledOnce();
+});
+
 test("renders an Accepted Overlay with its submitted column presentation authority", async () => {
   let resolveSave!: () => void;
   const onSaveEdits = vi.fn(
