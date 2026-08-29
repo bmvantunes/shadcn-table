@@ -313,7 +313,7 @@ describe("BrunoTable Edit Memory", () => {
           expectedVersion: row.revision,
           base: "server",
           mine: "conflicted draft",
-          conflict: { server: "new server" },
+          conflict: { server: "new server", serverVersion: 2n },
         },
       ]),
     ).toBe(true);

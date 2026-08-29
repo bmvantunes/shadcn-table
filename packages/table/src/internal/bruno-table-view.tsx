@@ -42,6 +42,7 @@ import {
   DotsThreeVerticalIcon,
   PushPinIcon,
   PushPinSlashIcon,
+  WarningDiamondIcon,
 } from "@phosphor-icons/react";
 import {
   Children,
@@ -5551,6 +5552,14 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
     instanceId === undefined || tableId === undefined || columnIndex === undefined
       ? undefined
       : cellDomId(instanceId, tableId, rowId, column.columnId);
+  const editStateDescription =
+    edit.blockedReason === undefined
+      ? edit.conflicted
+        ? "The server value conflicts with your unsaved change."
+        : undefined
+      : edit.conflicted
+        ? `${edit.blockedReason} The server value also conflicts with your unsaved change.`
+        : edit.blockedReason;
   const cellStyle: CSSProperties = {
     boxSizing: "border-box",
     height: ROW_HEIGHT,
@@ -5602,6 +5611,16 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
             !
           </span>
         ) : null}
+        {edit.conflicted ? (
+          <span
+            aria-hidden="true"
+            className={`absolute inset-y-0 flex items-center text-destructive ${edit.saveFailed ? "end-6" : "end-1"}`}
+            data-bruno-edit-conflict-indicator=""
+            title="Conflicts with the latest server value"
+          >
+            <WarningDiamondIcon size={16} weight="fill" />
+          </span>
+        ) : null}
       </div>
     );
   return (
@@ -5611,13 +5630,23 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
       data-bruno-row-id={rowId}
       data-bruno-row-index={logicalRowIndex}
       aria-colindex={columnIndex === undefined ? undefined : columnIndex + 1}
+      aria-description={editStateDescription}
       aria-busy={edit.savePending || undefined}
       className={className}
+      data-bruno-edit-blocked={edit.blockedReason === undefined ? undefined : ""}
+      data-bruno-edit-conflicted={edit.conflicted ? "" : undefined}
       data-bruno-save-pending={edit.savePending ? "" : undefined}
       data-bruno-save-failed={edit.saveFailed ? "" : undefined}
       data-bruno-save-success={edit.saveSucceeded ? "" : undefined}
       role="gridcell"
-      style={cellStyle}
+      style={
+        edit.conflicted
+          ? {
+              ...cellStyle,
+              boxShadow: "inset 0 0 0 2px var(--destructive)",
+            }
+          : cellStyle
+      }
     >
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
         <BrunoTableCellCommitDiagnosticProbe

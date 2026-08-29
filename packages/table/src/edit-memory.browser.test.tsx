@@ -294,18 +294,19 @@ test("unlocks a rejected Batch operation without discarding its drafts or histor
         rejectSave = reject;
       }),
   );
-  const screen = await render(
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
     <BrunoTableClient
       tableId="TABLE_ID_BATCH_REJECTION"
       columns={columns}
       initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
-      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
       getRowId={(row) => row.id}
       editable
       getRowVersion={(row) => row.revision}
       onSaveEdits={onSaveEdits}
-    />,
+    />
   );
+  const screen = await render(renderTable(rows, 1));
   await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BATCH_REJECTION" });
   grid.element().focus();
@@ -325,9 +326,29 @@ test("unlocks a rejected Batch operation without discarding its drafts or histor
     .toHaveTextContent("1 unsaved change");
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeEnabled();
   await expect.element(screen.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+  const failedCell = grid.getByRole("gridcell", { name: "Augusta", exact: true });
+  await expect.element(failedCell).toHaveAttribute("data-bruno-save-failed");
+
+  await screen.rerender(
+    renderTable(
+      rows.map((candidate) =>
+        candidate.id === "ada"
+          ? Object.freeze({ ...candidate, name: "Server", revision: 2n })
+          : candidate,
+      ),
+      2,
+    ),
+  );
+  await expect.element(failedCell).toHaveAttribute("data-bruno-save-failed");
+  await expect.element(failedCell).toHaveAttribute("data-bruno-edit-conflicted", "");
+  const rejectedConflictMarker = failedCell
+    .element()
+    .querySelector<HTMLElement>("[data-bruno-edit-conflict-indicator]");
+  expect(rejectedConflictMarker).not.toBeNull();
+  await expect.element(rejectedConflictMarker!).toBeVisible();
   await expect
-    .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
-    .toHaveAttribute("data-bruno-save-failed");
+    .element(rejectedConflictMarker!)
+    .toHaveAttribute("title", "Conflicts with the latest server value");
 });
 
 test("starts one Immediate save operation from one accepted cell commit", async () => {
@@ -2041,7 +2062,7 @@ test("preserves a later Batch draft when an older rejected save converges", asyn
   await expect.element(grid.getByRole("gridcell", { name: "Countess", exact: true })).toBeVisible();
   await expect
     .element(screen.getByRole("region", { name: "Edit safety" }))
-    .toHaveTextContent("1 unsaved change");
+    .toHaveTextContent("1 conflict · 1 unsaved");
   await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
   const resetAllChanges = screen.getByRole("button", { name: "Reset All Changes" });
   const historyDescriptionId = resetAllChanges.element().getAttribute("aria-describedby");
@@ -2523,7 +2544,7 @@ test("reconciles simultaneous source and column replacements as one coherent sna
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 });
 
-test("preserves a draft when simultaneous replacement makes equality stricter", async () => {
+test("conflicts a preserved draft when simultaneous replacement makes equality stricter", async () => {
   const initialRows = [{ id: "ada", name: "base", revision: 1n }] as const;
   const driftedRows = [{ id: "ada", name: "foo", revision: 2n }] as const;
   const renderTable = (
@@ -2557,10 +2578,7 @@ test("preserves a draft when simultaneous replacement makes equality stricter", 
   await expect.element(grid.getByRole("gridcell", { name: "FOO", exact: true })).toBeVisible();
   await expect
     .element(screen.getByRole("region", { name: "Edit safety" }))
-    .toHaveTextContent("1 unsaved");
-  await expect
-    .element(screen.getByRole("region", { name: "Edit safety" }))
-    .not.toHaveTextContent("conflict");
+    .toHaveTextContent("1 conflict · 1 unsaved");
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeEnabled();
   grid.element().focus();
   await userEvent.keyboard(
@@ -2573,6 +2591,9 @@ test("preserves a draft when simultaneous replacement makes equality stricter", 
       : "{Control>}{Shift>}z{/Shift}{/Control}",
   );
   await expect.element(grid.getByRole("gridcell", { name: "FOO", exact: true })).toBeVisible();
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 conflict · 1 unsaved");
 });
 
 test("uses captured equality when a pending save receives a looser replacement schema", async () => {
@@ -4083,4 +4104,117 @@ test("preserves missing-row drafts as blocked work and reconnects the same Row I
       ],
     },
   ]);
+});
+
+test("exposes live conflict and permission-block evidence without replacing Yours", async () => {
+  const permissionColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: ({ row: candidate }: { readonly row: Row }) => candidate.name !== "Locked",
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_LIVE_CONFLICT_PERMISSION"
+      columns={permissionColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{
+        rows: sourceRows,
+        totalRows: sourceRows.length,
+        version,
+        status: "ready",
+      }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_LIVE_CONFLICT_PERMISSION",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  await screen.rerender(renderTable([{ id: "ada", name: "Locked", revision: 2n }] as const, 2));
+
+  const conflictedCell = grid.getByRole("gridcell", { name: "Augusta", exact: true });
+  await expect.element(conflictedCell).toHaveAttribute("data-bruno-edit-conflicted", "");
+  const conflictMarker = conflictedCell
+    .element()
+    .querySelector<HTMLElement>("[data-bruno-edit-conflict-indicator]");
+  expect(conflictMarker).not.toBeNull();
+  await expect.element(conflictMarker!).toBeVisible();
+  await expect
+    .element(conflictMarker!)
+    .toHaveAttribute("title", "Conflicts with the latest server value");
+  await expect.element(conflictedCell).toHaveAttribute("data-bruno-edit-blocked", "");
+  await expect
+    .element(conflictedCell)
+    .toHaveAttribute(
+      "aria-description",
+      "This cell is no longer editable. The server value also conflicts with your unsaved change.",
+    );
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 conflict · 1 blocked change · 1 unsaved");
+  await expect.element(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(onSaveEdits).not.toHaveBeenCalled();
+
+  await screen.rerender(renderTable([{ id: "ada", name: "Server", revision: 1n }] as const, 3));
+  await expect.element(conflictedCell).toHaveAttribute("data-bruno-edit-conflicted", "");
+  await expect.element(conflictedCell).not.toHaveAttribute("data-bruno-edit-blocked");
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 conflict · 1 unsaved");
+
+  await screen.rerender(renderTable([{ id: "ada", name: "Augusta", revision: 0n }] as const, 4));
+  const convergedCell = grid.getByRole("gridcell", { name: "Augusta", exact: true });
+  await expect.element(convergedCell).not.toHaveAttribute("data-bruno-edit-conflicted");
+  await expect.element(convergedCell).not.toHaveAttribute("data-bruno-edit-blocked");
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("No unsaved changes");
+});
+
+test("publishes ordinary live row updates without creating edit-owned evidence", async () => {
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_ORDINARY_LIVE_EDIT_UPDATE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{
+        rows: sourceRows,
+        totalRows: sourceRows.length,
+        version,
+        status: "ready",
+      }}
+      getRowId={(candidate) => candidate.id}
+      editable
+      getRowVersion={(candidate) => candidate.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_ORDINARY_LIVE_EDIT_UPDATE",
+  });
+
+  await screen.rerender(renderTable([{ id: "ada", name: "Augusta", revision: 0n }] as const, 2));
+
+  const cell = grid.getByRole("gridcell", { name: "Augusta", exact: true });
+  await expect.element(cell).toBeVisible();
+  await expect.element(cell).not.toHaveAttribute("data-bruno-edit-conflicted");
+  await expect.element(cell).not.toHaveAttribute("data-bruno-edit-blocked");
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("No unsaved changes");
 });

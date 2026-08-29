@@ -296,6 +296,73 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
     { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
   );
 
+  const conflictRows = new Map<
+    string,
+    Readonly<{ readonly value: string; readonly revision: symbol }>
+  >(
+    Array.from({ length: gestureCellCount }, (_unused, index) => [
+      `row-${String(index)}`,
+      Object.freeze({ value: "server", revision: Symbol(`base-${String(index)}`) }),
+    ]),
+  );
+  let conflictRowReads = 0;
+  const conflictReconciliationRuntime = new BrunoTableCellEditRuntime({
+    columns,
+    getRow: (rowId) => {
+      conflictRowReads += 1;
+      return conflictRows.get(rowId);
+    },
+    getRowVersion: (candidate) => (candidate as Readonly<{ readonly revision: symbol }>).revision,
+  });
+  conflictReconciliationRuntime.setBatchHistoryEnabled(true);
+  if (!conflictReconciliationRuntime.applyAcceptedDraftGesture(gesture)) {
+    throw new Error("The conflict reconciliation fixture was not accepted.");
+  }
+  let conflictReconciliationIndex = 0;
+  const conflictReconciliationSamples: number[] = [];
+  bench(
+    "derives one live conflict in 5,000 drafts without scanning unrelated work",
+    () => {
+      const rowId = `row-${String(conflictReconciliationIndex)}`;
+      const serverVersion = Symbol(`server-${String(conflictReconciliationIndex)}`);
+      conflictRows.set(
+        rowId,
+        Object.freeze({
+          value: `server-${String(conflictReconciliationIndex)}`,
+          revision: serverVersion,
+        }),
+      );
+      conflictReconciliationIndex += 1;
+      conflictRowReads = 0;
+      const startedAt = performance.now();
+      conflictReconciliationRuntime.reconcileSourceRows(new Set([rowId]));
+      recordBudgetSample(
+        "one-row sparse conflict reconciliation",
+        conflictReconciliationSamples,
+        performance.now() - startedAt,
+      );
+      if (conflictRowReads !== 1) {
+        throw new Error("Conflict reconciliation visited an unrelated source row.");
+      }
+      if (
+        conflictReconciliationRuntime.getActivitySnapshot().conflictCount !==
+        conflictReconciliationIndex
+      ) {
+        throw new Error("Conflict reconciliation changed the wrong sparse conflict count.");
+      }
+    },
+    {
+      iterations: 100,
+      time: 0,
+      warmupIterations: 2,
+      warmupTime: 0,
+      teardown: () => {
+        conflictReconciliationRuntime.dispose();
+        conflictRows.clear();
+      },
+    },
+  );
+
   const unknownReconciliationSamples: number[] = [];
   bench(
     "reconciles 5,000 sparse drafts after an unknown source publication",
@@ -314,11 +381,17 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
     { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
   );
 
-  const historySourceRows = new Map<string, Readonly<{ readonly value: string }>>();
+  const historySourceRows = new Map<
+    string,
+    Readonly<{ readonly value: string; readonly revision: symbol }>
+  >();
   for (let index = 0; index < gestureCellCount; index += 1) {
     historySourceRows.set(
       `row-${String(index)}`,
-      Object.freeze({ value: `history-99-${String(index)}` }),
+      Object.freeze({
+        value: `history-99-${String(index)}`,
+        revision: Symbol(`history-base-${String(index)}`),
+      }),
     );
   }
   let historyColumnRowReads = 0;
@@ -328,6 +401,7 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       historyColumnRowReads += 1;
       return historySourceRows.get(rowId);
     },
+    getRowVersion: (candidate) => (candidate as Readonly<{ readonly revision: symbol }>).revision,
   });
   historyReconciliationRuntime.setBatchHistoryEnabled(true);
   const populateRetainedHistory = (target: BrunoTableCellEditRuntime): void => {
@@ -352,6 +426,56 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
     }
   };
   populateRetainedHistory(historyReconciliationRuntime);
+  let retainedConflictIndex = 0;
+  const retainedConflictSamples: number[] = [];
+  bench(
+    "derives one live conflict through the indexed 100-command history",
+    () => {
+      const targetIndex = retainedConflictIndex;
+      const rowId = `row-${String(targetIndex)}`;
+      historySourceRows.set(
+        rowId,
+        Object.freeze({
+          value: `history-conflict-${String(targetIndex)}`,
+          revision: Symbol(`history-conflict-${String(targetIndex)}`),
+        }),
+      );
+      historyColumnRowReads = 0;
+      const startedAt = performance.now();
+      historyReconciliationRuntime.reconcileSourceRows(new Set([rowId]));
+      recordBudgetSample(
+        "one-cell indexed retained-history conflict",
+        retainedConflictSamples,
+        performance.now() - startedAt,
+      );
+      retainedConflictIndex += 1;
+      if (historyColumnRowReads !== 1) {
+        throw new Error("Retained-history conflict read outside its indexed source row.");
+      }
+      if (
+        historyReconciliationRuntime.getActivitySnapshot().conflictCount !== retainedConflictIndex
+      ) {
+        throw new Error("Retained-history conflict changed unrelated Cell Identities.");
+      }
+    },
+    {
+      iterations: 100,
+      time: 0,
+      warmupIterations: 0,
+      warmupTime: 0,
+      teardown: () => {
+        for (let index = 0; index < retainedConflictIndex; index += 1) {
+          historySourceRows.set(
+            `row-${String(index)}`,
+            Object.freeze({
+              value: `history-99-${String(index)}`,
+              revision: Symbol(`history-restored-${String(index)}`),
+            }),
+          );
+        }
+      },
+    },
+  );
   const retainedHistorySamples: number[] = [];
   let retainedHistoryTargetIndex = 0;
   bench(
