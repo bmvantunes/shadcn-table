@@ -1738,7 +1738,9 @@ test("clears Batch rejection presentation and notification on Reset", async () =
   await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
   const resetDialog = screen.getByRole("alertdialog", { name: "Reset Review" });
   await expect.element(resetDialog).toBeVisible();
-  await userEvent.click(screen.getByRole("button", { name: "Reset All Changes" }));
+  const confirmReset = screen.getByRole("button", { name: "Reset All Changes" });
+  confirmReset.element().scrollIntoView({ block: "center" });
+  (confirmReset.element() as HTMLButtonElement).click();
 
   await expect.element(resetDialog).not.toBeInTheDocument();
   await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();

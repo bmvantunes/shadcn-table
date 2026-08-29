@@ -5718,6 +5718,55 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
   });
 
+  it("withdraws edit authority until replacement column semantics are admitted", () => {
+    const resident = { id: "first", name: "Ada", note: "math" } satisfies Row;
+    const initialColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const replacementColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "note",
+        headerName: "Note",
+        valueType: "text",
+      },
+    ]);
+    const getRowId = (row: Row) => row.id;
+    const { adapter, runtime, view } = createSubject([resident], initialColumns);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    rowsStore.subscribe(() => undefined);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
+    expect(adapter.getAuthoritativeEditCellSnapshot("first", "COL_ID_NAME")).toEqual({
+      found: true,
+      value: "Ada",
+    });
+
+    const configured = adapter.configure(getRowId, replacementColumns);
+
+    expect(adapter.hasAuthoritativeEditSource()).toBe(false);
+    expect(adapter.isEditSourceConfiguredFor(replacementColumns)).toBe(false);
+    expect(adapter.getAuthoritativeEditCellSnapshot("first", "COL_ID_NAME")).toEqual({
+      found: false,
+    });
+
+    runtime.reconcile(
+      configured,
+      replacementColumns,
+      adapter.getQueryConfiguration(replacementColumns),
+    );
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
+    expect(adapter.isEditSourceConfiguredFor(replacementColumns)).toBe(true);
+    expect(adapter.getAuthoritativeEditCellSnapshot("first", "COL_ID_NAME")).toEqual({
+      found: true,
+      value: "math",
+    });
+  });
+
   it("withdraws edit authority for a ready source with no coherent row space", () => {
     const resident = { id: "first", name: "Resident" } satisfies Row;
     const replacement = { id: "first", name: "Replacement" } satisfies Row;

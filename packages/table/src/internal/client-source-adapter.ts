@@ -501,6 +501,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
   ): BrunoTableRowPipelinePublication<TRow> => {
+    const editSourceNeedsReadmission =
+      this.getRowId !== getRowId || this.editCoherent?.validatedColumns !== columns;
     this.queryFallbackActive = false;
     this.queryRejected = undefined;
     const previousCoherent = this.coherent;
@@ -520,6 +522,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
+    if (editSourceNeedsReadmission) {
+      this.transitionEditSource(undefined, this.publication.status, this.publication.version);
+    }
     this.acceptEmptyCoherent();
     if (
       this.coherent !== undefined &&
