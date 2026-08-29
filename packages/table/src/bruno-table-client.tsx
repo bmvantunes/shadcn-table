@@ -34,10 +34,7 @@ import {
   BrunoTableQuickFilter,
   renderBrunoTableClientColumnFilter,
 } from "./internal/client-filter-controls";
-import {
-  BrunoTableClientRowPipelineAdapter,
-  type BrunoTableClientProjectionInputSnapshot,
-} from "./internal/client-source-adapter";
+import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { compileColumns } from "./internal/compile-columns";
 import { BrunoTableGridRuntime, isBrunoTableInvalidCellValue } from "./internal/grid-runtime";
 import { registerBrunoTableIdentity } from "./internal/table-identity-registry";
@@ -66,21 +63,12 @@ import {
 } from "./internal/save-operations";
 import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
 import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
+import { reconcileBrunoTableClientEditSourcePublication } from "./internal/client-edit-source";
 
 function adaptBrunoTableRowVersionExtractor<TRow>(
   extractor: ((row: TRow) => unknown) | undefined,
 ): ((row: object) => unknown) | undefined {
   return extractor === undefined ? undefined : (row) => extractor(row as TRow);
-}
-
-function hasAuthoritativeBrunoTableEditSource(
-  projectionInput: BrunoTableClientProjectionInputSnapshot,
-): boolean {
-  return (
-    projectionInput.sourceRowIds.authoritative &&
-    (projectionInput.publication.status === "ready" ||
-      projectionInput.publication.status === "stale")
-  );
 }
 
 export {
@@ -244,10 +232,7 @@ function BrunoTableClientInstance<
           ...(props.getRowVersion === undefined
             ? {}
             : { getRowVersion: adaptBrunoTableRowVersionExtractor(props.getRowVersion)! }),
-          isSourceAuthoritative: () => {
-            const projectionInput = rowPipelineAdapter.getProjectionInputSnapshot();
-            return hasAuthoritativeBrunoTableEditSource(projectionInput);
-          },
+          isSourceAuthoritative: rowPipelineAdapter.hasAuthoritativeEditSource,
           ...(editMemory === undefined
             ? {}
             : {
@@ -343,6 +328,32 @@ function BrunoTableClientInstance<
     [compiledColumns, editable, editMemory, runtimeView],
   );
 
+  const reconcilePublishedEditSource = useCallback(
+    (changedRowIds: ReadonlySet<string> | undefined): void => {
+      if (rowPipelineAdapter.hasAuthoritativeEditSource()) {
+        cellEdit?.reconcileColumns(compiledColumns, (rowId) =>
+          rowPipelineAdapter.getAuthoritativeEditRowSnapshot(rowId),
+        );
+        cellEdit?.reconcileTraversalRows(changedRowIds);
+      }
+      reconcileBrunoTableClientEditSourcePublication(
+        rowPipelineAdapter,
+        editMemory,
+        cellEdit,
+        changedRowIds,
+      );
+    },
+    [cellEdit, compiledColumns, editMemory, rowPipelineAdapter],
+  );
+
+  useLayoutEffect(() => {
+    const unsubscribe = rowPipelineAdapter.subscribeEditSource(reconcilePublishedEditSource);
+    if (rowPipelineAdapter.isEditSourceConfiguredFor(compiledColumns)) {
+      reconcilePublishedEditSource(rowPipelineAdapter.getEditSourceChangedRowIds());
+    }
+    return unsubscribe;
+  }, [compiledColumns, reconcilePublishedEditSource, rowPipelineAdapter]);
+
   useLayoutEffect(() => {
     const publication = rowPipelineAdapter.reconcile(
       props.clientSource,
@@ -361,14 +372,7 @@ function BrunoTableClientInstance<
       queryConfiguration,
       groupingProjectionActive,
     );
-    editMemory?.setSavePreflightAvailable(
-      hasAuthoritativeBrunoTableEditSource(rowPipelineAdapter.getProjectionInputSnapshot()),
-    );
-    cellEdit?.reconcileColumns(compiledColumns, (rowId) =>
-      rowPipelineAdapter.getAuthoritativeEditRowSnapshot(rowId),
-    );
-    cellEdit?.reconcileSourceRows(publication.changedRowIds);
-    cellEdit?.reconcileActiveRow(publication.changedRowIds);
+    editMemory?.setSavePreflightAvailable(rowPipelineAdapter.hasAuthoritativeEditSource());
     if (!groupingProjectionActive) {
       runtime.reconcile(publication, compiledColumns, queryConfiguration, groupRowsColumn.width);
     }

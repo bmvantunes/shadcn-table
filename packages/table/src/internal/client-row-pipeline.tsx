@@ -55,7 +55,7 @@ export type BrunoTableClientRowPipelineAdapterView = Readonly<{
     createDetector: () => BrunoTableClientRowOrderChangeDetector,
     tableId?: string,
   ) => BrunoTableClientRowsStore;
-  readonly acceptRows: (rows: readonly BrunoTableClientAdmittedRow[]) => void;
+  readonly acceptRows: (rows: readonly BrunoTableClientAdmittedRow[]) => boolean;
   readonly rejectQueryRows: (
     rows: readonly BrunoTableClientAdmittedRow[],
     invalid: BrunoTableClientProjectionInvalid,
@@ -234,7 +234,9 @@ const ClientRawResolvedRowOrder = memo(function ClientRawResolvedRowOrder({
       rowPipelineAdapter.acceptRows(rows);
     } else {
       const fallback = rowPipelineAdapter.rejectQueryRows(rows, invalid);
-      if (fallback !== undefined) runtime.publishRowPipeline(fallback);
+      if (fallback !== undefined) {
+        runtime.publishRowPipeline(fallback);
+      }
     }
     rowPipelineAdapter.publishResultRowCount(
       rowModel.kind === "ready" ? rowModel.rowIds.length : 0,

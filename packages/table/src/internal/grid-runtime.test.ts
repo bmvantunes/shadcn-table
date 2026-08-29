@@ -5609,14 +5609,111 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
       message: "Rejected candidate.",
     });
     if (fallback === undefined) throw new Error("Expected a retained-row fallback.");
+    expect(fallback.changedRowIds).toEqual(new Set(["first"]));
     runtime.publish(fallback);
     const retry = adapter.retryQueryRows();
     if (retry === undefined) throw new Error("Expected rejected rows to be retryable.");
+    expect(retry.changedRowIds).toEqual(new Set(["first"]));
 
     runtime.publish(retry);
 
     expect(changes.at(-1)?.rowIdsChanged).toBe(true);
     expect(rowsStore.getSnapshot()[0]?.raw).toBe(candidate);
+  });
+
+  it("withdraws edit authority while a retained query fallback is also invalid", () => {
+    const resident = { id: "first", name: "Resident" } satisfies Row;
+    const candidate = { id: "first", name: "Candidate" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([resident]);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    rowsStore.subscribe(() => undefined);
+    adapter.acceptRows(rowsStore.getSnapshot());
+    runtime.publish(adapter.publish(source([candidate], "stale")));
+    const fallback = adapter.rejectQueryRows(rowsStore.getSnapshot(), {
+      kind: "invalid-value",
+      rowIndex: 0,
+      columnId: "COL_ID_NAME",
+      message: "Rejected candidate.",
+    });
+    if (fallback === undefined) throw new Error("Expected a retained-row fallback.");
+    runtime.publish(fallback);
+    expect(adapter.hasAuthoritativeEditSource()).toBe(true);
+
+    const invalidGap = adapter.rejectQueryRows(rowsStore.getSnapshot(), {
+      kind: "invalid-value",
+      rowIndex: 0,
+      columnId: "COL_ID_NAME",
+      message: "Rejected retained fallback.",
+    });
+    if (invalidGap === undefined) throw new Error("Expected the fallback rejection to publish.");
+    runtime.publish(invalidGap);
+    expect(invalidGap.rowSpace).toBeUndefined();
+    expect(adapter.hasAuthoritativeEditSource()).toBe(false);
+
+    const retry = adapter.retryQueryRows();
+    if (retry === undefined) throw new Error("Expected rejected rows to be retryable.");
+    expect(adapter.hasAuthoritativeEditSource()).toBe(false);
+    expect(retry.changedRowIds).toBeUndefined();
+    runtime.publish(retry);
+    adapter.acceptRows(rowsStore.getSnapshot());
+    expect(adapter.hasAuthoritativeEditSource()).toBe(true);
+    expect(rowsStore.getSnapshot()[0]?.raw).toBe(candidate);
+  });
+
+  it("derives accepted edit deltas across superseded provisional Client publications", () => {
+    const resident = { id: "first", name: "Resident" } satisfies Row;
+    const provisional = { id: "first", name: "Provisional" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([resident]);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    rowsStore.subscribe(() => undefined);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+
+    runtime.publish(adapter.publish(source([provisional], "stale")));
+    runtime.publish(adapter.publish(source([provisional], "stale")));
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+
+    expect(adapter.getEditSourceChangedRowIds()).toEqual(new Set(["first"]));
+  });
+
+  it("withdraws edit authority for a ready source with no coherent row space", () => {
+    const resident = { id: "first", name: "Resident" } satisfies Row;
+    const replacement = { id: "first", name: "Replacement" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([resident]);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    rowsStore.subscribe(() => undefined);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    expect(adapter.hasAuthoritativeEditSource()).toBe(true);
+
+    const invalid = adapter.publish(source([replacement], "ready", { totalRows: 2 }));
+    runtime.publish(invalid);
+    expect(invalid.rowSpace).toBeUndefined();
+    expect(adapter.hasAuthoritativeEditSource()).toBe(false);
+    expect(adapter.getAuthoritativeEditRowSnapshot("first")).toBeUndefined();
+
+    runtime.publish(adapter.publish(source([replacement])));
+    expect(adapter.hasAuthoritativeEditSource()).toBe(false);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    expect(adapter.hasAuthoritativeEditSource()).toBe(true);
+    expect(adapter.getAuthoritativeEditRowSnapshot("first")).toBe(replacement);
+  });
+
+  it("publishes full edit invalidation for accepted source envelope-only changes", () => {
+    const resident = { id: "first", name: "Resident" } satisfies Row;
+    const residentRows = [resident] as const;
+    const { adapter, view } = createSubject(residentRows);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    rowsStore.subscribe(() => undefined);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    const changes: Array<ReadonlySet<string> | undefined> = [];
+    adapter.subscribeEditSource((changedRowIds) => changes.push(changedRowIds));
+
+    const versionOnly = adapter.publish({ ...source(residentRows), version: 2 });
+    const staleOnly = adapter.publish({ ...source(residentRows, "stale"), version: 2 });
+
+    expect(versionOnly.changedRowIds).toBeUndefined();
+    expect(staleOnly.changedRowIds).toBeUndefined();
+    expect(changes).toEqual([undefined, undefined]);
+    expect(adapter.hasAuthoritativeEditSource()).toBe(true);
   });
 
   it("preserves undefined failures from Client rows-store subscribers across the drain", () => {

@@ -3473,6 +3473,43 @@ test("reconciles hidden drafts while filtering leaves the row projection empty",
   ).toHaveTextContent("No unsaved changes");
 });
 
+test("does not rescan retained Batch edit evidence for a query-only transition", async () => {
+  const getRowVersion = vi.fn((candidate: Row) => candidate.revision);
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_QUERY_ONLY_EDIT_RECONCILIATION"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(candidate) => candidate.id}
+      quickFilterFields={["name"]}
+      editable
+      getRowVersion={getRowVersion}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    >
+      <BrunoTableToolbar>
+        <BrunoTableQuickFilter />
+      </BrunoTableToolbar>
+    </BrunoTableClient>,
+  );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_QUERY_ONLY_EDIT_RECONCILIATION",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  getRowVersion.mockClear();
+
+  await userEvent.fill(screen.getByRole("searchbox", { name: "Quick Filter" }), "missing");
+  await expect
+    .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
+    .not.toBeInTheDocument();
+
+  expect(getRowVersion).not.toHaveBeenCalled();
+});
+
 test("does not treat a filtered in-flight row as authoritative disappearance", async () => {
   let resolveSave!: () => void;
   const onSaveEdits = vi.fn(
@@ -3673,6 +3710,147 @@ test("keeps Reset Review stable while live source convergence prunes drafts and 
   (screen.getByRole("button", { name: "Keep Editing" }).element() as HTMLButtonElement).click();
   await expect.element(grid).toHaveFocus();
   await expect.element(batchEditing).toBeEnabled();
+});
+
+test("reconciles a Batch draft after an invalid query candidate restores fallback rows", async () => {
+  type QueryFallbackRow = Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly score: number;
+    readonly revision: bigint;
+  }>;
+  const queryFallbackColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+    },
+    {
+      columnId: "COL_ID_SCORE",
+      field: "score",
+      headerName: "Score",
+      valueType: "number",
+    },
+  ] satisfies BrunoTableColumns<QueryFallbackRow>;
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const fallbackRows = [
+    { id: "ada", name: "Ada", score: 1, revision: 1n },
+    { id: "grace", name: "Grace", score: 2, revision: 1n },
+  ] as const;
+  const renderTable = (
+    sourceRows: readonly QueryFallbackRow[],
+    version: number,
+    status: "ready" | "stale",
+  ) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_BATCH_QUERY_FALLBACK"
+      columns={queryFallbackColumns}
+      initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+      clientSource={{
+        rows: sourceRows,
+        totalRows: sourceRows.length,
+        version,
+        status,
+        ...(status === "stale" ? { message: "Waiting for a valid projection" } : {}),
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(fallbackRows, 1, "ready"));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BATCH_QUERY_FALLBACK" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  const invalidCandidateRows = [
+    { id: "ada", name: "Augusta", score: "invalid", revision: 2n },
+    fallbackRows[1],
+  ] as unknown as readonly QueryFallbackRow[];
+  await screen.rerender(renderTable(invalidCandidateRows, 2, "stale"));
+
+  await expect
+    .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
+    .toBeInTheDocument();
+  await vi.waitFor(() =>
+    expect(
+      screen
+        .getByRole("region", { name: "Edit safety" })
+        .element()
+        .querySelector('[aria-live="polite"]'),
+    ).toHaveTextContent("1 unsaved change"),
+  );
+  const save = screen.getByRole("button", { name: "Save" });
+  await expect.element(save).toBeEnabled();
+  await userEvent.click(save);
+  expect(onSaveEdits).toHaveBeenCalledWith([
+    {
+      rowId: "ada",
+      baseRow: fallbackRows[0],
+      expectedVersion: 1n,
+      changes: [
+        {
+          columnId: "COL_ID_NAME",
+          field: "name",
+          before: "Ada",
+          after: "Augusta",
+        },
+      ],
+    },
+  ]);
+});
+
+test("reconciles an active editor after an invalid query candidate restores its fallback row", async () => {
+  const fallbackRows = [
+    { id: "ada", name: "Ada", revision: 1n },
+    { id: "grace", name: "Grace", revision: 1n },
+  ] as const;
+  const renderTable = (sourceRows: readonly Row[], version: number, status: "ready" | "stale") => (
+    <BrunoTableClient
+      tableId="TABLE_ID_ACTIVE_EDITOR_QUERY_FALLBACK"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{
+        rows: sourceRows,
+        totalRows: sourceRows.length,
+        version,
+        status,
+        ...(status === "stale" ? { message: "Waiting for a valid projection" } : {}),
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={vi.fn(() => Promise.resolve())}
+    />
+  );
+  const screen = await render(renderTable(fallbackRows, 1, "ready"));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_ACTIVE_EDITOR_QUERY_FALLBACK",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  const editor = screen.getByRole("textbox", { name: "Edit Name" });
+  await userEvent.fill(editor, "Augusta");
+
+  const invalidCandidateRows = [
+    { id: "grace", name: 42, revision: 2n },
+    { id: "hopper", name: "Hopper", revision: 1n },
+  ] as unknown as readonly Row[];
+  await screen.rerender(renderTable(invalidCandidateRows, 2, "stale"));
+
+  await expect.element(editor).toBeVisible();
+  await expect.element(editor).toHaveValue("Augusta");
+  await userEvent.click(editor);
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(grid.getByRole("gridcell", { name: "Augusta", exact: true }))
+    .toBeInTheDocument();
 });
 
 test("preserves missing-row drafts as blocked work and reconnects the same Row Identity", async () => {
