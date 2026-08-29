@@ -5621,6 +5621,32 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(rowsStore.getSnapshot()[0]?.raw).toBe(candidate);
   });
 
+  it("derives retry row deltas across every superseded provisional publication", () => {
+    const first = { id: "first", name: "Resident first" } satisfies Row;
+    const second = { id: "second", name: "Resident second" } satisfies Row;
+    const provisionalFirst = { ...first, name: "Provisional first" } satisfies Row;
+    const rejectedSecond = { ...second, name: "Rejected second" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([first, second]);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    rowsStore.subscribe(() => undefined);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+
+    runtime.publish(adapter.publish(source([provisionalFirst, second], "stale")));
+    runtime.publish(adapter.publish(source([provisionalFirst, rejectedSecond], "stale")));
+    const fallback = adapter.rejectQueryRows(rowsStore.getSnapshot(), {
+      kind: "invalid-value",
+      rowIndex: 1,
+      columnId: "COL_ID_NAME",
+      message: "Rejected second candidate.",
+    });
+    if (fallback === undefined) throw new Error("Expected a retained-row fallback.");
+    runtime.publish(fallback);
+
+    const retry = adapter.retryQueryRows();
+    if (retry === undefined) throw new Error("Expected rejected rows to be retryable.");
+    expect(retry.changedRowIds).toEqual(new Set(["first", "second"]));
+  });
+
   it("withdraws edit authority while a retained query fallback is also invalid", () => {
     const resident = { id: "first", name: "Resident" } satisfies Row;
     const candidate = { id: "first", name: "Candidate" } satisfies Row;

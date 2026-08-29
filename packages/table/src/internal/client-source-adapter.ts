@@ -610,11 +610,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     this.queryFallbackActive = false;
     this.queryRejected = undefined;
     this.coherent = refreshRowOrderEvidence(rejected.coherent);
-    const changedRowIds = deriveChangedRawRowIds(
-      previousCoherent,
-      this.coherent,
-      rejected.coherent.changeFromPrevious.changedIndexes,
-    );
+    const changedRowIds = deriveEditSourceChangedRawRowIds(previousCoherent, this.coherent);
     const { changedRowIds: _rejectedChangedRowIds, ...retriedPublication } = rejected.publication;
     this.publication = Object.freeze({
       ...retriedPublication,

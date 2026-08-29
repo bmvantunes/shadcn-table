@@ -2070,6 +2070,9 @@ export class BrunoTableCellEditRuntime {
       }
       this.publishRejectedOperation(operationId);
     });
+    for (const evictedOperationId of evicted.keys()) {
+      this.rejectedOperationStores.delete(evictedOperationId);
+    }
     if (immediateOperation && evidenceByRow.size > 0) {
       this.rejectedCellPresentationDeadlinesByOperation.set(operationId, Date.now() + 5_000);
       this.scheduleCellPresentationDeadline();
@@ -3955,6 +3958,7 @@ export class BrunoTableCellEditRuntime {
     const next = new Map(this.rejectedOperations);
     const changedKeys = new Set<string>();
     const changedOperationIds = new Set<string>();
+    const removedOperationIds = new Set<string>();
     const removedEvidenceByOperation = new Map<string, AcceptedOverlayEntry[]>();
     const conflicts = new Map<string, unknown>();
     const clearedConflicts = new Set<string>();
@@ -4070,6 +4074,7 @@ export class BrunoTableCellEditRuntime {
       if (convergedKeys.size > 0) this.startSuccessFlash(operationId, convergedKeys);
       if (evidenceByRow.size === 0) {
         next.delete(operationId);
+        removedOperationIds.add(operationId);
         this.rejectedBatchOperationIds.delete(operationId);
         this.rejectedCellPresentationDeadlinesByOperation.delete(operationId);
       }
@@ -4092,6 +4097,9 @@ export class BrunoTableCellEditRuntime {
         }
         for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
       });
+      for (const operationId of removedOperationIds) {
+        this.rejectedOperationStores.delete(operationId);
+      }
       for (const key of changedKeys) this.releaseUnusedCellStore(key);
     }
     const draftsChanged =
@@ -4172,6 +4180,7 @@ export class BrunoTableCellEditRuntime {
       this.publishRejectedOperation(operationId, flattenRejectedEvidence(evidenceByRow));
       for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
     });
+    this.rejectedOperationStores.delete(operationId);
     for (const key of changedKeys) this.releaseUnusedCellStore(key);
   };
 
@@ -4188,6 +4197,7 @@ export class BrunoTableCellEditRuntime {
     const next = new Map(this.rejectedOperations);
     const changedKeys = new Set<string>();
     const changedOperationIds = new Set<string>();
+    const removedOperationIds = new Set<string>();
     const removedEvidenceByOperation = new Map<string, AcceptedOverlayEntry[]>();
     for (const operationId of operationIds) {
       const evidenceByRow = this.rejectedOperations.get(operationId);
@@ -4210,6 +4220,7 @@ export class BrunoTableCellEditRuntime {
       if (remainingByRow.size > 0) next.set(operationId, remainingByRow);
       else {
         next.delete(operationId);
+        removedOperationIds.add(operationId);
         this.rejectedBatchOperationIds.delete(operationId);
         this.rejectedCellPresentationDeadlinesByOperation.delete(operationId);
       }
@@ -4228,6 +4239,9 @@ export class BrunoTableCellEditRuntime {
       }
       for (const key of changedKeys) this.publishCell(key, this.draftStore.get());
     });
+    for (const operationId of removedOperationIds) {
+      this.rejectedOperationStores.delete(operationId);
+    }
     for (const key of changedKeys) this.releaseUnusedCellStore(key);
   };
 

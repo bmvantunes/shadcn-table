@@ -3540,6 +3540,15 @@ describe("BrunoTable Cell Edit Session", () => {
       remainingCount: 1,
       removedCells: [{ rowId: row.id, columnId: "COL_ID_SCORE" }],
     });
+
+    rowsById.set(second.id, Object.freeze({ ...second, score: 7, quantity: 2n }));
+    runtime.reconcileSourceRows(new Set([second.id]));
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(runtime.getRejectedOperationUpdateSnapshot("operation-delta")).toEqual({
+      remainingCount: 0,
+      removedCells: [],
+    });
     unsubscribe();
   });
 
@@ -3877,11 +3886,16 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.rejectSave("operation-corrected", changeSet!, false);
     expect(runtime.hasRejectedOperation("operation-corrected")).toBe(true);
     expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBe(true);
+    runtime.subscribeRejectedOperation("operation-corrected", () => undefined)();
 
     expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
     expect(runtime.commit("8")).toBe(true);
 
     expect(runtime.hasRejectedOperation("operation-corrected")).toBe(false);
+    expect(runtime.getRejectedOperationUpdateSnapshot("operation-corrected")).toEqual({
+      remainingCount: 0,
+      removedCells: [],
+    });
     expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toMatchObject({
       hasDraft: true,
       draft: 8,
@@ -4319,9 +4333,14 @@ describe("BrunoTable Cell Edit Session", () => {
         ],
         false,
       );
+      if (index === 0) runtime.subscribeRejectedOperation("operation-0", () => undefined)();
     }
 
     expect(runtime.hasRejectedOperation("operation-0")).toBe(false);
+    expect(runtime.getRejectedOperationUpdateSnapshot("operation-0")).toEqual({
+      remainingCount: 0,
+      removedCells: [],
+    });
     expect(runtime.hasRejectedOperation("operation-1")).toBe(true);
     expect(runtime.hasRejectedOperation("operation-128")).toBe(true);
   });
