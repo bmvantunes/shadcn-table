@@ -447,6 +447,7 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         "one-cell indexed retained-history conflict",
         retainedConflictSamples,
         performance.now() - startedAt,
+        0,
       );
       retainedConflictIndex += 1;
       if (historyColumnRowReads !== 1) {
