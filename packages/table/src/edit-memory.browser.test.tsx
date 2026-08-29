@@ -671,6 +671,46 @@ test("restores pending Batch drafts after incompatible decoder and field replace
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toBeEnabled();
 });
 
+test("keeps Batch drafts blocked while invalid stale source rows are retained", async () => {
+  const onSaveEdits = vi.fn(() => new Promise<void>(() => undefined));
+  const renderTable = (version: number, status: "ready" | "stale", totalRows: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_INVALID_STALE_EDIT_AUTHORITY"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows, version, status }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(1, "ready", 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_INVALID_STALE_EDIT_AUTHORITY",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+
+  await screen.rerender(renderTable(2, "stale", 2));
+
+  await expect.element(grid.getByRole("gridcell", { name: "Augusta", exact: true })).toBeVisible();
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("1 unsaved change");
+  await expect.element(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(onSaveEdits).not.toHaveBeenCalled();
+
+  await screen.rerender(renderTable(3, "ready", 1));
+  await expect.element(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(onSaveEdits).toHaveBeenCalledOnce();
+});
+
 test("retains a resolved save operation across a non-authoritative loading gap", async () => {
   let resolveSave!: () => void;
   const onSaveEdits = vi.fn(
@@ -1519,6 +1559,25 @@ test("hosts save failure notifications in the table's owner document", async () 
       .toBe(1);
     expect(ownerDocument.querySelector("[data-bruno-table-save-failure-toaster]")).not.toBeNull();
     expect(document.querySelector("[data-bruno-table-save-failure-toaster]")).toBeNull();
+
+    const detailsButton = ownerDocument.querySelector<HTMLButtonElement>(
+      'button[data-slot="toast-action"]',
+    );
+    if (detailsButton === null) throw new Error("Expected the iframe Operation details control.");
+    detailsButton.focus({ focusVisible: true });
+    detailsButton.click();
+    await expect
+      .poll(() => ({
+        ownerDialog: ownerDocument.querySelector('[role="alertdialog"]') !== null,
+        mainDialog: document.querySelector('[role="alertdialog"]') !== null,
+        ownerText: ownerDocument.body.textContent?.includes("Save operation details") ?? false,
+        mainText: document.body.textContent?.includes("Save operation details") ?? false,
+      }))
+      .toEqual({ ownerDialog: true, mainDialog: false, ownerText: true, mainText: false });
+    const details = ownerDocument.querySelector<HTMLElement>('[role="alertdialog"]');
+    if (details === null) throw new Error("Expected failure details in the iframe document.");
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(details.contains(ownerDocument.activeElement)).toBe(true);
 
     await screen.unmount();
     screen = undefined;

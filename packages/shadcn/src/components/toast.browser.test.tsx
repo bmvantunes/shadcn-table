@@ -294,31 +294,50 @@ describe("persistent toast accessibility", () => {
       .not.toBeInTheDocument();
   });
 
-  test("keeps one high-priority announcement when the viewport is keyboard-focused", async () => {
+  test("scopes high-priority alert-dialog semantics to the focused toast", async () => {
     const toastManager = createToastManager();
     const screen = await render(<ToastHarness toastManager={toastManager} />);
-    const viewport = screen.getByRole("region", { name: "Notifications" });
-
-    addPersistentToast(toastManager, "Existing failure");
-    await expect
-      .element(screen.getByRole("dialog", { name: "Existing failure" }))
-      .toBeInTheDocument();
-    await userEvent.keyboard("{F6}");
-    await expect.element(viewport).toHaveFocus();
-
     toastManager.add({
-      title: "Focused save failed",
-      description: "The focused save was not confirmed.",
+      title: "First save failed",
+      description: "The first save was not confirmed.",
+      timeout: 0,
+      type: "error",
+      priority: "high",
+    });
+    toastManager.add({
+      title: "Second save failed",
+      description: "The second save was not confirmed.",
       timeout: 0,
       type: "error",
       priority: "high",
     });
 
-    const announcement = screen.getByRole("alertdialog", { name: "Focused save failed" });
-    await expect.element(announcement).toBeInTheDocument();
     await expect
-      .element(announcement)
-      .toHaveAccessibleDescription("The focused save was not confirmed.");
+      .element(screen.getByRole("heading", { name: "First save failed" }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("heading", { name: "Second save failed" }))
+      .toBeInTheDocument();
+
+    const focusedRoot = screen
+      .getByRole("heading", { name: "First save failed" })
+      .element()
+      .closest<HTMLElement>('[data-slot="toast"]');
+    const otherRoot = screen
+      .getByRole("heading", { name: "Second save failed" })
+      .element()
+      .closest<HTMLElement>('[data-slot="toast"]');
+    if (focusedRoot === null || otherRoot === null) throw new Error("Expected both toast roots.");
+    const close = focusedRoot.querySelector<HTMLButtonElement>('button[aria-label="Close toast"]');
+    if (close === null) throw new Error("Expected the focused toast Close control.");
+    close.focus({ focusVisible: true });
+
+    await expect.poll(() => focusedRoot.getAttribute("role")).toBe("alertdialog");
+    expect(otherRoot.getAttribute("role")).toBe("presentation");
+    await expect
+      .element(screen.getByRole("alertdialog"))
+      .toHaveAccessibleDescription("The first save was not confirmed.");
+    expect(screen.getByRole("alertdialog").all()).toHaveLength(1);
     await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
   });
 

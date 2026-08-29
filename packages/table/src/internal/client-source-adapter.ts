@@ -412,7 +412,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       }
       this.source = sourceSnapshot;
       const publishedCoherent = asClientCoherent(this.publication.rowSpace);
-      if (publishedCoherent === undefined) {
+      if (publishedCoherent === undefined || hasInvalidSourceEvidence(sourceSnapshot)) {
         this.transitionEditSource(undefined, this.publication.status, this.publication.version);
       } else if (this.editCoherent === publishedCoherent) {
         this.transitionEditSource(
@@ -465,7 +465,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       changedRowIds === undefined ? publication : Object.freeze({ ...publication, changedRowIds });
     this.coherent = next;
     const publishedCoherent = asClientCoherent(this.publication.rowSpace);
-    if (publishedCoherent === undefined) {
+    if (publishedCoherent === undefined || hasInvalidSourceEvidence(sourceSnapshot)) {
       this.transitionEditSource(undefined, sourceSnapshot.status, sourceSnapshot.version);
     } else if (this.editCoherent === publishedCoherent) {
       this.transitionEditSource(publishedCoherent, sourceSnapshot.status, sourceSnapshot.version);
@@ -536,14 +536,19 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly resolveRowId = (row: unknown): BrunoTableRowId => this.getRowId(row as TRow);
 
-  public readonly acceptRows = (rows: readonly BrunoTableClientAdmittedRow[]): boolean => {
-    if (this.coherent?.admittedRows.asArray() !== rows) return false;
+  public readonly acceptRows = (
+    rows: readonly BrunoTableClientAdmittedRow[],
+  ): "accepted-changed" | "accepted-unchanged" | "invalid-source" | "stale-snapshot" => {
+    if (this.coherent?.admittedRows.asArray() !== rows) return "stale-snapshot";
+    if (hasInvalidSourceEvidence(this.source)) return "invalid-source";
     this.acceptedCoherent = this.coherent;
     return this.transitionEditSource(
       this.coherent,
       this.publication.status,
       this.publication.version,
-    );
+    )
+      ? "accepted-changed"
+      : "accepted-unchanged";
   };
 
   public readonly rejectQueryRows = (
@@ -561,10 +566,6 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       );
       this.coherent = undefined;
       this.transitionEditSource(undefined, this.publication.status, this.publication.version);
-      const changedRowIds = deriveChangedRawRowIds(rejectedCoherent, this.coherent);
-      if (changedRowIds !== undefined) {
-        this.publication = Object.freeze({ ...this.publication, changedRowIds });
-      }
       this.valueCache.retainColumns(this.sourceColumns);
       return this.publication;
     }
@@ -591,11 +592,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     );
     this.coherent = asClientCoherent(this.publication.rowSpace);
     this.transitionEditSource(this.coherent, this.publication.status, this.publication.version);
-    const changedRowIds = deriveChangedRawRowIds(
-      rejectedCoherent,
-      this.coherent,
-      rejectedCoherent.changeFromPrevious.changedIndexes,
-    );
+    const changedRowIds = deriveEditSourceChangedRawRowIds(rejectedCoherent, this.coherent);
     if (changedRowIds !== undefined) {
       this.publication = Object.freeze({ ...this.publication, changedRowIds });
     }
@@ -711,14 +708,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       if (activeDetector === undefined) return;
       try {
         if (!activeDetector(previousRows, nextRows, change)) {
-          if (nextCoherent !== undefined) {
-            this.acceptedCoherent = nextCoherent;
-            this.transitionEditSource(
-              nextCoherent,
-              this.publication.status,
-              this.publication.version,
-            );
-          }
+          if (nextCoherent !== undefined) this.acceptRows(nextRows);
           return;
         }
       } catch (error) {
@@ -2037,6 +2027,15 @@ function retainedSourceInvalidSnapshot<TRow>(
       : source.invalidStatus !== undefined
         ? Object.freeze({ kind: "invalid-status" as const, receivedStatus: source.invalidStatus })
         : undefined;
+}
+
+function hasInvalidSourceEvidence<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
+  return (
+    source.invalidRows !== undefined ||
+    source.invalidLifecycle !== undefined ||
+    source.invalidStatus !== undefined ||
+    ((source.status === "ready" || source.status === "stale") && !isCompleteSource(source))
+  );
 }
 
 function rejectPublicationRows<TRow>(

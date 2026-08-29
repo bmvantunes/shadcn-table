@@ -37,6 +37,7 @@ type SaveFailureToasterEntry = Readonly<{
   readonly manager: ReturnType<typeof createToastManager>;
   readonly owners: Set<SaveFailureToasterOwner>;
   readonly host: HTMLElement;
+  readonly portalContainer: RefObject<HTMLElement | null>;
   readonly root: Root;
 }>;
 
@@ -64,15 +65,16 @@ function createSaveFailureToasterEntry(ownerDocument: Document): SaveFailureToas
   const host = ownerDocument.createElement("div");
   host.dataset["brunoTableSaveFailureToaster"] = "";
   ownerDocument.body.append(host);
+  const portalContainer = Object.freeze({ current: ownerDocument.body });
   const root = createRoot(host);
-  root.render(
-    <Toaster
-      portalContainer={{ current: ownerDocument.body }}
-      toastManager={manager}
-      timeout={0}
-    />,
-  );
-  return Object.freeze({ manager, owners: new Set<SaveFailureToasterOwner>(), host, root });
+  root.render(<Toaster portalContainer={portalContainer} toastManager={manager} timeout={0} />);
+  return Object.freeze({
+    manager,
+    owners: new Set<SaveFailureToasterOwner>(),
+    host,
+    portalContainer,
+    root,
+  });
 }
 
 function scheduleSaveFailureToasterDisposal(
@@ -432,7 +434,11 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
       <span aria-hidden="true" className="hidden" ref={toasterAnchor} />
       <AlertDialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         {detailsOpen ? (
-          <BrunoTableSaveFailureDetails contentRef={detailsContent} runtime={runtime} />
+          <BrunoTableSaveFailureDetails
+            contentRef={detailsContent}
+            portalContainer={toasterEntry?.portalContainer}
+            runtime={runtime}
+          />
         ) : null}
       </AlertDialog>
     </>
@@ -441,9 +447,11 @@ const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
 
 const BrunoTableSaveFailureDetails = memo(function BrunoTableSaveFailureDetails({
   contentRef,
+  portalContainer,
   runtime,
 }: {
   readonly contentRef: RefObject<HTMLDivElement | null>;
+  readonly portalContainer: RefObject<HTMLElement | null> | undefined;
   readonly runtime: BrunoTableEditMemoryRuntime;
 }): ReactElement {
   const failure = useSyncExternalStore(
@@ -454,6 +462,7 @@ const BrunoTableSaveFailureDetails = memo(function BrunoTableSaveFailureDetails(
   return (
     <AlertDialogContent
       ref={contentRef}
+      portalContainer={portalContainer}
       className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
     >
       <AlertDialogHeader>

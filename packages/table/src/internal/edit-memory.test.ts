@@ -82,6 +82,45 @@ describe("BrunoTable Edit Memory", () => {
     expect(memory.getSaveFailureSnapshot()).toEqual({ count: 0, messages: [], operations: [] });
   });
 
+  it("normalizes non-Error rejection reasons without reading unsafe explanation protocols", () => {
+    const memory = new BrunoTableEditMemoryRuntime();
+    disposers.push(() => memory.dispose());
+    memory.activate();
+    const changeSet = [
+      {
+        rowId: "row-1",
+        baseRow: { id: "row-1", value: "before" },
+        expectedVersion: 1n,
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "before",
+            after: "after",
+          },
+        ],
+      },
+    ] as const;
+    const throwingMessage = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(throwingMessage, "message", {
+      get: () => {
+        throw new Error("Do not expose this getter failure.");
+      },
+    });
+
+    memory.recordSaveFailure("operation-string", "  String rejection.  ", changeSet);
+    memory.recordSaveFailure("operation-object", { message: "Object rejection." }, changeSet);
+    memory.recordSaveFailure("operation-throwing", throwingMessage, changeSet);
+
+    expect(
+      memory.getSaveFailureSnapshot().operations.map((operation) => operation.message),
+    ).toEqual([
+      "The save could not be confirmed.",
+      "The save could not be confirmed.",
+      "The save could not be confirmed.",
+    ]);
+  });
+
   it("retains only rendered identity evidence for rejected-operation details", () => {
     const memory = new BrunoTableEditMemoryRuntime();
     disposers.push(() => memory.dispose());

@@ -5621,7 +5621,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     expect(rowsStore.getSnapshot()[0]?.raw).toBe(candidate);
   });
 
-  it("derives retry row deltas across every superseded provisional publication", () => {
+  it("derives fallback and retry row deltas across every superseded provisional publication", () => {
     const first = { id: "first", name: "Resident first" } satisfies Row;
     const second = { id: "second", name: "Resident second" } satisfies Row;
     const provisionalFirst = { ...first, name: "Provisional first" } satisfies Row;
@@ -5629,7 +5629,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const { adapter, runtime, view } = createSubject([first, second]);
     const rowsStore = adapter.createRowsStore(view, () => () => true);
     rowsStore.subscribe(() => undefined);
-    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
 
     runtime.publish(adapter.publish(source([provisionalFirst, second], "stale")));
     runtime.publish(adapter.publish(source([provisionalFirst, rejectedSecond], "stale")));
@@ -5640,6 +5640,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
       message: "Rejected second candidate.",
     });
     if (fallback === undefined) throw new Error("Expected a retained-row fallback.");
+    expect(fallback.changedRowIds).toEqual(new Set(["first", "second"]));
     runtime.publish(fallback);
 
     const retry = adapter.retryQueryRows();
@@ -5692,13 +5693,29 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const { adapter, runtime, view } = createSubject([resident]);
     const rowsStore = adapter.createRowsStore(view, () => () => true);
     rowsStore.subscribe(() => undefined);
-    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
 
     runtime.publish(adapter.publish(source([provisional], "stale")));
     runtime.publish(adapter.publish(source([provisional], "stale")));
-    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
 
     expect(adapter.getEditSourceChangedRowIds()).toEqual(new Set(["first"]));
+  });
+
+  it("distinguishes a stale row snapshot from an unchanged accepted transition", () => {
+    const resident = { id: "first", name: "Resident" } satisfies Row;
+    const replacement = { id: "first", name: "Replacement" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([resident]);
+    const rowsStore = adapter.createRowsStore(view, () => () => true);
+    rowsStore.subscribe(() => undefined);
+    const residentRows = rowsStore.getSnapshot();
+    expect(adapter.acceptRows(residentRows)).toBe("accepted-changed");
+    expect(adapter.acceptRows(residentRows)).toBe("accepted-unchanged");
+
+    runtime.publish(adapter.publish(source([replacement])));
+
+    expect(adapter.acceptRows(residentRows)).toBe("stale-snapshot");
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
   });
 
   it("withdraws edit authority for a ready source with no coherent row space", () => {
@@ -5707,7 +5724,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const { adapter, runtime, view } = createSubject([resident]);
     const rowsStore = adapter.createRowsStore(view, () => () => true);
     rowsStore.subscribe(() => undefined);
-    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
     expect(adapter.hasAuthoritativeEditSource()).toBe(true);
 
     const invalid = adapter.publish(source([replacement], "ready", { totalRows: 2 }));
@@ -5718,9 +5735,32 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
 
     runtime.publish(adapter.publish(source([replacement])));
     expect(adapter.hasAuthoritativeEditSource()).toBe(false);
-    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
     expect(adapter.hasAuthoritativeEditSource()).toBe(true);
     expect(adapter.getAuthoritativeEditRowSnapshot("first")).toBe(replacement);
+  });
+
+  it("withdraws edit authority when an invalid stale source retains coherent rows", () => {
+    const resident = { id: "first", name: "Resident" } satisfies Row;
+    const replacement = { id: "first", name: "Replacement" } satisfies Row;
+    const { adapter, runtime, view } = createSubject([resident]);
+    const rowsStore = adapter.createRowsStore(view, () => () => false);
+    rowsStore.subscribe(() => undefined);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
+
+    const invalid = adapter.publish(source([replacement], "stale", { totalRows: 2 }));
+    runtime.publish(invalid);
+
+    expect(invalid.rowSpace?.getRow("first")).toBe(resident);
+    expect(invalid.invalid).toEqual({
+      kind: "row-count-mismatch",
+      expectedRows: 2,
+      receivedRows: 1,
+    });
+    expect(adapter.hasAuthoritativeEditSource()).toBe(false);
+    expect(adapter.getAuthoritativeEditRowSnapshot("first")).toBeUndefined();
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("invalid-source");
+    expect(adapter.hasAuthoritativeEditSource()).toBe(false);
   });
 
   it("publishes full edit invalidation for accepted source envelope-only changes", () => {
@@ -5729,7 +5769,7 @@ describe("BrunoTable Grid Runtime re-entrant publication", () => {
     const { adapter, view } = createSubject(residentRows);
     const rowsStore = adapter.createRowsStore(view, () => () => true);
     rowsStore.subscribe(() => undefined);
-    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe(true);
+    expect(adapter.acceptRows(rowsStore.getSnapshot())).toBe("accepted-changed");
     const changes: Array<ReadonlySet<string> | undefined> = [];
     adapter.subscribeEditSource((changedRowIds) => changes.push(changedRowIds));
 
