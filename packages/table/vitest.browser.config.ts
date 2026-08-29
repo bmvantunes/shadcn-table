@@ -23,7 +23,6 @@ export default defineConfig({
     include: [
       "@bruno/shadcn/direction",
       "@bruno/shadcn/switch",
-      "@bruno/shadcn/alert-dialog",
       "@effect/atom-react",
       "@tanstack/react-hotkeys",
       "effect",

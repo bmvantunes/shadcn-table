@@ -6,8 +6,17 @@ const shadcnRoot = fileURLToPath(new URL("../packages/shadcn/src/components/", i
 
 export const shadcnSourceAliases = Object.freeze(
   Object.fromEntries(
-    ["alert", "button", "empty", "native-select", "popover", "skeleton", "spinner", "table"].map(
-      (name) => [`@bruno/shadcn/${name}`, `${shadcnRoot}${name}.tsx`],
-    ),
+    [
+      "alert",
+      "alert-dialog",
+      "button",
+      "empty",
+      "native-select",
+      "popover",
+      "skeleton",
+      "spinner",
+      "table",
+      "toast",
+    ].map((name) => [`@bruno/shadcn/${name}`, `${shadcnRoot}${name}.tsx`]),
   ),
 );

@@ -57,8 +57,13 @@ import {
 import { resolveBrunoTableCellContent } from "./internal/cell-presentation";
 import { BrunoTableEditModeControl } from "./internal/edit-chrome";
 import { BrunoTableEditMemoryRuntime } from "./internal/edit-memory";
+import {
+  adaptBrunoTableSaveHandler,
+  BrunoTableSaveOperationRuntime,
+} from "./internal/save-operations";
 import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
 import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
+import { reconcileBrunoTableClientEditSourcePublication } from "./internal/client-edit-source";
 
 function adaptBrunoTableRowVersionExtractor<TRow>(
   extractor: ((row: TRow) => unknown) | undefined,
@@ -122,6 +127,13 @@ function BrunoTableClientInstance<
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
   const editable = props.editable === true;
+  const onSaveEdits = props.onSaveEdits;
+  if (editable && typeof props.getRowVersion !== "function") {
+    throw new TypeError("BrunoTable editable Client Tables require getRowVersion.");
+  }
+  if (editable && typeof onSaveEdits !== "function") {
+    throw new TypeError("BrunoTable editable Client Tables require onSaveEdits.");
+  }
   if (
     editable &&
     !compiledColumns.some(
@@ -205,27 +217,37 @@ function BrunoTableClientInstance<
     }
     return created;
   });
+  const [editMemory] = useState(() => (editable ? new BrunoTableEditMemoryRuntime() : undefined));
   const [cellEdit] = useState(() =>
     editable
       ? new BrunoTableCellEditRuntime({
           columns: compiledColumns,
-          getRow: runtime.getRowSnapshot,
+          getRow: rowPipelineAdapter.getAuthoritativeEditRowSnapshot,
           getCanonicalValue: (rowId, columnId) => {
-            const rowSpace = runtime.getRowSpaceSnapshot();
-            const rowPresent = rowSpace?.getRow(rowId) !== undefined;
-            const value = rowPresent ? rowSpace?.getCellValue(rowId, columnId) : undefined;
-            return rowPresent && !isBrunoTableInvalidCellValue(value)
-              ? Object.freeze({ _tag: "Success" as const, value })
+            const snapshot = rowPipelineAdapter.getAuthoritativeEditCellSnapshot(rowId, columnId);
+            return snapshot.found && !isBrunoTableInvalidCellValue(snapshot.value)
+              ? Object.freeze({ _tag: "Success" as const, value: snapshot.value })
               : Object.freeze({ _tag: "Failure" as const });
           },
           ...(props.getRowVersion === undefined
             ? {}
             : { getRowVersion: adaptBrunoTableRowVersionExtractor(props.getRowVersion)! }),
+          isSourceAuthoritative: rowPipelineAdapter.hasAuthoritativeEditSource,
+          ...(editMemory === undefined
+            ? {}
+            : {
+                onCommit: (change) => editMemory.requestImmediateSave([change]),
+                onCommitGesture: (changes) => editMemory.requestImmediateSave(changes),
+              }),
           incrementalTraversal: true,
         })
       : undefined,
   );
-  const [editMemory] = useState(() => (editable ? new BrunoTableEditMemoryRuntime() : undefined));
+  const [saveOperations] = useState(() =>
+    cellEdit === undefined || editMemory === undefined
+      ? undefined
+      : new BrunoTableSaveOperationRuntime(cellEdit, editMemory),
+  );
   const renderResetReview = useCallback(
     (reviewRows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => (
       <BrunoTableResetReviewTable reviewRows={reviewRows} />
@@ -254,6 +276,14 @@ function BrunoTableClientInstance<
     return editMemory.connectCellEdit(cellEdit);
   }, [cellEdit, editMemory]);
   useLayoutEffect(() => {
+    if (saveOperations === undefined || onSaveEdits === undefined) return;
+    return saveOperations.setHandler(adaptBrunoTableSaveHandler(onSaveEdits));
+  }, [onSaveEdits, saveOperations]);
+  useLayoutEffect(() => {
+    if (saveOperations === undefined) return;
+    return saveOperations.activate();
+  }, [saveOperations]);
+  useLayoutEffect(() => {
     if (editMemory === undefined) return;
     return runtime.registerEditCommandHandler((command) => {
       switch (command.type) {
@@ -266,15 +296,6 @@ function BrunoTableClientInstance<
       }
     });
   }, [editMemory, runtime]);
-  useLayoutEffect(() => {
-    if (cellEdit === undefined) return;
-    const reconcile = (changedRowIds?: ReadonlySet<string>): void => {
-      cellEdit.reconcileSourceRows(changedRowIds);
-      cellEdit.reconcileActiveRow(changedRowIds);
-    };
-    reconcile();
-    return runtime.subscribeRowChanges(reconcile);
-  }, [cellEdit, runtime]);
   useLayoutEffect(() => {
     const previouslyEnabled = previousRowSelectionEnabled.current;
     previousRowSelectionEnabled.current = rowSelectionEnabled;
@@ -307,6 +328,32 @@ function BrunoTableClientInstance<
     [compiledColumns, editable, editMemory, runtimeView],
   );
 
+  const reconcilePublishedEditSource = useCallback(
+    (changedRowIds: ReadonlySet<string> | undefined): void => {
+      if (rowPipelineAdapter.hasAuthoritativeEditSource()) {
+        cellEdit?.reconcileColumns(compiledColumns, (rowId) =>
+          rowPipelineAdapter.getAuthoritativeEditRowSnapshot(rowId),
+        );
+        cellEdit?.reconcileTraversalRows(changedRowIds);
+      }
+      reconcileBrunoTableClientEditSourcePublication(
+        rowPipelineAdapter,
+        editMemory,
+        cellEdit,
+        changedRowIds,
+      );
+    },
+    [cellEdit, compiledColumns, editMemory, rowPipelineAdapter],
+  );
+
+  useLayoutEffect(() => {
+    const unsubscribe = rowPipelineAdapter.subscribeEditSource(reconcilePublishedEditSource);
+    if (rowPipelineAdapter.isEditSourceConfiguredFor(compiledColumns)) {
+      reconcilePublishedEditSource(rowPipelineAdapter.getEditSourceChangedRowIds());
+    }
+    return unsubscribe;
+  }, [compiledColumns, reconcilePublishedEditSource, rowPipelineAdapter]);
+
   useLayoutEffect(() => {
     const publication = rowPipelineAdapter.reconcile(
       props.clientSource,
@@ -325,13 +372,14 @@ function BrunoTableClientInstance<
       queryConfiguration,
       groupingProjectionActive,
     );
-    cellEdit?.reconcileColumns(compiledColumns, (rowId) => publication.rowSpace?.getRow(rowId));
+    editMemory?.setSavePreflightAvailable(rowPipelineAdapter.hasAuthoritativeEditSource());
     if (!groupingProjectionActive) {
       runtime.reconcile(publication, compiledColumns, queryConfiguration, groupRowsColumn.width);
     }
   }, [
     cellEdit,
     compiledColumns,
+    editMemory,
     groupRowsColumn,
     props.clientSource,
     props.getRowId,

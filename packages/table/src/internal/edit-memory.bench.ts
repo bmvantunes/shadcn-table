@@ -1,8 +1,13 @@
 import { bench, describe } from "vite-plus/test";
 
-import { BrunoTableCellEditRuntime, type BrunoTableCellEditDraftSnapshot } from "./cell-edit";
+import {
+  BrunoTableCellEditRuntime,
+  type BrunoTableCellEditDraftSnapshot,
+  type BrunoTableCellEditSaveChangeSet,
+} from "./cell-edit";
 import { assertBrunoTableBenchmarkBudget } from "./benchmark-budget";
 import { compileColumns } from "./compile-columns";
+import { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const referenceFrameBudgetMs = 8.33;
 const warmupSampleCount = 2;
@@ -81,6 +86,163 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
   if (!reconciliationRuntime.applyAcceptedDraftGesture(gesture)) {
     throw new Error("The reconciliation fixture was not accepted.");
   }
+
+  const saveRows = new Map<string, Readonly<{ readonly value: string; readonly revision: bigint }>>(
+    Array.from({ length: gestureCellCount }, (_unused, index) => [
+      `save-row-${String(index)}`,
+      Object.freeze({ value: "server", revision: 1n }),
+    ]),
+  );
+  let saveRowReads = 0;
+  const saveReconciliationRuntime = new BrunoTableCellEditRuntime({
+    columns,
+    getRow: (rowId) => {
+      saveRowReads += 1;
+      return saveRows.get(rowId);
+    },
+    getRowVersion: (candidate) => (candidate as Readonly<{ readonly revision: bigint }>).revision,
+  });
+  const saveChangeRows = [...saveRows].map(([rowId, baseRow]) =>
+    Object.freeze({
+      rowId,
+      baseRow,
+      expectedVersion: baseRow.revision,
+      changes: Object.freeze([
+        Object.freeze({
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          before: "server",
+          after: "submitted",
+        }),
+      ]),
+    }),
+  );
+  const firstSaveChangeRow = saveChangeRows[0];
+  if (firstSaveChangeRow === undefined)
+    throw new Error("Save benchmark fixture must be non-empty.");
+  const saveChangeSet = Object.freeze([
+    firstSaveChangeRow,
+    ...saveChangeRows.slice(1),
+  ]) as BrunoTableCellEditSaveChangeSet;
+  if (!saveReconciliationRuntime.beginSaveOperation("save-operation", saveChangeSet, false)) {
+    throw new Error("Save benchmark fixture could not acquire its Immediate locks.");
+  }
+  saveReconciliationRuntime.acceptSave("save-operation", saveChangeSet, false);
+  let saveReconciliationIndex = 0;
+  const saveReconciliationSamples: number[] = [];
+  bench(
+    "reconciles and unlocks one row in a 5,000-row Immediate operation without global scans",
+    () => {
+      const rowId = `save-row-${String(saveReconciliationIndex)}`;
+      saveReconciliationIndex += 1;
+      const previousCount =
+        saveReconciliationRuntime.getAcceptedOverlayCountForOperation("save-operation");
+      saveRows.set(rowId, Object.freeze({ value: "submitted", revision: 2n }));
+      saveRowReads = 0;
+      const startedAt = performance.now();
+      saveReconciliationRuntime.reconcileSourceRows(new Set([rowId]));
+      recordBudgetSample(
+        "one-row Immediate Save reconciliation",
+        saveReconciliationSamples,
+        performance.now() - startedAt,
+      );
+      if (
+        saveReconciliationRuntime.getAcceptedOverlayCountForOperation("save-operation") !==
+        previousCount - 1
+      ) {
+        throw new Error("One-row Save reconciliation changed the wrong overlay count.");
+      }
+      if (saveRowReads !== 1) {
+        throw new Error("One-row Immediate Save reconciliation visited unrelated source rows.");
+      }
+      if (!saveReconciliationRuntime.isEditable(rowId, "COL_ID_VALUE")) {
+        throw new Error("One-row Save reconciliation retained its Immediate lock.");
+      }
+    },
+    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+  );
+
+  const rejectedRows = new Map(saveRows);
+  let rejectedRowReads = 0;
+  const rejectedReconciliationRuntime = new BrunoTableCellEditRuntime({
+    columns,
+    getRow: (rowId) => {
+      rejectedRowReads += 1;
+      return rejectedRows.get(rowId);
+    },
+  });
+  rejectedReconciliationRuntime.rejectSave("rejected-operation", saveChangeSet, false);
+  const rejectedFailureMemory = new BrunoTableEditMemoryRuntime();
+  rejectedFailureMemory.activate();
+  rejectedFailureMemory.recordSaveFailure(
+    "rejected-operation",
+    new Error("Benchmark rejection."),
+    saveChangeSet,
+  );
+  let lastRejectedUpdate =
+    rejectedReconciliationRuntime.getRejectedOperationUpdateSnapshot("rejected-operation");
+  const unsubscribeRejectedFailure = rejectedReconciliationRuntime.subscribeRejectedOperation(
+    "rejected-operation",
+    () => {
+      lastRejectedUpdate =
+        rejectedReconciliationRuntime.getRejectedOperationUpdateSnapshot("rejected-operation");
+      rejectedFailureMemory.removeSaveFailureCells(
+        "rejected-operation",
+        lastRejectedUpdate.removedCells,
+      );
+    },
+  );
+  let rejectedReconciliationIndex = 100;
+  const rejectedReconciliationSamples: number[] = [];
+  bench(
+    "reconciles one row in a 5,000-row rejected operation without scanning other rows",
+    () => {
+      const rowId = `save-row-${String(rejectedReconciliationIndex)}`;
+      rejectedReconciliationIndex += 1;
+      rejectedRows.set(rowId, Object.freeze({ value: "submitted", revision: 2n }));
+      rejectedRowReads = 0;
+      const startedAt = performance.now();
+      rejectedReconciliationRuntime.reconcileSourceRows(new Set([rowId]));
+      recordBudgetSample(
+        "one-row rejected Save reconciliation",
+        rejectedReconciliationSamples,
+        performance.now() - startedAt,
+      );
+      if (rejectedRowReads !== 1) {
+        throw new Error(
+          `One-row rejected Save reconciliation read ${String(rejectedRowReads)} source rows.`,
+        );
+      }
+      if (
+        rejectedReconciliationRuntime.getCellSnapshot(rowId, "COL_ID_VALUE").saveFailed === true
+      ) {
+        throw new Error("One-row rejected Save reconciliation retained converged evidence.");
+      }
+      if (lastRejectedUpdate.removedCells.length !== 1) {
+        throw new Error("Rejected Save reconciliation did not publish one Cell Identity delta.");
+      }
+      if (rejectedFailureMemory.getSaveFailureSummarySnapshot().count !== 1) {
+        throw new Error("Partial rejected reconciliation cleared its compact failure summary.");
+      }
+    },
+    {
+      iterations: 100,
+      time: 0,
+      warmupIterations: 2,
+      warmupTime: 0,
+      teardown: (_task, mode) => {
+        if (mode !== "run") return;
+        saveReconciliationRuntime.activate();
+        rejectedReconciliationRuntime.activate();
+        unsubscribeRejectedFailure();
+        rejectedFailureMemory.dispose();
+        saveReconciliationRuntime.dispose();
+        rejectedReconciliationRuntime.dispose();
+        saveRows.clear();
+        rejectedRows.clear();
+      },
+    },
+  );
 
   bench(
     "applies, undoes, and redoes one 5,000-cell gesture as one bounded sparse command",

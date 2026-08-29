@@ -9,6 +9,7 @@ export default defineConfig({
     include: [
       "@bruno/shadcn/direction",
       "@bruno/shadcn/switch",
+      "@bruno/shadcn/toast",
       "@bruno/shadcn/alert-dialog",
       "react",
       "react/jsx-runtime",

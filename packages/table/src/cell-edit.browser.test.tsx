@@ -7,7 +7,12 @@ import { flushSync } from "react-dom";
 
 import { BrunoTableClient, BrunoTableSelectColumn } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
-import type { BrunoTableColumnId, BrunoTableColumns, BrunoTableValueType } from "./public-types";
+import type {
+  BrunoTableClientProps,
+  BrunoTableColumnId,
+  BrunoTableColumns,
+  BrunoTableValueType,
+} from "./public-types";
 
 type Row = Readonly<{
   readonly id: string;
@@ -49,7 +54,7 @@ const rows: readonly Row[] = [
   { id: "grace", name: "Grace", score: 8, note: "last", revision: 9_007_199_254_740_994n },
 ];
 
-async function renderEditableTable(strict = false) {
+async function renderBatchEditableTable(strict = false) {
   const onSaveEdits = vi.fn(() => Promise.resolve());
   const table = (
     <>
@@ -72,6 +77,7 @@ async function renderEditableTable(strict = false) {
   );
   const screen = await render(strict ? <StrictMode>{table}</StrictMode> : table);
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT" });
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
   grid.element().focus();
   return { grid, onSaveEdits, screen };
 }
@@ -98,7 +104,7 @@ afterEach(async () => {
 });
 
 test("commits through one parse-validation gate and preserves invalid editor evidence", async () => {
-  const { grid, onSaveEdits, screen } = await renderEditableTable();
+  const { grid, onSaveEdits, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{ArrowRight}{Enter}");
   const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
   await expect.element(editor).toHaveValue(4);
@@ -128,7 +134,7 @@ test("commits through one parse-validation gate and preserves invalid editor evi
 });
 
 test("keeps Cell Edit active after the Strict Mode effect rehearsal", async () => {
-  const { grid, screen } = await renderEditableTable(true);
+  const { grid, screen } = await renderBatchEditableTable(true);
   await userEvent.keyboard("{Enter}");
   const editor = screen.getByRole("textbox", { name: "Edit Name" });
   await expect.element(editor).toHaveFocus();
@@ -142,7 +148,7 @@ test("keeps Cell Edit active after the Strict Mode effect rehearsal", async () =
 });
 
 test("leaves prevented editor movement commands with the owning widget", async () => {
-  const { onSaveEdits, screen } = await renderEditableTable();
+  const { onSaveEdits, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{Enter}");
   const editor = screen.getByRole("textbox", { name: "Edit Name" });
   await userEvent.fill(editor, "Blocked movement");
@@ -806,7 +812,7 @@ test("keeps the validation explanation inside the scrollport across collision ch
 });
 
 test("uses the sole active Table Instance as the document Escape fallback", async () => {
-  const { screen } = await renderEditableTable();
+  const { screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{Enter}");
   const editor = screen.getByRole("textbox", { name: "Edit Name" });
   await expect.element(editor).toBeVisible();
@@ -1211,7 +1217,7 @@ test.each(["ltr", "rtl"] as const)(
 );
 
 test("starts from exact current values, replaces from produced text, and cancels without a transaction", async () => {
-  const { grid, onSaveEdits, screen } = await renderEditableTable();
+  const { grid, onSaveEdits, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{Enter}");
   let editor = screen.getByRole("textbox", { name: "Edit Name" });
   await expect.element(editor).toHaveValue("Ada");
@@ -1305,7 +1311,7 @@ test("seeds custom Value Type editing from the authoritative canonical cell valu
 });
 
 test("uses only browser-produced composition text and respects prevented nested Escape", async () => {
-  const { grid, screen } = await renderEditableTable();
+  const { grid, screen } = await renderBatchEditableTable();
   grid
     .element()
     .dispatchEvent(
@@ -1362,7 +1368,7 @@ test("uses only browser-produced composition text and respects prevented nested 
 });
 
 test("starts replacement editing from browser-produced replacement text", async () => {
-  const { grid, screen } = await renderEditableTable();
+  const { grid, screen } = await renderBatchEditableTable();
   const replacement = new InputEvent("beforeinput", {
     bubbles: true,
     cancelable: true,
@@ -1381,7 +1387,7 @@ test("starts replacement editing from browser-produced replacement text", async 
 });
 
 test("preserves incomplete Number replace seeds until the native control can own them", async () => {
-  const { grid, screen } = await renderEditableTable();
+  const { grid, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{ArrowRight}-");
   let rawEditor = screen.getByRole("textbox", { name: "Edit Score" });
   await expect.element(rawEditor).toHaveValue("-");
@@ -1477,7 +1483,7 @@ test("preserves incomplete Number replace seeds until the native control can own
 });
 
 test("gates outside pointer, sorting, and filtering before their actions", async () => {
-  const { onSaveEdits, screen } = await renderEditableTable();
+  const { onSaveEdits, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{ArrowRight}{F2}");
   const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
   await userEvent.clear(editor);
@@ -1512,7 +1518,7 @@ test("gates outside pointer, sorting, and filtering before their actions", async
 });
 
 test("gates another cell in the edit-owned row through the same commit boundary", async () => {
-  const { grid, screen } = await renderEditableTable();
+  const { grid, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{ArrowRight}{F2}");
   const editor = screen.getByRole("spinbutton", { name: "Edit Score" });
   await userEvent.clear(editor);
@@ -1535,7 +1541,7 @@ test("lets Shift pointer range activation retain its pre-commit anchor", async (
   const writeText = vi.fn(async () => undefined);
   const restoreClipboard = installClipboard(writeText);
   try {
-    const { screen } = await renderEditableTable();
+    const { screen } = await renderBatchEditableTable();
     await userEvent.keyboard("{F2}");
     const editor = screen.getByRole("textbox", { name: "Edit Name" });
     const destination = screen.getByRole("gridcell", { name: "Grace", exact: true });
@@ -1553,7 +1559,7 @@ test("lets Shift pointer range activation retain its pre-commit anchor", async (
 });
 
 test("rolls back Shift pointer range activation when the edit commit is invalid", async () => {
-  const { grid, screen } = await renderEditableTable();
+  const { grid, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{ArrowRight}");
   const originCell = screen.getByRole("gridcell", { name: "4", exact: true });
   const originCellId = originCell.element().id;
@@ -1935,7 +1941,7 @@ test.each([
 );
 
 test("traverses pinned logical order, uses the one-axis range exception, and exits at terminal Tab", async () => {
-  const { grid, screen } = await renderEditableTable();
+  const { grid, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{F2}");
   await userEvent.keyboard("{Tab}");
   const scoreCell = screen.getByRole("gridcell", { name: "4", exact: true });
@@ -1963,7 +1969,7 @@ test("traverses pinned logical order, uses the one-axis range exception, and exi
 });
 
 test("traverses editable cells from Navigation Mode and yields natively only at both terminals", async () => {
-  const { grid, screen } = await renderEditableTable();
+  const { grid, screen } = await renderBatchEditableTable();
 
   await userEvent.keyboard("{Tab}");
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(
@@ -1986,7 +1992,7 @@ test("traverses editable cells from Navigation Mode and yields natively only at 
 });
 
 test("supports reverse commit movement and exits backward at the first eligible cell", async () => {
-  const { grid, screen } = await renderEditableTable();
+  const { grid, screen } = await renderBatchEditableTable();
   await userEvent.keyboard("{ArrowDown}{ArrowRight}{F2}{Shift>}{Enter}{/Shift}");
   expect(grid.element().getAttribute("aria-activedescendant")).toBe(
     screen.getByRole("gridcell", { name: "4", exact: true }).element().id,
@@ -2135,6 +2141,7 @@ test("reveals an exact far predicate destination in both directions before nativ
     </>,
   );
   const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CELL_EDIT_TALL" });
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
   grid.element().focus();
 
   expect(predicateEvaluations.mock.calls.length).toBeLessThan(tallRows.length * 150);
@@ -2174,6 +2181,8 @@ test("reveals an exact far predicate destination in both directions before nativ
   await expect.element(screen.getByRole("textbox", { name: "Edit Destination" })).toHaveFocus();
   await userEvent.keyboard("{Tab}");
   await expect.element(screen.getByRole("button", { name: "Reset edits" })).toHaveFocus();
+  await userEvent.keyboard("{Tab}");
+  await expect.element(screen.getByRole("button", { name: "Save", exact: true })).toHaveFocus();
   await userEvent.keyboard("{Tab}");
   await expect.element(screen.getByRole("button", { name: "After tall grid" })).toHaveFocus();
 });
@@ -2921,6 +2930,7 @@ test("compiles exact nullable blank policies without treating zero as blank", as
       onSaveEdits={() => Promise.resolve()}
     />,
   );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
 
   for (const [sourceText, expectedText, expectedCount] of [
     ["7", "NULL", 1],
@@ -3091,6 +3101,7 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
       onSaveEdits={() => Promise.resolve()}
     />,
   );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
 
   await userEvent.click(screen.getByRole("gridcell", { name: "Flag blank", exact: true }));
   await userEvent.keyboard("{F2}");
@@ -3383,7 +3394,7 @@ test("copies one immutable source-plus-draft projection for active cells and ran
       }),
   );
   try {
-    const { grid, screen } = await renderEditableTable();
+    const { grid, screen } = await renderBatchEditableTable();
     await userEvent.keyboard("{F2}");
     await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Draft Ada");
     await userEvent.keyboard("{Enter}");
@@ -3486,5 +3497,37 @@ test("rejects widened editable columns without a potential edit policy at runtim
     ),
   ).rejects.toThrow(
     "BrunoTable editable Client Tables require at least one potentially editable column.",
+  );
+});
+
+test("rejects a widened editable capability without onSaveEdits at runtime", async () => {
+  const invalidProps = {
+    tableId: "TABLE_ID_CELL_EDIT_MISSING_SAVE_HANDLER",
+    columns,
+    initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    clientSource: { rows, totalRows: rows.length, version: 1, status: "ready" },
+    getRowId: (row: Row) => row.id,
+    editable: true,
+    getRowVersion: (row: Row) => row.revision,
+  } as unknown as BrunoTableClientProps<Row, typeof columns, bigint>;
+
+  await expect(render(<BrunoTableClient {...invalidProps} />)).rejects.toThrow(
+    "BrunoTable editable Client Tables require onSaveEdits.",
+  );
+});
+
+test("rejects a widened editable capability without getRowVersion at runtime", async () => {
+  const invalidProps = {
+    tableId: "TABLE_ID_CELL_EDIT_MISSING_ROW_VERSION",
+    columns,
+    initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    clientSource: { rows, totalRows: rows.length, version: 1, status: "ready" },
+    getRowId: (row: Row) => row.id,
+    editable: true,
+    onSaveEdits: () => Promise.resolve(),
+  } as unknown as BrunoTableClientProps<Row, typeof columns, bigint>;
+
+  await expect(render(<BrunoTableClient {...invalidProps} />)).rejects.toThrow(
+    "BrunoTable editable Client Tables require getRowVersion.",
   );
 });

@@ -90,6 +90,53 @@ function CompoundToastHarness({
 }
 
 describe("persistent toast accessibility", () => {
+  test("supports a portal container in another document", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    let screen: Awaited<ReturnType<typeof render>> | undefined;
+    try {
+      const ownerDocument = frame.contentDocument;
+      if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+      const toastManager = createToastManager();
+      screen = await render(
+        <Toaster
+          portalContainer={{ current: ownerDocument.body }}
+          toastManager={toastManager}
+          timeout={0}
+        />,
+      );
+
+      toastManager.add({
+        title: "Secondary document failure",
+        description: "The save was not confirmed.",
+        timeout: 0,
+        type: "error",
+        priority: "high",
+      });
+
+      await expect
+        .poll(() => ownerDocument.body.textContent?.includes("Secondary document failure"))
+        .toBe(true);
+      expect(document.body.textContent).not.toContain("Secondary document failure");
+      const close = ownerDocument.querySelector<HTMLButtonElement>(
+        'button[aria-label="Close toast"]',
+      );
+      if (close === null) throw new Error("Expected the secondary-document Close control.");
+      const toastRoot = close.closest<HTMLElement>('[data-slot="toast"]');
+      if (toastRoot === null) throw new Error("Expected the secondary-document toast root.");
+      close.focus({ focusVisible: true });
+      expect(close.matches(":focus-visible")).toBe(true);
+      await expect.poll(() => toastRoot.getAttribute("role")).toBe("alertdialog");
+      await expect.poll(() => ownerDocument.activeElement).toBe(close);
+      ownerDocument.body.tabIndex = -1;
+      ownerDocument.body.focus();
+      await expect.poll(() => toastRoot.getAttribute("role")).toBe("presentation");
+    } finally {
+      await screen?.unmount();
+      frame.remove();
+    }
+  });
+
   test("keeps the public compound Close control accessible", async () => {
     const toastManager = createToastManager();
     const screen = await render(<CompoundToastHarness toastManager={toastManager} />);
@@ -247,31 +294,50 @@ describe("persistent toast accessibility", () => {
       .not.toBeInTheDocument();
   });
 
-  test("keeps one high-priority announcement when the viewport is keyboard-focused", async () => {
+  test("scopes high-priority alert-dialog semantics to the focused toast", async () => {
     const toastManager = createToastManager();
     const screen = await render(<ToastHarness toastManager={toastManager} />);
-    const viewport = screen.getByRole("region", { name: "Notifications" });
-
-    addPersistentToast(toastManager, "Existing failure");
-    await expect
-      .element(screen.getByRole("dialog", { name: "Existing failure" }))
-      .toBeInTheDocument();
-    await userEvent.keyboard("{F6}");
-    await expect.element(viewport).toHaveFocus();
-
     toastManager.add({
-      title: "Focused save failed",
-      description: "The focused save was not confirmed.",
+      title: "First save failed",
+      description: "The first save was not confirmed.",
+      timeout: 0,
+      type: "error",
+      priority: "high",
+    });
+    toastManager.add({
+      title: "Second save failed",
+      description: "The second save was not confirmed.",
       timeout: 0,
       type: "error",
       priority: "high",
     });
 
-    const announcement = screen.getByRole("alertdialog", { name: "Focused save failed" });
-    await expect.element(announcement).toBeInTheDocument();
     await expect
-      .element(announcement)
-      .toHaveAccessibleDescription("The focused save was not confirmed.");
+      .element(screen.getByRole("heading", { name: "First save failed" }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("heading", { name: "Second save failed" }))
+      .toBeInTheDocument();
+
+    const focusedRoot = screen
+      .getByRole("heading", { name: "First save failed" })
+      .element()
+      .closest<HTMLElement>('[data-slot="toast"]');
+    const otherRoot = screen
+      .getByRole("heading", { name: "Second save failed" })
+      .element()
+      .closest<HTMLElement>('[data-slot="toast"]');
+    if (focusedRoot === null || otherRoot === null) throw new Error("Expected both toast roots.");
+    const close = focusedRoot.querySelector<HTMLButtonElement>('button[aria-label="Close toast"]');
+    if (close === null) throw new Error("Expected the focused toast Close control.");
+    close.focus({ focusVisible: true });
+
+    await expect.poll(() => focusedRoot.getAttribute("role")).toBe("alertdialog");
+    expect(otherRoot.getAttribute("role")).toBe("presentation");
+    await expect
+      .element(screen.getByRole("alertdialog"))
+      .toHaveAccessibleDescription("The first save was not confirmed.");
+    expect(screen.getByRole("alertdialog").all()).toHaveLength(1);
     await expect.element(screen.getByRole("alert")).not.toBeInTheDocument();
   });
 

@@ -71,6 +71,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private groupRowsColumn: BrunoTableCompiledGroupRowsColumn | undefined;
   private readonly resultRowCountListeners = new Set<() => void>();
   private readonly projectionInputListeners = new Set<() => void>();
+  private readonly editSourceListeners = new Set<
+    (changedRowIds: ReadonlySet<BrunoTableRowId> | undefined) => void
+  >();
   private resultRowCount = 0;
   private resultRowCountInitialized = false;
   private observedRows: TRow[] | undefined;
@@ -78,6 +81,10 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   private getRowId: (row: TRow) => BrunoTableRowId;
   private publication: BrunoTableRowPipelinePublication<TRow>;
   private coherent: ClientCoherentSnapshot<TRow> | undefined;
+  private editCoherent: ClientCoherentSnapshot<TRow> | undefined;
+  private editSourceStatus: BrunoTableSourceStatus;
+  private editSourceVersion: number;
+  private editSourceChangedRowIds: ReadonlySet<BrunoTableRowId> | undefined = undefined;
   private acceptedCoherent: ClientCoherentSnapshot<TRow> | undefined;
   private readonly initialFilters: readonly unknown[];
   private readonly initialFilterCollection: BrunoTableClientFilterCollection;
@@ -129,6 +136,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     );
     this.resultRowCount = this.publication.rowSpace?.loadedRows ?? 0;
     this.coherent = nextCoherent(this.coherent, this.publication);
+    this.editCoherent = undefined;
+    this.editSourceStatus = this.publication.status;
+    this.editSourceVersion = this.publication.version;
     this.acceptEmptyCoherent();
     this.sourceColumns = columns;
     this.queryColumns = columns;
@@ -150,8 +160,42 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly getPublication = (): BrunoTableRowPipelinePublication<TRow> => this.publication;
 
+  public readonly hasAuthoritativeEditSource = (): boolean =>
+    this.editCoherent !== undefined &&
+    (this.editSourceStatus === "ready" || this.editSourceStatus === "stale");
+
+  public readonly getEditSourceChangedRowIds = () => this.editSourceChangedRowIds;
+
+  public readonly isEditSourceConfiguredFor = (columns: readonly CompiledColumn[]): boolean =>
+    this.editCoherent?.validatedColumns === columns;
+
+  public readonly subscribeEditSource = (
+    listener: (changedRowIds: ReadonlySet<BrunoTableRowId> | undefined) => void,
+  ): (() => void) => {
+    this.editSourceListeners.add(listener);
+    return () => this.editSourceListeners.delete(listener);
+  };
+
   public readonly getProjectionInputSnapshot = (): BrunoTableClientProjectionInputSnapshot =>
     this.projectionInput;
+
+  public readonly getAuthoritativeEditRowSnapshot = (rowId: BrunoTableRowId): unknown =>
+    this.editCoherent?.admittedById.get(rowId)?.raw;
+
+  public readonly getAuthoritativeEditCellSnapshot = (
+    rowId: BrunoTableRowId,
+    columnId: string,
+  ):
+    | Readonly<{ readonly found: false }>
+    | Readonly<{ readonly found: true; readonly value: unknown }> => {
+    const admitted = this.editCoherent?.admittedById.get(rowId);
+    const column = this.editCoherent?.columnsById.get(columnId);
+    if (admitted === undefined || column === undefined) return Object.freeze({ found: false });
+    return Object.freeze({
+      found: true,
+      value: admitted.values.read(admitted.raw, admitted.rowId, admitted.rowIndex, column),
+    });
+  };
 
   public readonly subscribeProjectionInput = (listener: () => void): (() => void) => {
     this.projectionInputListeners.add(listener);
@@ -328,6 +372,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   ): BrunoTableRowPipelinePublication<TRow> => {
     this.groupRowsColumn = groupRowsColumn;
     const sourceSnapshot = snapshotSource(source, this.source, this.observedRows);
+    if (sourceSnapshot.status !== "ready" && sourceSnapshot.status !== "stale") {
+      this.transitionEditSource(undefined, sourceSnapshot.status, sourceSnapshot.version);
+    }
     const queryRejected = this.queryRejected;
     const retainedSourceInvalid = retainedSourceInvalidSnapshot(sourceSnapshot);
     const sameRetainedCandidate =
@@ -364,6 +411,16 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         );
       }
       this.source = sourceSnapshot;
+      const publishedCoherent = asClientCoherent(this.publication.rowSpace);
+      if (publishedCoherent === undefined || hasInvalidSourceEvidence(sourceSnapshot)) {
+        this.transitionEditSource(undefined, this.publication.status, this.publication.version);
+      } else if (this.editCoherent === publishedCoherent) {
+        this.transitionEditSource(
+          publishedCoherent,
+          this.publication.status,
+          this.publication.version,
+        );
+      }
       return this.publication;
     }
     this.queryFallbackActive = false;
@@ -387,7 +444,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       columns,
       this.valueCache,
     );
-    this.publication = createPublication(
+    const publication = createPublication(
       sourceSnapshot,
       getRowId,
       columns,
@@ -396,7 +453,23 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.getRowId !== getRowId,
       this.valueCache,
     );
-    this.coherent = nextCoherent(this.coherent, this.publication);
+    const next = nextCoherent(this.coherent, publication);
+    const preciseChangedRowIds = deriveChangedRawRowIds(previousCoherent, next);
+    const changedRowIds =
+      preciseChangedRowIds?.size === 0 &&
+      (this.source.version !== sourceSnapshot.version ||
+        this.source.status !== sourceSnapshot.status)
+        ? undefined
+        : preciseChangedRowIds;
+    this.publication =
+      changedRowIds === undefined ? publication : Object.freeze({ ...publication, changedRowIds });
+    this.coherent = next;
+    const publishedCoherent = asClientCoherent(this.publication.rowSpace);
+    if (publishedCoherent === undefined || hasInvalidSourceEvidence(sourceSnapshot)) {
+      this.transitionEditSource(undefined, sourceSnapshot.status, sourceSnapshot.version);
+    } else if (this.editCoherent === publishedCoherent) {
+      this.transitionEditSource(publishedCoherent, sourceSnapshot.status, sourceSnapshot.version);
+    }
     this.acceptEmptyCoherent();
     if (
       this.coherent !== undefined &&
@@ -428,6 +501,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     getRowId: (row: TRow) => BrunoTableRowId,
     columns: readonly CompiledColumn[],
   ): BrunoTableRowPipelinePublication<TRow> => {
+    const editSourceNeedsReadmission =
+      this.getRowId !== getRowId || this.editCoherent?.validatedColumns !== columns;
     this.queryFallbackActive = false;
     this.queryRejected = undefined;
     const previousCoherent = this.coherent;
@@ -447,6 +522,9 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       this.valueCache,
     );
     this.coherent = nextCoherent(this.coherent, this.publication);
+    if (editSourceNeedsReadmission) {
+      this.transitionEditSource(undefined, this.publication.status, this.publication.version);
+    }
     this.acceptEmptyCoherent();
     if (
       this.coherent !== undefined &&
@@ -463,8 +541,19 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
 
   public readonly resolveRowId = (row: unknown): BrunoTableRowId => this.getRowId(row as TRow);
 
-  public readonly acceptRows = (rows: readonly BrunoTableClientAdmittedRow[]): void => {
-    if (this.coherent?.admittedRows.asArray() === rows) this.acceptedCoherent = this.coherent;
+  public readonly acceptRows = (
+    rows: readonly BrunoTableClientAdmittedRow[],
+  ): "accepted-changed" | "accepted-unchanged" | "invalid-source" | "stale-snapshot" => {
+    if (this.coherent?.admittedRows.asArray() !== rows) return "stale-snapshot";
+    if (hasInvalidSourceEvidence(this.source)) return "invalid-source";
+    this.acceptedCoherent = this.coherent;
+    return this.transitionEditSource(
+      this.coherent,
+      this.publication.status,
+      this.publication.version,
+    )
+      ? "accepted-changed"
+      : "accepted-unchanged";
   };
 
   public readonly rejectQueryRows = (
@@ -481,6 +570,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
         retainedSourceInvalidSnapshot(this.source) ?? invalid,
       );
       this.coherent = undefined;
+      this.transitionEditSource(undefined, this.publication.status, this.publication.version);
       this.valueCache.retainColumns(this.sourceColumns);
       return this.publication;
     }
@@ -506,6 +596,11 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       invalid,
     );
     this.coherent = asClientCoherent(this.publication.rowSpace);
+    this.transitionEditSource(this.coherent, this.publication.status, this.publication.version);
+    const changedRowIds = deriveEditSourceChangedRawRowIds(rejectedCoherent, this.coherent);
+    if (changedRowIds !== undefined) {
+      this.publication = Object.freeze({ ...this.publication, changedRowIds });
+    }
     this.valueCache.retainColumns(this.sourceColumns, this.coherent?.validatedColumns);
     return this.publication;
   };
@@ -513,18 +608,40 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
   public readonly retryQueryRows = (): BrunoTableRowPipelinePublication<TRow> | undefined => {
     const rejected = this.queryRejected;
     if (!this.queryFallbackActive || rejected === undefined) return undefined;
+    const previousCoherent = this.coherent;
     this.queryFallbackActive = false;
     this.queryRejected = undefined;
     this.coherent = refreshRowOrderEvidence(rejected.coherent);
+    const changedRowIds = deriveEditSourceChangedRawRowIds(previousCoherent, this.coherent);
+    const { changedRowIds: _rejectedChangedRowIds, ...retriedPublication } = rejected.publication;
     this.publication = Object.freeze({
-      ...rejected.publication,
+      ...retriedPublication,
       rowSpace: this.coherent,
+      ...(changedRowIds === undefined ? {} : { changedRowIds }),
     });
     return this.publication;
   };
 
   private readonly acceptEmptyCoherent = (): void => {
     if (this.coherent?.admittedRows.length === 0) this.acceptedCoherent = this.coherent;
+  };
+
+  private readonly transitionEditSource = (
+    coherent: ClientCoherentSnapshot<TRow> | undefined,
+    status: BrunoTableSourceStatus,
+    version: number,
+  ): boolean => {
+    const next = status === "ready" || status === "stale" ? coherent : undefined;
+    const envelopeChanged = this.editSourceStatus !== status || this.editSourceVersion !== version;
+    if (this.editCoherent === next && !envelopeChanged) return false;
+    const preciseChangedRowIds = deriveEditSourceChangedRawRowIds(this.editCoherent, next);
+    this.editSourceChangedRowIds =
+      preciseChangedRowIds?.size === 0 && envelopeChanged ? undefined : preciseChangedRowIds;
+    this.editCoherent = next;
+    this.editSourceStatus = status;
+    this.editSourceVersion = version;
+    notifyEditSourceListeners(this.editSourceListeners, this.editSourceChangedRowIds);
+    return true;
   };
 
   public readonly createRowsStore = (
@@ -596,7 +713,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       if (activeDetector === undefined) return;
       try {
         if (!activeDetector(previousRows, nextRows, change)) {
-          if (nextCoherent !== undefined) this.acceptedCoherent = nextCoherent;
+          if (nextCoherent !== undefined) this.acceptRows(nextRows);
           return;
         }
       } catch (error) {
@@ -650,6 +767,48 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       },
     });
   };
+}
+
+function deriveChangedRawRowIds<TRow>(
+  previous: ClientCoherentSnapshot<TRow> | undefined,
+  next: ClientCoherentSnapshot<TRow> | undefined,
+  changedIndexes: readonly number[] | undefined = next?.changeFromPrevious.changedIndexes,
+): ReadonlySet<BrunoTableRowId> | undefined {
+  if (previous === undefined || next === undefined) return undefined;
+  if (previous === next) return new Set();
+  const changed = new Set<BrunoTableRowId>();
+  const completeIdentityReconciliation = previous.identityResolver !== next.identityResolver;
+  const indexes = completeIdentityReconciliation
+    ? Array.from(
+        { length: Math.max(previous.rows.length, next.rows.length) },
+        (_unused, index) => index,
+      )
+    : [
+        ...(changedIndexes ?? []),
+        ...Array.from(
+          { length: Math.abs(previous.rows.length - next.rows.length) },
+          (_unused, offset) => Math.min(previous.rows.length, next.rows.length) + offset,
+        ),
+      ];
+  for (const index of indexes) {
+    const previousRowId = previous.rowIds.get(index);
+    const nextRowId = next.rowIds.get(index);
+    if (previousRowId === nextRowId && previous.rows.get(index) === next.rows.get(index)) {
+      continue;
+    }
+    if (previousRowId !== undefined) changed.add(previousRowId);
+    if (nextRowId !== undefined) changed.add(nextRowId);
+  }
+  return changed;
+}
+
+function deriveEditSourceChangedRawRowIds<TRow>(
+  previous: ClientCoherentSnapshot<TRow> | undefined,
+  next: ClientCoherentSnapshot<TRow> | undefined,
+): ReadonlySet<BrunoTableRowId> | undefined {
+  if (previous === undefined || next === undefined) return undefined;
+  const change = persistentSequenceChange(previous.rows, next.rows);
+  return deriveChangedRawRowIds(previous, next, change.changedIndexes);
 }
 
 export type BrunoTableClientRowOrderChangeDetector = (
@@ -1637,6 +1796,21 @@ function notifyRowsStoreListeners(
   if (firstError !== undefined) throw firstError.value;
 }
 
+function notifyEditSourceListeners(
+  listeners: Set<(changedRowIds: ReadonlySet<BrunoTableRowId> | undefined) => void>,
+  changedRowIds: ReadonlySet<BrunoTableRowId> | undefined,
+): void {
+  let firstError: ClientListenerError | undefined;
+  for (const listener of listeners) {
+    try {
+      listener(changedRowIds);
+    } catch (error) {
+      firstError ??= Object.freeze({ value: error });
+    }
+  }
+  if (firstError !== undefined) throw firstError.value;
+}
+
 function createProjectionInputSnapshot(
   epoch: number,
   publication: BrunoTableRowPipelinePublication<unknown>,
@@ -1858,6 +2032,15 @@ function retainedSourceInvalidSnapshot<TRow>(
       : source.invalidStatus !== undefined
         ? Object.freeze({ kind: "invalid-status" as const, receivedStatus: source.invalidStatus })
         : undefined;
+}
+
+function hasInvalidSourceEvidence<TRow>(source: ClientSourceSnapshot<TRow>): boolean {
+  return (
+    source.invalidRows !== undefined ||
+    source.invalidLifecycle !== undefined ||
+    source.invalidStatus !== undefined ||
+    ((source.status === "ready" || source.status === "stale") && !isCompleteSource(source))
+  );
 }
 
 function rejectPublicationRows<TRow>(

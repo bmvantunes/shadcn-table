@@ -17,6 +17,51 @@ import { BrunoTableClientRowPipelineAdapter } from "./client-source-adapter";
 import { compileClientFilterCollection } from "./grid-query";
 import { BrunoTableGridRuntime } from "./grid-runtime";
 
+describe("BrunoTableClientRowPipelineAdapter edit reconciliation deltas", () => {
+  it("publishes precise changed and removed raw Row Identities", () => {
+    type Row = Readonly<{ readonly id: string; readonly value: string }>;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+      },
+    ]);
+    const first: Row = Object.freeze({ id: "first", value: "A" });
+    const second: Row = Object.freeze({ id: "second", value: "B" });
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      { rows: [first, second], totalRows: 2, version: 1, status: "ready" },
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_VALUE", direction: "asc" }],
+    );
+
+    const changedSecond = Object.freeze({ ...second, value: "C" });
+    const changed = adapter.reconcile(
+      { rows: [first, changedSecond], totalRows: 2, version: 2, status: "ready" },
+      (row: Row) => row.id,
+      columns,
+    );
+    expect(changed.changedRowIds).toEqual(new Set([second.id]));
+
+    const removed = adapter.reconcile(
+      { rows: [first], totalRows: 1, version: 3, status: "ready" },
+      (row: Row) => row.id,
+      columns,
+    );
+    expect(removed.changedRowIds).toEqual(new Set([second.id]));
+
+    const versionOnly = adapter.reconcile(
+      { rows: [first], totalRows: 1, version: 4, status: "ready" },
+      (row: Row) => row.id,
+      columns,
+    );
+    expect(versionOnly.changedRowIds).toBeUndefined();
+  });
+});
+
 describe("ClientRowOrderStore", () => {
   it("keeps the raw row-space authority stable until identities or generation change", () => {
     const store = new ClientRowOrderStore(["first", "second", "third"], 0);

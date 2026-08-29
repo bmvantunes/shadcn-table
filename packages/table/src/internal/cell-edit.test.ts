@@ -8,7 +8,9 @@ import {
   BRUNO_TABLE_CELL_EDIT_MAX_CANDIDATE_LENGTH,
   BrunoTableCellEditRuntime as BrunoTableCellEditRuntimeBase,
   isBrunoTableCellEditDraftReviewSourceRow,
+  type BrunoTableCellEditChangeGesture,
   type BrunoTableCellEditDraftSnapshot,
+  type BrunoTableCellEditSaveChangeSet,
 } from "./cell-edit";
 import { compileColumns } from "./compile-columns";
 
@@ -1267,6 +1269,16 @@ describe("BrunoTable Cell Edit Session", () => {
     unsubscribe();
     expect(runtime.getRetainedCellStoreCount()).toBe(0);
 
+    for (let index = 0; index < 1_000; index += 1) {
+      const release = runtime.subscribeCell(
+        `idle-${String(index)}`,
+        "COL_ID_SCORE",
+        () => undefined,
+      );
+      release();
+    }
+    expect(runtime.getRetainedCellStoreCount()).toBe(0);
+
     const unsubscribeActive = runtime.subscribeCell("row-1", "COL_ID_SCORE", () => undefined);
     expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
     expect(runtime.getRetainedCellStoreCount()).toBe(1);
@@ -1282,6 +1294,66 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(first).toMatchObject({ active: false, hasDraft: true, draft: 6 });
     expect(runtime.getRetainedCellStoreCount()).toBe(0);
     runtime.dispose();
+  });
+
+  it("releases unmounted cell stores while durable save evidence remains", () => {
+    vi.useFakeTimers();
+    try {
+      const changeSet = [
+        {
+          rowId: row.id,
+          baseRow: row,
+          expectedVersion: row.quantity,
+          changes: [
+            {
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: row.score,
+              after: 7,
+            },
+          ],
+        },
+      ] as const;
+
+      let acceptedRow = row;
+      const accepted = new BrunoTableCellEditRuntime({
+        columns,
+        getRow: () => acceptedRow,
+        getRowVersion: (candidate) => (candidate as Row).quantity,
+      });
+      const unsubscribeAccepted = accepted.subscribeCell(row.id, "COL_ID_SCORE", () => undefined);
+      expect(accepted.beginSaveOperation("accepted", changeSet, false)).toBe(true);
+      accepted.acceptSave("accepted", changeSet, false);
+      acceptedRow = Object.freeze({ ...row, score: 7 });
+      accepted.reconcileSourceRows(new Set([row.id]));
+      unsubscribeAccepted();
+      expect(accepted.getRetainedCellStoreCount()).toBe(0);
+      vi.advanceTimersByTime(2_000);
+      expect(accepted.getRetainedCellStoreCount()).toBe(0);
+
+      const immediate = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+      const unsubscribeImmediate = immediate.subscribeCell(row.id, "COL_ID_SCORE", () => undefined);
+      immediate.rejectSave("immediate", changeSet, true);
+      unsubscribeImmediate();
+      expect(immediate.getRetainedCellStoreCount()).toBe(0);
+      vi.advanceTimersByTime(5_000);
+      expect(immediate.getRetainedCellStoreCount()).toBe(0);
+
+      let batchRow = row;
+      const rejectedBatch = new BrunoTableCellEditRuntime({
+        columns,
+        getRow: () => batchRow,
+      });
+      const unsubscribeBatch = rejectedBatch.subscribeCell(row.id, "COL_ID_SCORE", () => undefined);
+      rejectedBatch.rejectSave("batch", changeSet, false);
+      unsubscribeBatch();
+      expect(rejectedBatch.getRetainedCellStoreCount()).toBe(0);
+      batchRow = Object.freeze({ ...row, score: 7 });
+      rejectedBatch.reconcileSourceRows(new Set([row.id]));
+      expect(rejectedBatch.getRetainedCellStoreCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves the optional Effect BigDecimal domain without number coercion", () => {
@@ -3272,5 +3344,1451 @@ describe("BrunoTable Cell Edit Session", () => {
     runtime.reconcileActiveRow(new Set([row.id]));
 
     expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1, reviewCount: 1 });
+  });
+
+  it("preserves an undefined canonical value in an Accepted Overlay", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    let unsubscribe = (): void => undefined;
+
+    try {
+      vi.useFakeTimers();
+      unsubscribe = runtime.subscribeCell(row.id, "COL_ID_SCORE", () => undefined);
+      runtime.acceptSave(
+        "operation-1",
+        [
+          {
+            rowId: row.id,
+            baseRow: row,
+            expectedVersion: 1n,
+            changes: [
+              {
+                columnId: "COL_ID_SCORE",
+                field: "score",
+                before: row.score,
+                after: undefined,
+              },
+            ],
+          },
+        ],
+        false,
+      );
+
+      expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toStrictEqual({
+        active: false,
+        hasDraft: false,
+        hasAcceptedOverlay: true,
+        saveSucceeded: true,
+        acceptedOverlay: undefined,
+        acceptedOverlayPresentationColumn: columns.find(
+          (column) => column.columnId === "COL_ID_SCORE",
+        ),
+      });
+      vi.advanceTimersByTime(1_999);
+      expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveSucceeded).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveSucceeded).toBeUndefined();
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates only Immediate operation rows in predicate traversal", () => {
+    type SaveRow = Readonly<{
+      readonly id: string;
+      readonly value: string;
+      readonly revision: bigint;
+    }>;
+    const saveRows = new Map<string, SaveRow>([
+      ["row-a", { id: "row-a", value: "source", revision: 1n }],
+      ["row-b", { id: "row-b", value: "source", revision: 1n }],
+      ["row-c", { id: "row-c", value: "source", revision: 1n }],
+    ]);
+    const rowReads: string[] = [];
+    const saveColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: ({ value }: { readonly value: string }) => value.length > 0,
+      },
+    ] satisfies BrunoTableColumns<SaveRow>);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: saveColumns,
+      getRow: (rowId) => {
+        rowReads.push(rowId);
+        return saveRows.get(rowId);
+      },
+      getRowVersion: (candidate) => (candidate as SaveRow).revision,
+    });
+    const rowIds = [...saveRows.keys()];
+    const rowSpace = {
+      totalRows: rowIds.length,
+      getRowId: (rowIndex: number) => rowIds[rowIndex],
+    };
+    runtime.reconcileTraversal(saveColumns, rowSpace);
+    const drainTraversal = () => {
+      runtime.reconcileTraversal(saveColumns, rowSpace);
+      for (let index = 0; !runtime.isTraversalReady() && index < 10; index += 1) {
+        runtime.buildTraversalSlice();
+      }
+      expect(runtime.isTraversalReady()).toBe(true);
+    };
+    drainTraversal();
+    rowReads.length = 0;
+    const baseRow = saveRows.get("row-a")!;
+    const changeSet: BrunoTableCellEditSaveChangeSet = [
+      {
+        rowId: "row-a",
+        baseRow,
+        expectedVersion: baseRow.revision,
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "source",
+            after: "saved",
+          },
+        ],
+      },
+    ];
+
+    expect(runtime.beginSaveOperation("immediate-row", changeSet, false)).toBe(true);
+    drainTraversal();
+    expect(rowReads).toEqual(["row-a"]);
+
+    runtime.acceptSave("immediate-row", changeSet, false);
+    saveRows.set("row-a", { id: "row-a", value: "saved", revision: 2n });
+    runtime.reconcileSourceRows(new Set(["row-a"]));
+    rowReads.length = 0;
+    drainTraversal();
+    expect(rowReads).toEqual(["row-a"]);
+  });
+
+  it("retains rejected operation evidence until that operation fully converges", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const activityBeforeRejection = runtime.getActivitySnapshot();
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+
+    runtime.rejectSave("operation-1", changeSet!, false);
+    expect(runtime.hasRejectedOperation("operation-1")).toBe(true);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toMatchObject({
+      hasDraft: true,
+      draft: 7,
+      saveFailed: true,
+    });
+    expect(runtime.getActivitySnapshot()).toEqual(activityBeforeRejection);
+
+    current = Object.freeze({ ...row, score: 7 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.hasRejectedOperation("operation-1")).toBe(false);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toEqual({
+      active: false,
+      hasDraft: false,
+    });
+  });
+
+  it("publishes only rejected Cell Identity deltas for precise source convergence", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const rowsById = new Map([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rowsById.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    const changeSet = Object.freeze(
+      [row, second].map((candidate) =>
+        Object.freeze({
+          rowId: candidate.id,
+          baseRow: candidate,
+          expectedVersion: candidate.quantity,
+          changes: Object.freeze([
+            Object.freeze({
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: candidate.score,
+              after: 7,
+            }),
+          ]),
+        }),
+      ),
+    ) as BrunoTableCellEditSaveChangeSet;
+    expect(runtime.beginSaveOperation("operation-delta", changeSet, false)).toBe(true);
+    runtime.rejectSave("operation-delta", changeSet, true);
+    runtime.completeSaveOperation("operation-delta");
+    const listener = vi.fn();
+    const unsubscribe = runtime.subscribeRejectedOperation("operation-delta", listener);
+
+    rowsById.set(row.id, Object.freeze({ ...row, score: 7, quantity: 2n }));
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(runtime.getRejectedOperationUpdateSnapshot("operation-delta")).toEqual({
+      remainingCount: 1,
+      removedCells: [{ rowId: row.id, columnId: "COL_ID_SCORE" }],
+    });
+
+    rowsById.set(second.id, Object.freeze({ ...second, score: 7, quantity: 2n }));
+    runtime.reconcileSourceRows(new Set([second.id]));
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(runtime.getRejectedOperationUpdateSnapshot("operation-delta")).toEqual({
+      remainingCount: 0,
+      removedCells: [],
+    });
+    unsubscribe();
+  });
+
+  it("clears only stale Immediate failure presentation when the same cell is retried", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    const first = [
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: row.quantity,
+        changes: [
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ] as const;
+    expect(runtime.beginSaveOperation("immediate-first", first, false)).toBe(true);
+    runtime.rejectSave("immediate-first", first, true);
+    runtime.completeSaveOperation("immediate-first");
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBe(true);
+
+    const retry = [
+      {
+        ...first[0],
+        changes: [{ ...first[0].changes[0], after: 8 }] as const,
+      },
+    ] as const;
+    expect(runtime.beginSaveOperation("immediate-retry", retry, false)).toBe(true);
+    expect(runtime.hasRejectedOperation("immediate-first")).toBe(true);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toMatchObject({
+      savePending: true,
+    });
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+
+    const unsubscribe = runtime.subscribeCell(row.id, "COL_ID_SCORE", () => undefined);
+    runtime.acceptSave("immediate-retry", retry, false);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toMatchObject({
+      saveSucceeded: true,
+    });
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+    current = Object.freeze({ ...row, score: 8, quantity: 2n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    runtime.completeSaveOperation("immediate-retry");
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("retains an Accepted Overlay across a non-authoritative source gap", () => {
+    let current: Row | undefined = row;
+    let authoritative = true;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+      isSourceAuthoritative: () => authoritative,
+    });
+    const changeSet = [
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: row.quantity,
+        changes: [
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ] as const;
+
+    expect(runtime.beginSaveOperation("operation-loading", changeSet, false)).toBe(true);
+    authoritative = false;
+    current = undefined;
+    runtime.acceptSave("operation-loading", changeSet, false);
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-loading")).toBe(1);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toMatchObject({
+      hasAcceptedOverlay: true,
+      acceptedOverlay: 7,
+      savePending: true,
+    });
+
+    authoritative = true;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-loading")).toBe(0);
+  });
+
+  it("reconciles an Accepted Overlay with its captured Row Version extractor", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    const changeSet = [
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: row.quantity,
+        changes: [
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ] as const;
+
+    expect(runtime.beginSaveOperation("operation-version-domain", changeSet, false)).toBe(true);
+    runtime.setRowVersionExtractor(() => 999n);
+    runtime.acceptSave("operation-version-domain", changeSet, false);
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-version-domain")).toBe(1);
+
+    current = Object.freeze({ ...row, quantity: 2n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-version-domain")).toBe(0);
+  });
+
+  it("visits only pending operations indexed by a precisely changed Row Identity", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const rowsById = new Map([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const getRow = vi.fn((rowId: string) => rowsById.get(rowId));
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    for (const [operationId, candidate] of [
+      ["pending-first", row],
+      ["pending-second", second],
+    ] as const) {
+      expect(
+        runtime.beginSaveOperation(
+          operationId,
+          [
+            {
+              rowId: candidate.id,
+              baseRow: candidate,
+              expectedVersion: candidate.quantity,
+              changes: [
+                {
+                  columnId: "COL_ID_SCORE",
+                  field: "score",
+                  before: candidate.score,
+                  after: 7,
+                },
+              ],
+            },
+          ],
+          false,
+        ),
+      ).toBe(true);
+    }
+    rowsById.set(second.id, Object.freeze({ ...second, score: 7, quantity: 2n }));
+    getRow.mockClear();
+
+    runtime.reconcileSourceRows(new Set([second.id]));
+
+    expect(getRow).toHaveBeenCalledTimes(1);
+    expect(getRow).toHaveBeenCalledWith(second.id);
+  });
+
+  it("turns rejected Batch source divergence into reversible conflict evidence", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    runtime.rejectSave("operation-diverged", changeSet!, false);
+
+    current = Object.freeze({ ...row, score: 5 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(1);
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({
+      base: row.score,
+      mine: 7,
+      serverNow: 5,
+      conflict: { server: 5 },
+    });
+
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(0);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(1);
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({ conflict: { server: 5 } });
+
+    current = Object.freeze({ ...row, score: row.score, quantity: 3n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(0);
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({
+      base: row.score,
+      mine: 7,
+      serverNow: row.score,
+    });
+    expect(runtime.getDraftReviewSnapshot()[0]).not.toHaveProperty("conflict");
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()[0]).not.toHaveProperty("conflict");
+  });
+
+  it("preserves undefined server values in rejected Batch conflict history", () => {
+    type OptionalRow = Readonly<{
+      readonly id: string;
+      readonly optional: string | undefined;
+      readonly version: bigint;
+    }>;
+    const optionalValueType: BrunoTableValueType<string | undefined, "equality", "text"> = {
+      codecId: "test/rejected-batch-undefined",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 100,
+      decodeRuntime: (input) =>
+        typeof input === "string" || input === undefined
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected optional text." },
+      equivalent: Object.is,
+      compare: (left, right) => (Object.is(left, right) ? 0 : left === undefined ? -1 : 1),
+      formatCanonicalText: (value) => value ?? "undefined",
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value ?? "undefined",
+      encodePersisted: (value) => value ?? null,
+      decodePersisted: (input) =>
+        typeof input === "string" || input === null
+          ? { _tag: "Success", value: input ?? undefined }
+          : { _tag: "Failure", message: "Expected persisted optional text." },
+    };
+    const initial: OptionalRow = { id: "optional", optional: "source", version: 1n };
+    let current = initial;
+    const optionalColumns = compileColumns([
+      {
+        columnId: "COL_ID_OPTIONAL",
+        field: "optional",
+        headerName: "Optional",
+        valueType: optionalValueType,
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: optionalColumns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as OptionalRow).version,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(initial.id, "COL_ID_OPTIONAL")).toBe(true);
+    expect(runtime.commit("mine")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    runtime.rejectSave("operation-undefined", changeSet!, false);
+
+    current = Object.freeze({ ...initial, optional: undefined, version: 2n });
+    runtime.reconcileSourceRows(new Set([initial.id]));
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(1);
+    expect(runtime.getDraftReviewSnapshot()[0]?.conflict).toStrictEqual({ server: undefined });
+
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(0);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot().conflictCount).toBe(1);
+    expect(runtime.getDraftReviewSnapshot()[0]?.conflict).toStrictEqual({ server: undefined });
+  });
+
+  it("prunes rejected cells independently while retaining the operation remainder", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    const changeSet = [
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: 1n,
+        changes: [
+          {
+            columnId: "COL_ID_QUANTITY",
+            field: "quantity",
+            before: row.quantity,
+            after: row.quantity + 1n,
+          },
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ] as const;
+
+    runtime.rejectSave("operation-partial", changeSet, false);
+    current = Object.freeze({ ...row, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.hasRejectedOperation("operation-partial")).toBe(true);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_QUANTITY").saveFailed).toBeUndefined();
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBe(true);
+
+    current = Object.freeze({ ...current, score: 7 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.hasRejectedOperation("operation-partial")).toBe(false);
+  });
+
+  it("supersedes a rejected Batch operation when its draft is corrected", () => {
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    runtime.rejectSave("operation-corrected", changeSet!, false);
+    expect(runtime.hasRejectedOperation("operation-corrected")).toBe(true);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBe(true);
+    runtime.subscribeRejectedOperation("operation-corrected", () => undefined)();
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+
+    expect(runtime.hasRejectedOperation("operation-corrected")).toBe(false);
+    expect(runtime.getRejectedOperationUpdateSnapshot("operation-corrected")).toEqual({
+      remainingCount: 0,
+      removedCells: [],
+    });
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toMatchObject({
+      hasDraft: true,
+      draft: 8,
+    });
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+  });
+
+  it("retains untouched rejected Batch cells after a partial correction", () => {
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_QUANTITY")).toBe(true);
+    expect(runtime.commit(String(row.quantity + 1n))).toBe(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    runtime.rejectSave("operation-partial-correction", changeSet!, false);
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    expect(runtime.hasRejectedOperation("operation-partial-correction")).toBe(true);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_QUANTITY").saveFailed).toBe(true);
+
+    expect(runtime.start(row.id, "COL_ID_QUANTITY")).toBe(true);
+    expect(runtime.commit(String(row.quantity + 2n))).toBe(true);
+    expect(runtime.hasRejectedOperation("operation-partial-correction")).toBe(false);
+  });
+
+  it("reconciles save evidence with the submitted value equivalence authority", () => {
+    type TextRow = Readonly<{ readonly id: string; readonly value: string }>;
+    const source: TextRow = { id: "text", value: "foo" };
+    const compileTextColumns = (caseInsensitive: boolean) => {
+      const valueType: BrunoTableValueType<string> = {
+        codecId: "test/submitted-equivalence",
+        codecVersion: 1,
+        filterFamily: "text",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime: (input) =>
+          typeof input === "string"
+            ? { _tag: "Success", value: input }
+            : { _tag: "Failure", message: "Expected text." },
+        equivalent: caseInsensitive
+          ? (left, right) => left.toLocaleLowerCase() === right.toLocaleLowerCase()
+          : Object.is,
+        compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+        formatCanonicalText: String,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+        formatDisplay: String,
+        encodePersisted: String,
+        decodePersisted: (input) =>
+          typeof input === "string"
+            ? { _tag: "Success", value: input }
+            : { _tag: "Failure", message: "Expected persisted text." },
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+        },
+      ]);
+    };
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: compileTextColumns(false),
+      getRow: () => source,
+    });
+    const changeSet = [
+      {
+        rowId: source.id,
+        baseRow: source,
+        expectedVersion: undefined,
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "foo",
+            after: "FOO",
+          },
+        ],
+      },
+    ] as const;
+
+    expect(runtime.beginSaveOperation("operation-equivalence", changeSet, false)).toBe(true);
+    runtime.acceptSave("operation-equivalence", changeSet, false);
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-equivalence")).toBe(1);
+
+    runtime.reconcileColumns(compileTextColumns(true));
+    runtime.reconcileSourceRows(new Set([source.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-equivalence")).toBe(1);
+  });
+
+  it("reconciles save evidence with the submitted field authority", () => {
+    type FieldSwapRow = Readonly<{
+      readonly id: string;
+      readonly original: string;
+      readonly replacement: string;
+    }>;
+    let source: FieldSwapRow = {
+      id: "field-swap",
+      original: "before",
+      replacement: "saved",
+    };
+    const compileField = (field: "original" | "replacement") =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field,
+          headerName: "Value",
+          valueType: "text",
+          isEditable: true,
+        },
+      ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: compileField("original"),
+      getRow: () => source,
+    });
+    const changeSet = [
+      {
+        rowId: source.id,
+        baseRow: source,
+        expectedVersion: undefined,
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "original",
+            before: "before",
+            after: "saved",
+          },
+        ],
+      },
+    ] as const;
+
+    expect(runtime.beginSaveOperation("operation-field", changeSet, false)).toBe(true);
+    runtime.acceptSave("operation-field", changeSet, false);
+    runtime.reconcileColumns(compileField("replacement"));
+    runtime.reconcileSourceRows(new Set([source.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-field")).toBe(1);
+
+    source = { ...source, original: "saved" };
+    runtime.reconcileSourceRows(new Set([source.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-field")).toBe(0);
+  });
+
+  it("reconciles save evidence with the submitted decoder authority", () => {
+    type DecoderRow = Readonly<{ readonly id: string; readonly value: string }>;
+    let source: DecoderRow = { id: "decoder", value: "before" };
+    const createValueType = (constantSavedDecoder: boolean): BrunoTableValueType<string> => ({
+      codecId: constantSavedDecoder ? "test/replacement-decoder" : "test/submitted-decoder",
+      codecVersion: 1,
+      filterFamily: "text",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: constantSavedDecoder ? "saved" : input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: Object.is,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: String,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: String,
+      encodePersisted: String,
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected persisted text." },
+    });
+    const compileDecoder = (constantSavedDecoder: boolean) =>
+      compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: createValueType(constantSavedDecoder),
+          isEditable: true,
+        },
+      ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: compileDecoder(false),
+      getRow: () => source,
+    });
+    const changeSet = [
+      {
+        rowId: source.id,
+        baseRow: source,
+        expectedVersion: undefined,
+        changes: [
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            before: "before",
+            after: "saved",
+          },
+        ],
+      },
+    ] as const;
+
+    expect(runtime.beginSaveOperation("operation-decoder", changeSet, false)).toBe(true);
+    runtime.acceptSave("operation-decoder", changeSet, false);
+    runtime.reconcileColumns(compileDecoder(true));
+    runtime.reconcileSourceRows(new Set([source.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-decoder")).toBe(1);
+
+    source = { ...source, value: "saved" };
+    runtime.reconcileSourceRows(new Set([source.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-decoder")).toBe(0);
+  });
+
+  it("keeps Immediate candidates and save preflight closed while the source is non-authoritative", () => {
+    let authoritative = true;
+    const onCommit = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      isSourceAuthoritative: () => authoritative,
+      onCommit,
+    });
+
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    authoritative = false;
+    expect(runtime.commit("7")).toBe(false);
+    expect(runtime.getSessionSnapshot().kind).toBe("editing");
+    expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBeUndefined();
+    expect(onCommit).not.toHaveBeenCalled();
+
+    authoritative = true;
+    expect(runtime.commit("7")).toBe(true);
+    expect(onCommit).toHaveBeenCalledOnce();
+    const gesture = [onCommit.mock.calls[0]![0]] as BrunoTableCellEditChangeGesture;
+    authoritative = false;
+    expect(runtime.createImmediateSaveChangeSet(gesture)).toBeUndefined();
+    expect(runtime.createBatchSaveChangeSet()).toBeUndefined();
+
+    const onCommitGesture = vi.fn();
+    const gestureRuntime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      isSourceAuthoritative: () => false,
+      onCommitGesture,
+    });
+    expect(
+      gestureRuntime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: row.quantity,
+          base: row.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(false);
+    expect(gestureRuntime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBeUndefined();
+    expect(onCommitGesture).not.toHaveBeenCalled();
+  });
+
+  it("keeps Immediate save preflight closed after live edit permission is revoked", () => {
+    let editable = true;
+    const permissionColumns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        isEditable: () => editable,
+      },
+    ]);
+    const onCommit = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: permissionColumns,
+      getRow: () => row,
+      getRowVersion: () => row.quantity,
+      onCommit,
+    });
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const gesture = [onCommit.mock.calls[0]![0]] as BrunoTableCellEditChangeGesture;
+
+    editable = false;
+
+    expect(runtime.createImmediateSaveChangeSet(gesture)).toBeUndefined();
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+  });
+
+  it("expires staggered rejected-cell success flashes independently", () => {
+    let unsubscribeA = (): void => undefined;
+    let unsubscribeB = (): void => undefined;
+    const rows = new Map<string, Row>([
+      ["row-a", Object.freeze({ ...row, id: "row-a" })],
+      ["row-b", Object.freeze({ ...row, id: "row-b" })],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rows.get(rowId),
+    });
+    const changeSet = Object.freeze(
+      [...rows].map(([rowId, baseRow]) =>
+        Object.freeze({
+          rowId,
+          baseRow,
+          expectedVersion: 1n,
+          changes: Object.freeze([
+            Object.freeze({
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: baseRow.score,
+              after: 7,
+            }),
+          ]),
+        }),
+      ),
+    ) as BrunoTableCellEditSaveChangeSet;
+
+    try {
+      vi.useFakeTimers();
+      unsubscribeA = runtime.subscribeCell("row-a", "COL_ID_SCORE", () => undefined);
+      unsubscribeB = runtime.subscribeCell("row-b", "COL_ID_SCORE", () => undefined);
+      runtime.rejectSave("operation-staggered", changeSet, false);
+      rows.set("row-a", Object.freeze({ ...row, id: "row-a", score: 7 }));
+      runtime.reconcileSourceRows(new Set(["row-a"]));
+      expect(runtime.getCellSnapshot("row-a", "COL_ID_SCORE").saveSucceeded).toBe(true);
+
+      vi.advanceTimersByTime(1_500);
+      rows.set("row-b", Object.freeze({ ...row, id: "row-b", score: 7 }));
+      runtime.reconcileSourceRows(new Set(["row-b"]));
+      expect(runtime.getCellSnapshot("row-b", "COL_ID_SCORE").saveSucceeded).toBe(true);
+
+      vi.advanceTimersByTime(500);
+      expect(runtime.getCellSnapshot("row-a", "COL_ID_SCORE").saveSucceeded).toBeUndefined();
+      expect(runtime.getCellSnapshot("row-b", "COL_ID_SCORE").saveSucceeded).toBe(true);
+      vi.advanceTimersByTime(1_500);
+      expect(runtime.getCellSnapshot("row-b", "COL_ID_SCORE").saveSucceeded).toBeUndefined();
+    } finally {
+      unsubscribeA();
+      unsubscribeB();
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds Immediate rejection presentation to five seconds without dropping evidence", () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+      const changeSet = [
+        {
+          rowId: row.id,
+          baseRow: row,
+          expectedVersion: 1n,
+          changes: [
+            {
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: row.score,
+              after: 7,
+            },
+          ],
+        },
+      ] as const;
+
+      runtime.rejectSave("operation-timeout", changeSet, true);
+      expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBe(true);
+      vi.advanceTimersByTime(4_999);
+      expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").saveFailed).toBeUndefined();
+      expect(runtime.hasRejectedOperation("operation-timeout")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retain a rejection deadline for a fully converged Immediate operation", () => {
+    vi.useFakeTimers();
+    try {
+      let source = row;
+      const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => source });
+      const changeSet = [
+        {
+          rowId: row.id,
+          baseRow: row,
+          expectedVersion: 1n,
+          changes: [
+            {
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: row.score,
+              after: 7,
+            },
+          ],
+        },
+      ] as const;
+
+      expect(runtime.beginSaveOperation("operation-converged", changeSet, false)).toBe(true);
+      source = Object.freeze({ ...row, score: 7 });
+      runtime.reconcileSourceRows(new Set([row.id]));
+      runtime.rejectSave("operation-converged", changeSet, true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds rejected operation evidence to the latest 128 operations", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    for (let index = 0; index < 129; index += 1) {
+      runtime.rejectSave(
+        `operation-${String(index)}`,
+        [
+          {
+            rowId: row.id,
+            baseRow: row,
+            expectedVersion: 1n,
+            changes: [
+              {
+                columnId: "COL_ID_SCORE",
+                field: "score",
+                before: row.score,
+                after: index + 20,
+              },
+            ],
+          },
+        ],
+        false,
+      );
+      if (index === 0) runtime.subscribeRejectedOperation("operation-0", () => undefined)();
+    }
+
+    expect(runtime.hasRejectedOperation("operation-0")).toBe(false);
+    expect(runtime.getRejectedOperationUpdateSnapshot("operation-0")).toEqual({
+      remainingCount: 0,
+      removedCells: [],
+    });
+    expect(runtime.hasRejectedOperation("operation-1")).toBe(true);
+    expect(runtime.hasRejectedOperation("operation-128")).toBe(true);
+  });
+
+  it("does not retain unmounted cell stores while rejected evidence is bounded", () => {
+    const rows = new Map<string, Row>(
+      Array.from({ length: 129 }, (_, index) => {
+        const id = `row-${String(index)}`;
+        return [id, Object.freeze({ ...row, id })];
+      }),
+    );
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rows.get(rowId),
+    });
+
+    for (let index = 0; index < 129; index += 1) {
+      const rowId = `row-${String(index)}`;
+      const current = rows.get(rowId)!;
+      const unsubscribe = runtime.subscribeCell(rowId, "COL_ID_SCORE", () => undefined);
+      runtime.rejectSave(
+        `operation-${String(index)}`,
+        [
+          {
+            rowId,
+            baseRow: current,
+            expectedVersion: current.quantity,
+            changes: [
+              {
+                columnId: "COL_ID_SCORE",
+                field: "score",
+                before: current.score,
+                after: index + 20,
+              },
+            ],
+          },
+        ],
+        false,
+      );
+      unsubscribe();
+    }
+
+    expect(runtime.hasRejectedOperation("operation-0")).toBe(false);
+    expect(runtime.getRetainedCellStoreCount()).toBe(0);
+  });
+
+  it("traverses changed rows once when sparse rejected operations overlap a large gesture", () => {
+    const rowCount = 5_000;
+    const rejectedCount = 128;
+    const rows = new Map<string, Row>(
+      Array.from({ length: rowCount }, (_, index) => {
+        const id = `row-${String(index)}`;
+        return [id, Object.freeze({ ...row, id })];
+      }),
+    );
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rows.get(rowId),
+    });
+    for (let index = 0; index < rejectedCount; index += 1) {
+      const current = rows.get(`row-${String(index)}`)!;
+      runtime.rejectSave(
+        `operation-${String(index)}`,
+        [
+          {
+            rowId: current.id,
+            baseRow: current,
+            expectedVersion: current.quantity,
+            changes: [
+              {
+                columnId: "COL_ID_SCORE",
+                field: "score",
+                before: current.score,
+                after: current.score + 1,
+              },
+            ],
+          },
+        ],
+        false,
+      );
+    }
+    class CountingSet extends Set<string> {
+      public iteratorCount = 0;
+
+      public override [Symbol.iterator](): SetIterator<string> {
+        this.iteratorCount += 1;
+        return super[Symbol.iterator]();
+      }
+    }
+    const changedRowIds = new CountingSet(rows.keys());
+
+    runtime.reconcileSourceRows(changedRowIds);
+
+    expect(changedRowIds.iteratorCount).toBeLessThanOrEqual(4);
+  });
+
+  it("retains rejected Batch drafts when their column schema changes after rejection", () => {
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => row.quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet()!;
+    expect(runtime.beginSaveOperation("rejected-batch", changeSet, true)).toBe(true);
+    runtime.rejectSave("rejected-batch", changeSet, false);
+    runtime.completeSaveOperation("rejected-batch");
+
+    runtime.reconcileColumns(columns.filter((column) => column.columnId !== "COL_ID_SCORE"));
+
+    expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBe(7);
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 1,
+      undoCount: 1,
+      blockedCount: 1,
+    });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        rowId: row.id,
+        columnId: "COL_ID_SCORE",
+        mine: 7,
+        blockedReason: expect.stringContaining("Changes cannot be saved"),
+      },
+    ]);
+  });
+
+  it("safely rebases an unchanged edited field onto the latest row and Row Version", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+
+    current = Object.freeze({ ...row, quantity: row.quantity + 1n });
+    expect(runtime.createBatchSaveChangeSet()).toEqual([
+      {
+        rowId: row.id,
+        baseRow: current,
+        expectedVersion: current.quantity,
+        changes: [
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("blocks dirty rows while Row Version extraction fails and clears the block on recovery", () => {
+    let extractorAvailable = true;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+
+    runtime.setRowVersionExtractor(() => {
+      if (!extractorAvailable) throw new Error("Row Version unavailable");
+      return 2n;
+    });
+    extractorAvailable = false;
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { mine: 7, blockedReason: expect.stringContaining("Row Version") },
+    ]);
+    expect(runtime.createBatchSaveChangeSet()).toBeUndefined();
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+
+    extractorAvailable = true;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 0 });
+    expect(runtime.createBatchSaveChangeSet()?.[0]?.expectedVersion).toBe(2n);
+  });
+
+  it("revalidates only Row Version-blocked rows when the extractor changes", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const byId = new Map([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const getRow = vi.fn((rowId: string) => byId.get(rowId));
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow,
+      getRowVersion: () => 1n,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    for (const [rowId, mine] of [
+      [row.id, "7"],
+      [second.id, "8"],
+    ] as const) {
+      expect(runtime.start(rowId, "COL_ID_SCORE")).toBe(true);
+      expect(runtime.commit(mine)).toBe(true);
+    }
+
+    runtime.setRowVersionExtractor((candidate) => {
+      if (candidate === row) throw new Error("Row Version unavailable");
+      return 1n;
+    });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
+
+    getRow.mockClear();
+    runtime.setRowVersionExtractor(() => 2n);
+
+    expect(getRow.mock.calls.map(([rowId]) => rowId)).toEqual([row.id]);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 0, draftCount: 2 });
+  });
+
+  it("drops a Row Version-blocked row index when its final evidence converges", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const byId = new Map<string, Row>([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const getRow = vi.fn((rowId: string) => byId.get(rowId));
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow,
+      getRowVersion: () => 1n,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    for (const [rowId, mine] of [
+      [row.id, "7"],
+      [second.id, "8"],
+    ] as const) {
+      expect(runtime.start(rowId, "COL_ID_SCORE")).toBe(true);
+      expect(runtime.commit(mine)).toBe(true);
+    }
+    runtime.setRowVersionExtractor((candidate) => {
+      if (candidate === row) throw new Error("Row Version unavailable");
+      return 1n;
+    });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1, draftCount: 2 });
+
+    byId.set(row.id, Object.freeze({ ...row, score: 7 }));
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 0, draftCount: 1 });
+
+    getRow.mockClear();
+    runtime.setRowVersionExtractor(() => 2n);
+    expect(getRow).not.toHaveBeenCalled();
+  });
+
+  it("groups a Batch Save Change Set by stable Row Identity", () => {
+    const second = Object.freeze({ ...row, id: "row-2", score: 5 });
+    const byId = new Map([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => byId.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(second.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet?.map((rowChange) => rowChange.rowId)).toEqual([row.id, second.id]);
+    expect(changeSet?.map((rowChange) => rowChange.changes.length)).toEqual([1, 1]);
+  });
+
+  it("yields Accepted Overlays on Row Version difference and disappearance", () => {
+    let current: Row | undefined = row;
+    let version = 1n;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: () => version,
+    });
+    const changeSet = [
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: 1n,
+        changes: [
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ] as const;
+
+    runtime.acceptSave("operation-version", changeSet, false);
+    version = 2n;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-version")).toBe(0);
+
+    runtime.acceptSave("operation-disappearance", changeSet, false);
+    current = undefined;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getAcceptedOverlayCountForOperation("operation-disappearance")).toBe(0);
+  });
+
+  it("reconciles rejected evidence when its authoritative row disappears", () => {
+    let current: Row | undefined = row;
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => current });
+    const changeSet = [
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: row.quantity,
+        changes: [
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ] as const;
+
+    runtime.rejectSave("operation-disappearance", changeSet, true);
+    expect(runtime.hasRejectedOperation("operation-disappearance")).toBe(true);
+    current = undefined;
+    runtime.reconcileSourceRows(new Set([row.id]));
+
+    expect(runtime.hasRejectedOperation("operation-disappearance")).toBe(false);
+    expect(runtime.getCellSnapshot(row.id, "COL_ID_SCORE")).toEqual({
+      active: false,
+      hasDraft: false,
+    });
+  });
+
+  it("refuses a fresh Save preflight and records a conflict when an edited Base diverges", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: () => 1n,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+
+    current = Object.freeze({ ...row, score: 5 });
+    expect(runtime.createBatchSaveChangeSet()).toBeUndefined();
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 1,
+      conflictCount: 1,
+      undoCount: 1,
+    });
+  });
+
+  it("publishes one atomic Immediate operation for a multi-cell accepted gesture", () => {
+    const onCommitGesture = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture,
+    });
+    const gesture = [
+      {
+        rowId: row.id,
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        baseRow: row,
+        expectedVersion: 1n,
+        base: row.quantity,
+        mine: row.quantity + 1n,
+      },
+      {
+        rowId: row.id,
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        baseRow: row,
+        expectedVersion: 1n,
+        base: row.score,
+        mine: 7,
+      },
+    ] as const;
+
+    expect(runtime.applyAcceptedDraftGesture(gesture)).toBe(true);
+    expect(onCommitGesture).toHaveBeenCalledOnce();
+    const committed = onCommitGesture.mock.calls[0]![0];
+    expect(runtime.createImmediateSaveChangeSet(committed)).toEqual([
+      {
+        rowId: row.id,
+        baseRow: row,
+        expectedVersion: 1n,
+        changes: [
+          {
+            columnId: "COL_ID_QUANTITY",
+            field: "quantity",
+            before: row.quantity,
+            after: row.quantity + 1n,
+          },
+          {
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            before: row.score,
+            after: 7,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("does not materialize an Immediate operation for an accepted Batch gesture", () => {
+    const onCommitGesture = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture,
+    });
+    runtime.setBatchHistoryEnabled(true);
+
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: 1n,
+          base: row.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(true);
+    expect(onCommitGesture).not.toHaveBeenCalled();
+    expect(runtime.createBatchSaveChangeSet()).toHaveLength(1);
   });
 });

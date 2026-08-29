@@ -1568,6 +1568,13 @@ export type BrunoTableSaveChangeSet<
   ...BrunoTableSaveRowChange<TRow, TColumns, TRowVersion>[],
 ];
 
+/**
+ * Persist a non-empty Save Change Set.
+ *
+ * The returned operation must eventually settle. While it is pending, BrunoTable keeps the
+ * submitted cells locked and the save counted as active. Rejection releases that save work;
+ * resolution keeps it active until authoritative live-source evidence reconciles the submission.
+ */
 export type BrunoTableSaveEditsHandler<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,

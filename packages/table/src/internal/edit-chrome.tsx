@@ -1,6 +1,8 @@
 import { Button } from "@bruno/shadcn/button";
 import {
   AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -8,19 +10,98 @@ import {
   AlertDialogTitle,
 } from "@bruno/shadcn/alert-dialog";
 import { Switch } from "@bruno/shadcn/switch";
+import { ScrollArea } from "@bruno/shadcn/scroll-area";
+import { createToastManager, Toaster } from "@bruno/shadcn/toast";
+import { Debouncer } from "@tanstack/react-pacer";
 import {
   memo,
   useCallback,
+  useEffect,
   useId,
+  useRef,
+  useState,
   useSyncExternalStore,
   type NamedExoticComponent,
   type ReactElement,
   type ReactNode,
+  type RefObject,
 } from "react";
+import { createRoot, type Root } from "react-dom/client";
 
 import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit";
 import type { BrunoTableGridCommand } from "./column-management";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
+
+type SaveFailureToasterOwner = object;
+type SaveFailureToasterEntry = Readonly<{
+  readonly manager: ReturnType<typeof createToastManager>;
+  readonly owners: Set<SaveFailureToasterOwner>;
+  readonly host: HTMLElement;
+  readonly portalContainer: RefObject<HTMLElement | null>;
+  readonly root: Root;
+}>;
+
+const saveFailureToastersByDocument = new WeakMap<Document, SaveFailureToasterEntry>();
+const pendingSaveFailureToasterDisposals = new Map<Document, SaveFailureToasterEntry>();
+const saveFailureToasterDisposalQueue = new Debouncer(
+  () => {
+    const pending = [...pendingSaveFailureToasterDisposals];
+    pendingSaveFailureToasterDisposals.clear();
+    for (const [ownerDocument, entry] of pending) {
+      if (entry.owners.size > 0 || saveFailureToastersByDocument.get(ownerDocument) !== entry) {
+        continue;
+      }
+      saveFailureToastersByDocument.delete(ownerDocument);
+      entry.root.unmount();
+      entry.host.remove();
+    }
+  },
+  { wait: 0 },
+);
+let saveFailureToastIdSequence = 0;
+
+function createSaveFailureToasterEntry(ownerDocument: Document): SaveFailureToasterEntry {
+  const manager = createToastManager();
+  const host = ownerDocument.createElement("div");
+  host.dataset["brunoTableSaveFailureToaster"] = "";
+  ownerDocument.body.append(host);
+  const portalContainer = Object.freeze({ current: ownerDocument.body });
+  const root = createRoot(host);
+  root.render(<Toaster portalContainer={portalContainer} toastManager={manager} timeout={0} />);
+  return Object.freeze({
+    manager,
+    owners: new Set<SaveFailureToasterOwner>(),
+    host,
+    portalContainer,
+    root,
+  });
+}
+
+function scheduleSaveFailureToasterDisposal(
+  ownerDocument: Document,
+  entry: SaveFailureToasterEntry,
+): void {
+  pendingSaveFailureToasterDisposals.set(ownerDocument, entry);
+  saveFailureToasterDisposalQueue.maybeExecute();
+}
+
+function registerSaveFailureToasterOwner(
+  ownerDocument: Document,
+  owner: SaveFailureToasterOwner,
+): Readonly<{ readonly entry: SaveFailureToasterEntry; readonly unregister: () => void }> {
+  const entry =
+    saveFailureToastersByDocument.get(ownerDocument) ??
+    createSaveFailureToasterEntry(ownerDocument);
+  saveFailureToastersByDocument.set(ownerDocument, entry);
+  entry.owners.add(owner);
+  return Object.freeze({
+    entry,
+    unregister: () => {
+      entry.owners.delete(owner);
+      if (entry.owners.size === 0) scheduleSaveFailureToasterDisposal(ownerDocument, entry);
+    },
+  });
+}
 
 type BrunoTableEditModeControlProps = Readonly<{
   readonly runtime: BrunoTableEditMemoryRuntime;
@@ -68,6 +149,11 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
     runtime.getSafetyStatusSnapshot,
     runtime.getSafetyStatusSnapshot,
   );
+  const saveWork = useSyncExternalStore(
+    runtime.subscribeSaveWork,
+    runtime.getSaveWorkSnapshot,
+    runtime.getSaveWorkSnapshot,
+  );
   const pendingCount = status.pendingCount;
   const statusParts: string[] = [];
   if (status.conflictCount > 0)
@@ -80,13 +166,36 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
     );
   if (status.validationCount > 0) statusParts.push(`${String(status.validationCount)} invalid`);
   if (pendingCount > 0) statusParts.push(`${String(pendingCount)} unsaved`);
+  const saveWorkParts: string[] = [];
+  if (saveWork.pendingImmediateCount > 0) {
+    saveWorkParts.push(
+      `${String(saveWork.pendingImmediateCount)} Immediate ${saveWork.pendingImmediateCount === 1 ? "save" : "saves"} pending`,
+    );
+  }
+  if (saveWork.awaitingImmediateCount > 0) {
+    saveWorkParts.push(
+      `${String(saveWork.awaitingImmediateCount)} Immediate ${saveWork.awaitingImmediateCount === 1 ? "save" : "saves"} accepted · waiting for live confirmation`,
+    );
+  }
+  if (saveWork.pendingBatchCount > 0) saveWorkParts.push("Batch save pending");
+  if (saveWork.awaitingBatchCount > 0) {
+    saveWorkParts.push(
+      saveWork.awaitingBatchRowCount > 0
+        ? `Batch save accepted · waiting for live confirmation · ${String(saveWork.awaitingBatchRowCount)} ${saveWork.awaitingBatchRowCount === 1 ? "row" : "rows"} remaining`
+        : "Batch save accepted · waiting for live confirmation",
+    );
+  }
+  const safetyStatus =
+    statusParts.length === 0
+      ? undefined
+      : status.blockedCount === 0 && status.validationCount === 0 && status.conflictCount === 0
+        ? `${String(pendingCount)} unsaved ${pendingCount === 1 ? "change" : "changes"}`
+        : statusParts.join(" · ");
+  const visibleStatus =
+    safetyStatus === undefined ? saveWorkParts : [...saveWorkParts, safetyStatus];
   return (
     <span aria-live="polite">
-      {statusParts.length === 0
-        ? "No unsaved changes"
-        : status.blockedCount === 0 && status.validationCount === 0 && status.conflictCount === 0
-          ? `${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"}`
-          : statusParts.join(" · ")}
+      {visibleStatus.length === 0 ? "No unsaved changes" : visibleStatus.join(" · ")}
     </span>
   );
 });
@@ -201,10 +310,8 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
       </AlertDialogHeader>
       {renderReview(rows)}
       <AlertDialogFooter>
-        <Button variant="outline" onClick={runtime.closeResetReview}>
-          Keep Editing
-        </Button>
-        <Button
+        <AlertDialogCancel onClick={runtime.closeResetReview}>Keep Editing</AlertDialogCancel>
+        <AlertDialogAction
           aria-describedby={descriptionId}
           disabled={!canResetAll}
           variant="destructive"
@@ -213,7 +320,7 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
           }}
         >
           Reset All Changes
-        </Button>
+        </AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>
   );
@@ -236,6 +343,161 @@ const BrunoTableSaveEditsButton = memo(function BrunoTableSaveEditsButton({
   );
 });
 
+const BrunoTableSaveFailure = memo(function BrunoTableSaveFailure({
+  runtime,
+}: {
+  readonly runtime: BrunoTableEditMemoryRuntime;
+}): ReactElement | null {
+  const detailsContent = useRef<HTMLDivElement>(null);
+  const detailsOpenRef = useRef(false);
+  const [detailsOpen, setDetailsOpenState] = useState(false);
+  const setDetailsOpen = useCallback((open: boolean) => {
+    detailsOpenRef.current = open;
+    setDetailsOpenState(open);
+  }, []);
+  const subscribeFailureSummary = useCallback(
+    (listener: () => void) =>
+      runtime.subscribeSaveFailureSummary(() => {
+        if (runtime.getSaveFailureSummarySnapshot().count === 0 && detailsOpenRef.current) {
+          const content = detailsContent.current;
+          const restoreGridFocus =
+            content !== null && content.contains(content.ownerDocument.activeElement);
+          setDetailsOpen(false);
+          if (restoreGridFocus) runtime.requestGridFocus();
+        }
+        listener();
+      }),
+    [runtime, setDetailsOpen],
+  );
+  const failure = useSyncExternalStore(
+    subscribeFailureSummary,
+    runtime.getSaveFailureSummarySnapshot,
+    runtime.getSaveFailureSummarySnapshot,
+  );
+  const [toasterOwnerToken] = useState<SaveFailureToasterOwner>(() => Object.freeze({}));
+  const toasterAnchor = useRef<HTMLSpanElement>(null);
+  const [toasterEntry, setToasterEntry] = useState<SaveFailureToasterEntry>();
+  const [toastId] = useState(
+    () => `bruno-table-save-failure-${String((saveFailureToastIdSequence += 1))}`,
+  );
+  const programmaticToastClose = useRef(false);
+  useEffect(() => {
+    const ownerDocument = toasterAnchor.current?.ownerDocument;
+    if (ownerDocument === undefined) return;
+    const registration = registerSaveFailureToasterOwner(ownerDocument, toasterOwnerToken);
+    setToasterEntry(registration.entry);
+    return registration.unregister;
+  }, [toasterOwnerToken]);
+  useEffect(() => {
+    if (toasterEntry === undefined) return;
+    if (failure.count === 0) {
+      programmaticToastClose.current = true;
+      toasterEntry.manager.close(toastId);
+      programmaticToastClose.current = false;
+      return;
+    }
+    toasterEntry.manager.add({
+      id: toastId,
+      title:
+        failure.count === 1
+          ? "A save operation failed."
+          : `${String(failure.count)} save operations failed.`,
+      description:
+        failure.count === 1
+          ? "Open Operation details for the complete explanation."
+          : "Open Operation details for the complete explanations.",
+      actionProps: {
+        children: "Operation details",
+        onClick: () => setDetailsOpen(true),
+      },
+      timeout: 0,
+      priority: "high",
+      type: "error",
+      onClose: () => {
+        if (programmaticToastClose.current) return;
+        setDetailsOpen(false);
+        runtime.dismissSaveFailures();
+      },
+    });
+  }, [failure, runtime, setDetailsOpen, toastId, toasterEntry]);
+  useEffect(
+    () => () => {
+      if (toasterEntry === undefined) return;
+      programmaticToastClose.current = true;
+      toasterEntry.manager.close(toastId);
+      programmaticToastClose.current = false;
+    },
+    [toastId, toasterEntry],
+  );
+  return (
+    <>
+      <span aria-hidden="true" className="hidden" ref={toasterAnchor} />
+      <AlertDialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        {detailsOpen ? (
+          <BrunoTableSaveFailureDetails
+            contentRef={detailsContent}
+            portalContainer={toasterEntry?.portalContainer}
+            runtime={runtime}
+          />
+        ) : null}
+      </AlertDialog>
+    </>
+  );
+});
+
+const BrunoTableSaveFailureDetails = memo(function BrunoTableSaveFailureDetails({
+  contentRef,
+  portalContainer,
+  runtime,
+}: {
+  readonly contentRef: RefObject<HTMLDivElement | null>;
+  readonly portalContainer: RefObject<HTMLElement | null> | undefined;
+  readonly runtime: BrunoTableEditMemoryRuntime;
+}): ReactElement {
+  const failure = useSyncExternalStore(
+    runtime.subscribeSaveFailure,
+    runtime.getSaveFailureSnapshot,
+    runtime.getSaveFailureSnapshot,
+  );
+  return (
+    <AlertDialogContent
+      ref={contentRef}
+      portalContainer={portalContainer}
+      className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+    >
+      <AlertDialogHeader>
+        <AlertDialogTitle>Save operation details</AlertDialogTitle>
+        <AlertDialogDescription>
+          These saves were not confirmed. Live source convergence can still clear each result.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <ScrollArea className="min-h-0 max-h-[min(60dvh,32rem)]">
+        <ul className="flex list-disc flex-col gap-1 py-1 ps-5 pe-4 text-sm">
+          {failure.operations.map((operation, index) => (
+            <li key={operation.operationId}>
+              <p>
+                Operation {String(index + 1)}: {operation.message}
+              </p>
+              <ul className="mt-1 flex list-[circle] flex-col gap-1 ps-5">
+                {operation.rows.flatMap((row) =>
+                  row.cells.map((cell) => (
+                    <li key={JSON.stringify([row.rowId, cell.columnId])}>
+                      Row {row.rowId}, column {cell.columnId} (field {cell.field}).
+                    </li>
+                  )),
+                )}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      </ScrollArea>
+      <AlertDialogFooter>
+        <AlertDialogCancel>Close details</AlertDialogCancel>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  );
+});
+
 type BrunoTableEditSafetyFooterProps = Readonly<{
   readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
@@ -251,9 +513,10 @@ export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafe
     return (
       <footer
         aria-label="Edit safety"
-        className="flex min-w-0 items-center justify-between gap-3 border-t bg-background px-3.5 py-2 text-xs/relaxed"
+        className="relative flex min-w-0 items-center justify-between gap-3 border-t bg-background px-3.5 py-2 text-xs/relaxed"
         role="region"
       >
+        <BrunoTableSaveFailure runtime={runtime} />
         <BrunoTablePendingEditStatus runtime={runtime} />
         <div className="flex items-center gap-2">
           <BrunoTableResetEditsButton dispatchGridCommand={dispatchGridCommand} runtime={runtime} />
