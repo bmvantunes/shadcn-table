@@ -4384,6 +4384,9 @@ test("reviews every conflict explicitly and safely rebases Mine before Batch Sav
   const sameVersionRows = [{ id: "ada", name: "Same Version Server", revision: 2n }] as const;
   await screen.rerender(renderTable(sameVersionRows, 3));
   reopenedGrid.element().scrollLeft = reopenedGrid.element().scrollWidth;
+  await expect
+    .element(reopenedGrid.getByRole("gridcell", { name: "Same Version Server", exact: true }))
+    .toBeVisible();
   await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
   const sameVersionMineChoice = review.getByRole("button", {
     name: "Keep Mine for row ada, column Name",

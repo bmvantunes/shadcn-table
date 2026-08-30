@@ -28,6 +28,61 @@ afterEach(() => {
 });
 
 describe("BrunoTableSaveOperationRuntime", () => {
+  it("releases Conflict Review saving state when Batch admission fails", () => {
+    let currentRow: Row = row;
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => currentRow,
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const editMemory = new BrunoTableEditMemoryRuntime();
+    const saveOperations = new BrunoTableSaveOperationRuntime(cellEdit, editMemory);
+    const handler = vi.fn(() => Promise.resolve());
+    cellEdit.activate();
+    editMemory.activate();
+    disposers.push(
+      () => cellEdit.dispose(),
+      () => editMemory.dispose(),
+      saveOperations.activate(),
+      editMemory.connectCellEdit(cellEdit),
+      saveOperations.setHandler(handler),
+    );
+
+    expect(editMemory.requestMode("batch")).toBe(true);
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: row,
+          expectedVersion: row.revision,
+          base: row.value,
+          mine: "mine",
+          conflict: { server: "server-now", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    currentRow = Object.freeze({ ...row, value: "server-now", revision: 2n });
+    cellEdit.reconcileSourceRows(new Set([row.id]));
+    expect(editMemory.openConflictReview()).toBe(true);
+    const conflictId = cellEdit.getDraftReviewSnapshot()[0]?.id;
+    expect(conflictId).toBeDefined();
+    expect(editMemory.resolveConflictRows([conflictId!], "mine")).toBe(true);
+    expect(editMemory.getConflictReviewSnapshot()).toMatchObject({
+      count: 0,
+      resolutionCount: 1,
+      saving: false,
+    });
+    vi.spyOn(cellEdit, "beginSaveOperation").mockReturnValueOnce(false);
+
+    expect(editMemory.saveConflictReview()).toBe(false);
+
+    expect(editMemory.getConflictReviewSnapshot()).toMatchObject({ open: true, saving: false });
+    expect(saveOperations.getRetainedOperationCount()).toBe(0);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("backpressures Immediate edits at capacity and reopens admission after reconciliation", async () => {
     const pendingRows = new Map<string, Row>(
       Array.from({ length: 129 }, (_, index) => {

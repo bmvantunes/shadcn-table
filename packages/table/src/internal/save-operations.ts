@@ -147,7 +147,10 @@ export class BrunoTableSaveOperationRuntime {
     batch(() => {
       releaseSaveWork = this.editMemory.beginSaveWork(operationId, kind);
       admitted = this.cellEdit.beginSaveOperation(operationId, changeSet, kind === "batch");
-      if (!admitted) releaseSaveWork();
+      if (!admitted) {
+        releaseSaveWork();
+        this.editMemory.rejectSaveWorkAdmission(operationId);
+      }
     });
     if (!admitted) return;
     const operation: SaveOperationRecord = {

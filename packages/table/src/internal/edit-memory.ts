@@ -824,6 +824,13 @@ export class BrunoTableEditMemoryRuntime {
     };
   };
 
+  public readonly rejectSaveWorkAdmission = (operationId: string): void => {
+    if (this.conflictReviewSaveOperationId !== operationId) return;
+    this.conflictReviewSaveOperationId = undefined;
+    this.conflictReviewSaveRequested = true;
+    this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
+  };
+
   public readonly beginRetainedSaveOperation = (): (() => void) => {
     this.activeRetainedSaveOperationCount += 1;
     if (this.activeRetainedSaveOperationCount === 1) {
@@ -1304,7 +1311,7 @@ export class BrunoTableEditMemoryRuntime {
         this.conflictReviewSourcesById.set(row.id, row);
       }
 
-      const context = this.actor.getSnapshot().context;
+      let context = this.actor.getSnapshot().context;
       const invalidResolutionIds = [...context.conflictReviewResolutions].flatMap(
         ([id, resolution]) => {
           const conflict = this.conflictReviewSourcesById.get(id)?.getSnapshot().conflict;
@@ -1323,7 +1330,7 @@ export class BrunoTableEditMemoryRuntime {
           type: "INVALIDATE_CONFLICT_RESOLUTIONS",
           ids: Object.freeze(invalidResolutionIds),
         });
-        return;
+        context = this.actor.getSnapshot().context;
       }
 
       for (const id of this.conflictReviewSourcesById.keys()) {
