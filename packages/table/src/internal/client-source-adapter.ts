@@ -164,7 +164,8 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
     this.editCoherent !== undefined &&
     (this.editSourceStatus === "ready" || this.editSourceStatus === "stale");
 
-  public readonly getEditSourceChangedRowIds = () => this.editSourceChangedRowIds;
+  public readonly getEditSourceChangedRowIds = (): ReadonlySet<BrunoTableRowId> | undefined =>
+    this.editSourceChangedRowIds;
 
   public readonly isEditSourceConfiguredFor = (columns: readonly CompiledColumn[]): boolean =>
     this.editCoherent?.validatedColumns === columns;
