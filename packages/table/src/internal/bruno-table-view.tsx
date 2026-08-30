@@ -196,7 +196,11 @@ import {
 } from "./cell-edit";
 import { BrunoTableCellEditBoundary } from "./cell-edit-boundary";
 import { BrunoTableCellEditGeometryController } from "./cell-edit-geometry";
-import { BrunoTableEditSafetyFooter } from "./edit-chrome";
+import {
+  BrunoTableEditSafetyFooter,
+  type BrunoTableBlockedReviewRenderer,
+  type BrunoTableConflictReviewRenderer,
+} from "./edit-chrome";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
@@ -445,6 +449,10 @@ export type BrunoTableViewProps<
   readonly renderResetReview?:
     | ((rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode)
     | undefined;
+  /** Private Editable Client-only Conflict Review renderer. */
+  readonly renderConflictReview?: BrunoTableConflictReviewRenderer | undefined;
+  /** Private Editable Client-only Blocked Changes Review renderer. */
+  readonly renderBlockedReview?: BrunoTableBlockedReviewRenderer | undefined;
 };
 
 function getBrunoTableGridAriaKeyShortcuts({
@@ -553,6 +561,8 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   cellRange,
   editMemory,
   renderResetReview,
+  renderConflictReview,
+  renderBlockedReview,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
   const resolvedGridAriaLabel = gridAriaLabel ?? `Data for ${tableId}`;
   const tableElement = useRef<HTMLElement | null>(null);
@@ -562,14 +572,17 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   );
   useLayoutEffect(
     () =>
-      editMemory?.registerGridFocusCommand(() => {
-        const owner = tableElement.current;
-        const grid = [
-          ...(owner?.querySelectorAll<HTMLElement>("[data-bruno-scroll-owner]") ?? []),
-        ].find((candidate) => candidate.closest("[data-bruno-table]") === owner);
-        if (grid === undefined || grid === null) focusFallback();
-        else grid.focus({ preventScroll: true });
-      }),
+      editMemory?.registerGridFocusCommand(
+        () => {
+          const owner = tableElement.current;
+          const grid = [
+            ...(owner?.querySelectorAll<HTMLElement>("[data-bruno-scroll-owner]") ?? []),
+          ].find((candidate) => candidate.closest("[data-bruno-table]") === owner);
+          if (grid === undefined || grid === null) focusFallback();
+          else grid.focus({ preventScroll: true });
+        },
+        () => tableElement.current?.ownerDocument,
+      ),
     [editMemory, focusFallback],
   );
   return (
@@ -612,11 +625,16 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
           rowSelection={rowSelection}
           cellRange={cellRange}
         />
-        {editMemory === undefined || renderResetReview === undefined ? null : (
+        {editMemory === undefined ||
+        renderResetReview === undefined ||
+        renderConflictReview === undefined ||
+        renderBlockedReview === undefined ? null : (
           <BrunoTableEditSafetyFooter
             dispatchGridCommand={runtime.dispatchGridCommand}
             runtime={editMemory}
             renderReview={renderResetReview}
+            renderConflictReview={renderConflictReview}
+            renderBlockedReview={renderBlockedReview}
           />
         )}
       </div>
@@ -5508,17 +5526,29 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const draftReviewKind =
     draftReviewSource !== undefined &&
     presentationColumn?.kind === "field" &&
-    presentationColumn.field === "serverText"
-      ? "server"
+    presentationColumn.field === "baseText"
+      ? "base"
       : draftReviewSource !== undefined &&
           presentationColumn?.kind === "field" &&
-          presentationColumn.field === "mineText"
-        ? "mine"
-        : undefined;
+          presentationColumn.field === "serverText"
+        ? "server"
+        : draftReviewSource !== undefined &&
+            presentationColumn?.kind === "field" &&
+            presentationColumn.field === "mineText"
+          ? "mine"
+          : undefined;
   const draftReviewRow =
-    draftReviewKind === "server" ? draftReview?.serverRow : draftReview?.projectedRow;
+    draftReviewKind === "base"
+      ? draftReview?.baseRow
+      : draftReviewKind === "server"
+        ? draftReview?.serverRow
+        : draftReview?.projectedRow;
   const draftReviewValue =
-    draftReviewKind === "server" ? draftReview?.serverNow : draftReview?.mine;
+    draftReviewKind === "base"
+      ? draftReview?.base
+      : draftReviewKind === "server"
+        ? draftReview?.serverNow
+        : draftReview?.mine;
   const draftReviewValueUnavailable =
     draftReviewKind === "server" && draftReview?.serverValueAvailable === false;
   const draftReviewCandidateText =
@@ -5545,7 +5575,14 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
           ? undefined
           : resolveCellClassName(presentationColumn, row, value);
   const content =
-    unavailable || rowMissing || presentationColumn === undefined ? null : invalid ? (
+    draftReviewCandidateText !== undefined ? (
+      draftReviewCandidateText
+    ) : draftReviewKind !== undefined &&
+      draftReview !== undefined &&
+      draftReviewRow !== undefined &&
+      !draftReviewValueUnavailable ? (
+      resolveCellContent(draftReview.column, draftReviewRow, draftReviewValue)
+    ) : unavailable || rowMissing || presentationColumn === undefined ? null : invalid ? (
       <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>
     ) : (
       resolveCellContent(presentationColumn, row, value)

@@ -4451,6 +4451,92 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftReviewSnapshot()[0]).not.toHaveProperty("conflict");
   });
 
+  it("records one individual Server resolution as one reversible Batch command", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    runtime.rejectSave("operation-resolution", changeSet!, false);
+    current = Object.freeze({ ...row, score: 5 });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    const conflict = runtime.getDraftReviewSnapshot()[0];
+    expect(conflict?.conflict).toBeDefined();
+
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: conflict!.id,
+          resolution: "server",
+          reviewedServer: conflict!.conflict!.server,
+          reviewedServerVersion: conflict!.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, conflictCount: 0 });
+    current = Object.freeze({ ...current, quantity: current.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 2 });
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 1 });
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, conflictCount: 0 });
+  });
+
+  it("records one selected conflict set as one reversible Batch command", () => {
+    const second = Object.freeze({ ...row, id: "row-2", quantity: row.quantity + 1n });
+    const rowsById = new Map<string, Row>([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rowsById.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(second.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    runtime.rejectSave("operation-selected-resolution", changeSet!, false);
+    rowsById.set(row.id, Object.freeze({ ...row, score: 5 }));
+    rowsById.set(second.id, Object.freeze({ ...second, score: 6 }));
+    runtime.reconcileSourceRows(new Set([row.id, second.id]));
+    const conflicts = runtime.getDraftReviewSnapshot();
+    expect(conflicts).toHaveLength(2);
+
+    const resolutions = conflicts.map((conflict, index) => ({
+      id: conflict.id,
+      resolution: index === 0 ? ("server" as const) : ("mine" as const),
+      reviewedServer: conflict.conflict!.server,
+      reviewedServerVersion: conflict.conflict!.serverVersion,
+    }));
+    Object.defineProperty(resolutions, "find", {
+      value: () => {
+        throw new Error("Bulk resolution must not rescan the resolution tuple.");
+      },
+    });
+    expect(
+      runtime.resolveDraftConflicts(
+        resolutions as [(typeof resolutions)[0], ...typeof resolutions],
+      ),
+    ).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 0 });
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 2, conflictCount: 2 });
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 0 });
+  });
+
   it("reconciles a rejected Batch draft immediately after releasing its save lock", () => {
     let current: Row = row;
     const runtime = new BrunoTableCellEditRuntime({

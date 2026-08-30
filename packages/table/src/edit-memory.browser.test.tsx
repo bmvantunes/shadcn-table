@@ -49,6 +49,20 @@ function ResetCommandProbe({
   );
 }
 
+function HistoryCommandProbe() {
+  const { runtime } = useBrunoTableClientFilterContext();
+  return (
+    <>
+      <button type="button" onClick={() => runtime.dispatchGridCommand({ type: "edits.undo" })}>
+        Test Undo
+      </button>
+      <button type="button" onClick={() => runtime.dispatchGridCommand({ type: "edits.redo" })}>
+        Test Redo
+      </button>
+    </>
+  );
+}
+
 function makeCanonicalTextColumns(lowercase: boolean): BrunoTableColumns<Row> {
   const decodeRuntime = (input: unknown) =>
     typeof input === "string"
@@ -1536,6 +1550,8 @@ test("hosts save failure notifications in the table's owner document", async () 
         dispatchGridCommand={() => false}
         runtime={runtime}
         renderReview={() => null}
+        renderConflictReview={() => null}
+        renderBlockedReview={() => null}
       />,
       { container, baseElement: ownerDocument.body },
     );
@@ -4205,6 +4221,610 @@ test("exposes live conflict and permission-block evidence without replacing Your
   await expect
     .element(screen.getByRole("region", { name: "Edit safety" }))
     .toHaveTextContent("No unsaved changes");
+});
+
+test("reviews every conflict explicitly and safely rebases Mine before Batch Save", async () => {
+  let resolveSave!: () => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      }),
+  );
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{
+        rows: sourceRows,
+        totalRows: sourceRows.length,
+        version,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CONFLICT_REVIEW" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  const latestRows = [{ id: "ada", name: "Server", revision: 2n }] as const;
+  await screen.rerender(renderTable(latestRows, 2));
+  const conflictControl = screen.getByRole("button", { name: "1 conflict" });
+  await expect.element(conflictControl).toBeVisible();
+  await userEvent.click(conflictControl);
+
+  let review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Ada", exact: true }))
+    .toBeVisible();
+  await userEvent.click(review.getByRole("button", { name: "Cancel" }));
+  await expect.element(conflictControl).toHaveFocus();
+
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reopenedGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  reopenedGrid.element().scrollLeft = reopenedGrid.element().scrollWidth;
+  await expect
+    .element(reopenedGrid.getByRole("gridcell", { name: "Server", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(reopenedGrid.getByRole("gridcell", { name: "Augusta", exact: true }))
+    .toBeVisible();
+  await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
+  const mineChoice = review.getByRole("button", {
+    name: "Keep Mine for row ada, column Name",
+  });
+  await userEvent.click(mineChoice);
+  await expect.element(mineChoice).toHaveAttribute("aria-pressed", "true");
+  await expect.element(review.getByRole("button", { name: "Save" })).toBeEnabled();
+  const newestRows = [{ id: "ada", name: "Newer Server", revision: 3n }] as const;
+  await screen.rerender(renderTable(newestRows, 3));
+  reopenedGrid.element().scrollLeft = reopenedGrid.element().scrollWidth;
+  await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
+  const refreshedMineChoice = review.getByRole("button", {
+    name: "Keep Mine for row ada, column Name",
+  });
+  await expect.element(refreshedMineChoice).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(refreshedMineChoice);
+  await expect.element(review.getByRole("button", { name: "Save" })).toBeEnabled();
+  await userEvent.click(review.getByRole("button", { name: "Save" }));
+  expect(onSaveEdits).toHaveBeenCalledOnce();
+  await expect.element(review).toBeVisible();
+  await expect.element(review.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  expect(onSaveEdits).toHaveBeenCalledWith([
+    {
+      rowId: "ada",
+      baseRow: newestRows[0],
+      expectedVersion: 3n,
+      changes: [
+        {
+          columnId: "COL_ID_NAME",
+          field: "name",
+          before: "Newer Server",
+          after: "Augusta",
+        },
+      ],
+    },
+  ]);
+  resolveSave();
+  await expect.element(review).not.toBeInTheDocument();
+});
+
+test("discards one conflict with Server as one reversible local command", async () => {
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_SERVER"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    >
+      <BrunoTableToolbar>
+        <HistoryCommandProbe />
+      </BrunoTableToolbar>
+    </BrunoTableClient>
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CONFLICT_REVIEW_SERVER" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable([{ id: "ada", name: "Server", revision: 2n }] as const, 2));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  const serverChoice = review.getByRole("button", {
+    name: "Keep Server for row ada, column Name",
+  });
+  await userEvent.click(serverChoice);
+
+  await expect.element(serverChoice).toHaveAttribute("aria-pressed", "true");
+  await expect.element(serverChoice).toBeDisabled();
+  await expect
+    .element(review.getByRole("button", { name: "Keep Mine for row ada, column Name" }))
+    .toBeDisabled();
+  await screen.rerender(renderTable([{ id: "ada", name: "Server", revision: 3n }] as const, 3));
+  await screen.rerender(
+    renderTable([{ id: "ada", name: "Newest Server", revision: 4n }] as const, 4),
+  );
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  await expect
+    .poll(() =>
+      reviewGrid
+        .getByRole("gridcell")
+        .all()
+        .map((cell) => cell.element().textContent),
+    )
+    .toEqual(expect.arrayContaining(["Ada", "Newest Server", "Newest Server"]));
+  expect(onSaveEdits).not.toHaveBeenCalled();
+  await userEvent.click(review.getByRole("button", { name: "Save" }));
+  await expect.element(review).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("region", { name: "Edit safety" }))
+    .toHaveTextContent("No unsaved changes");
+  expect(onSaveEdits).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole("button", { name: "Test Undo" }));
+  await expect.element(screen.getByRole("button", { name: "1 conflict" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Test Redo" }));
+  await expect.element(screen.getByRole("button", { name: "1 conflict" })).not.toBeInTheDocument();
+});
+
+test("keeps Conflict Review open when its Save is rejected", async () => {
+  let rejectSave!: (reason: Error) => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectSave = reject;
+      }),
+  );
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_REJECTION"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CONFLICT_REVIEW_REJECTION" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable([{ id: "ada", name: "Server", revision: 2n }] as const, 2));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  await userEvent.click(review.getByRole("button", { name: "Keep Mine for row ada, column Name" }));
+  await userEvent.click(review.getByRole("button", { name: "Save" }));
+  expect(onSaveEdits).toHaveBeenCalledOnce();
+  rejectSave(new Error("Compare-and-set rejected the save."));
+  await expect.element(review).toBeVisible();
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Augusta", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(review.getByRole("button", { name: "Keep Mine for row ada, column Name" }))
+    .toHaveAttribute("aria-pressed", "true");
+});
+
+test("keeps Conflict Review closed when a conflict-free footer Save is rejected", async () => {
+  let rejectSave!: (reason: Error) => void;
+  const screen = await render(
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_FREE_REJECTION"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() =>
+        new Promise<void>((_resolve, reject) => {
+          rejectSave = reject;
+        })
+      }
+    />,
+  );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_CONFLICT_FREE_REJECTION" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  rejectSave(new Error("Rejected without a conflict."));
+
+  await expect
+    .element(screen.getByRole("alertdialog", { name: "Conflict Review" }))
+    .not.toBeInTheDocument();
+});
+
+test("refuses conflict resolution atomically when current Row Version extraction fails", async () => {
+  let failVersionExtraction = false;
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_VERSION_FAILURE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => {
+        if (failVersionExtraction) throw new Error("Version unavailable.");
+        return row.revision;
+      }}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONFLICT_REVIEW_VERSION_FAILURE",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  const serverRows = [{ id: "ada", name: "Server", revision: 2n }] as const;
+  await screen.rerender(renderTable(serverRows, 2));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  failVersionExtraction = true;
+  await screen.rerender(renderTable(serverRows, 3));
+
+  const mine = review.getByRole("button", { name: "Keep Mine for row ada, column Name" });
+  await userEvent.click(mine);
+  await expect.element(mine).toHaveAttribute("aria-pressed", "false");
+  await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+test("keeps an open Conflict Review stable when every conflict converges externally", async () => {
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_CONVERGENCE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONFLICT_REVIEW_CONVERGENCE",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable([{ id: "ada", name: "Server", revision: 2n }], 2));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  await userEvent.click(review.getByRole("checkbox", { name: "Select row 1" }));
+  await expect
+    .element(review.getByRole("button", { name: "Apply Mine to Selected" }))
+    .toBeEnabled();
+
+  await screen.rerender(renderTable([{ id: "ada", name: "Augusta", revision: 3n }], 3));
+
+  await expect.element(review).toBeVisible();
+  await expect.element(review.getByRole("status")).toHaveTextContent("All conflicts are current.");
+  await expect
+    .element(review.getByRole("grid", { name: "Conflict Review changes" }))
+    .not.toBeInTheDocument();
+  await expect
+    .element(review.getByRole("button", { name: "Apply Mine to Selected" }))
+    .toBeDisabled();
+  await expect
+    .element(review.getByRole("button", { name: "Apply Server to Selected" }))
+    .toBeDisabled();
+  await userEvent.click(review.getByRole("button", { name: "Cancel" }));
+  await expect.element(review).not.toBeInTheDocument();
+});
+
+test("Conflict Review reuses authentic source presentation for Base, Server Now, and Yours", async () => {
+  class PrototypeConflictRow {
+    readonly #prefix = "Rendered";
+
+    public constructor(
+      public readonly id: string,
+      public readonly name: string,
+      public readonly revision: bigint,
+    ) {}
+
+    public render(value: string): string {
+      return `${this.#prefix} ${value}`;
+    }
+
+    public className(value: string): string {
+      return `conflict-${value.replaceAll(" ", "-")}`;
+    }
+  }
+  const conflictColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      cellAlign: "end",
+      isEditable: true,
+      cellRenderer: ({
+        row,
+        value,
+      }: {
+        readonly row: PrototypeConflictRow;
+        readonly value: string;
+      }) => row.render(value),
+      cellClassName: ({
+        row,
+        value,
+      }: {
+        readonly row: PrototypeConflictRow;
+        readonly value: string;
+      }) => row.className(value),
+    },
+  ] satisfies BrunoTableColumns<PrototypeConflictRow>;
+  const renderTable = (sourceRows: readonly PrototypeConflictRow[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_PRESENTATION"
+      columns={conflictColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(renderTable([new PrototypeConflictRow("ada", "Ada", 1n)], 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONFLICT_REVIEW_PRESENTATION",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable([new PrototypeConflictRow("ada", "Server", 2n)], 2));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const reviewGrid = screen
+    .getByRole("alertdialog", { name: "Conflict Review" })
+    .getByRole("grid", { name: "Conflict Review changes" });
+  const rendered = new Map<string, HTMLElement>();
+  for (let offset = 0; offset <= reviewGrid.element().scrollWidth; offset += 120) {
+    reviewGrid.element().scrollLeft = offset;
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    for (const cell of reviewGrid.getByRole("gridcell").all()) {
+      const element = cell.element();
+      if (element instanceof HTMLElement && element.textContent?.startsWith("Rendered ")) {
+        rendered.set(element.textContent, element);
+      }
+    }
+  }
+  for (const label of ["Rendered Ada", "Rendered Server", "Rendered Augusta"] as const) {
+    const cell = rendered.get(label);
+    expect(cell, label).toBeDefined();
+    expect(cell?.className).toContain(`conflict-${label.replace("Rendered ", "")}`);
+    expect(cell?.className).toContain("text-end");
+    expect(getComputedStyle(cell!).textAlign).toBe("end");
+  }
+});
+
+test("resolves an explicit selected conflict set as one reversible Batch command", async () => {
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const initialRows = [
+    { id: "ada", name: "Ada", revision: 1n },
+    { id: "grace", name: "Grace", revision: 1n },
+  ] as const;
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_SELECTED_SET"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    >
+      <BrunoTableToolbar>
+        <HistoryCommandProbe />
+      </BrunoTableToolbar>
+    </BrunoTableClient>
+  );
+  const screen = await render(renderTable(initialRows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONFLICT_REVIEW_SELECTED_SET",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Amazing Grace");
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(
+    renderTable(
+      [
+        { id: "ada", name: "Server Ada", revision: 2n },
+        { id: "grace", name: "Server Grace", revision: 2n },
+      ],
+      2,
+    ),
+  );
+
+  const conflictOpener = screen.getByRole("button", { name: "2 conflicts" });
+  await userEvent.click(conflictOpener);
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  await userEvent.click(review.getByRole("checkbox", { name: "Select row 1" }));
+  await userEvent.click(review.getByRole("checkbox", { name: "Select row 2" }));
+  await userEvent.click(review.getByRole("button", { name: "Apply Mine to Selected" }));
+  expect(onSaveEdits).not.toHaveBeenCalled();
+  await userEvent.click(review.getByRole("button", { name: "Cancel" }));
+  await expect.element(grid).toHaveFocus();
+
+  await userEvent.click(screen.getByRole("button", { name: "Test Undo" }));
+  await expect.element(screen.getByRole("button", { name: "2 conflicts" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Test Redo" }));
+  await expect.element(screen.getByRole("button", { name: "2 conflicts" })).not.toBeInTheDocument();
+  expect(onSaveEdits).not.toHaveBeenCalled();
+});
+
+test("discards only selected blocked changes as one undoable Batch command", async () => {
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const initialRows = [
+    { id: "ada", name: "Ada", revision: 1n },
+    { id: "grace", name: "Grace", revision: 1n },
+  ] as const;
+  const permissionColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: ({ row }: { readonly row: Row }) => row.name !== "Locked",
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_BLOCKED_REVIEW"
+      columns={permissionColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    >
+      <BrunoTableToolbar>
+        <HistoryCommandProbe />
+      </BrunoTableToolbar>
+    </BrunoTableClient>
+  );
+  const screen = await render(renderTable(initialRows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_BLOCKED_REVIEW" });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Amazing Grace");
+  await userEvent.keyboard("{Enter}");
+  const lockedRows = [
+    { id: "ada", name: "Locked", revision: 2n },
+    { id: "grace", name: "Locked", revision: 2n },
+  ] as const;
+  await screen.rerender(renderTable(lockedRows, 2));
+
+  const blockedOpener = screen.getByRole("button", { name: "2 blocked changes" });
+  await userEvent.click(blockedOpener);
+  const review = screen.getByRole("alertdialog", { name: "Blocked Changes Review" });
+  const reviewGrid = review.getByRole("grid", { name: "Blocked Changes Review changes" });
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Locked", exact: true }).first())
+    .toBeVisible();
+  const discard = review.getByRole("button", { name: "Discard Selected Changes" });
+  await expect.element(discard).toBeDisabled();
+  await userEvent.click(review.getByRole("checkbox", { name: "Select row 1" }));
+  await userEvent.click(review.getByRole("checkbox", { name: "Select row 2" }));
+  await expect.element(discard).toBeEnabled();
+  await userEvent.click(discard);
+  await expect
+    .element(review.getByRole("status"))
+    .toHaveTextContent("All blocked changes are current.");
+  expect(onSaveEdits).not.toHaveBeenCalled();
+  await userEvent.click(review.getByRole("button", { name: "Close" }));
+  await expect.element(grid).toHaveFocus();
+
+  await userEvent.click(screen.getByRole("button", { name: "Test Undo" }));
+  await expect.element(screen.getByRole("button", { name: "2 blocked changes" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Test Redo" }));
+  await expect
+    .element(screen.getByRole("button", { name: "2 blocked changes" }))
+    .not.toBeInTheDocument();
+  expect(onSaveEdits).not.toHaveBeenCalled();
+});
+
+test("keeps Blocked Changes Review stable when every row converges externally", async () => {
+  const permissionColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: ({ row }: { readonly row: Row }) => row.name !== "Locked",
+    },
+  ] satisfies BrunoTableColumns<Row>;
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_BLOCKED_REVIEW_CONVERGENCE"
+      columns={permissionColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(renderTable(rows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_BLOCKED_REVIEW_CONVERGENCE",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable([{ id: "ada", name: "Locked", revision: 2n }], 2));
+  await userEvent.click(screen.getByRole("button", { name: "1 blocked change" }));
+  const review = screen.getByRole("alertdialog", { name: "Blocked Changes Review" });
+  await userEvent.click(review.getByRole("checkbox", { name: "Select row 1" }));
+  await expect
+    .element(review.getByRole("button", { name: "Discard Selected Changes" }))
+    .toBeEnabled();
+
+  await screen.rerender(renderTable([{ id: "ada", name: "Augusta", revision: 3n }], 3));
+  await expect.element(review).toBeVisible();
+  await expect
+    .element(review.getByRole("status"))
+    .toHaveTextContent("All blocked changes are current.");
+  await expect
+    .element(review.getByRole("button", { name: "Discard Selected Changes" }))
+    .toBeDisabled();
+  await expect
+    .element(review.getByRole("grid", { name: "Blocked Changes Review changes" }))
+    .not.toBeInTheDocument();
 });
 
 test("publishes ordinary live row updates without creating edit-owned evidence", async () => {

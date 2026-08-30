@@ -31,6 +31,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit";
 import type { BrunoTableGridCommand } from "./column-management";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
+import { BrunoTableRowSelectionRuntime } from "./row-selection";
 
 type SaveFailureToasterOwner = object;
 type SaveFailureToasterEntry = Readonly<{
@@ -139,33 +140,68 @@ export const BrunoTableEditModeControl: NamedExoticComponent<BrunoTableEditModeC
   },
 );
 
-const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
+const BrunoTableConflictCountStatus = memo(function BrunoTableConflictCountStatus({
   runtime,
 }: {
   readonly runtime: BrunoTableEditMemoryRuntime;
 }): ReactElement {
-  const status = useSyncExternalStore(
-    runtime.subscribeSafetyStatus,
-    runtime.getSafetyStatusSnapshot,
-    runtime.getSafetyStatusSnapshot,
+  const count = useSyncExternalStore(
+    runtime.subscribeConflictCount,
+    runtime.getConflictCountSnapshot,
+    runtime.getConflictCountSnapshot,
   );
+  if (count === 0) return <></>;
+  return (
+    <>
+      <Button
+        data-bruno-table-review-focus="conflict"
+        size="sm"
+        variant="ghost"
+        onClick={(event) => runtime.openConflictReview(event.currentTarget)}
+      >
+        {String(count)} {count === 1 ? "conflict" : "conflicts"}
+      </Button>
+      <span aria-hidden="true"> · </span>
+    </>
+  );
+});
+
+const BrunoTableBlockedCountStatus = memo(function BrunoTableBlockedCountStatus({
+  runtime,
+}: {
+  readonly runtime: BrunoTableEditMemoryRuntime;
+}): ReactElement {
+  const count = useSyncExternalStore(
+    runtime.subscribeBlockedCount,
+    runtime.getBlockedCountSnapshot,
+    runtime.getBlockedCountSnapshot,
+  );
+  if (count === 0) return <></>;
+  return (
+    <>
+      <Button
+        data-bruno-table-review-focus="blocked"
+        size="sm"
+        variant="ghost"
+        onClick={(event) => runtime.openBlockedReview(event.currentTarget)}
+      >
+        {String(count)} blocked {count === 1 ? "change" : "changes"}
+      </Button>
+      <span aria-hidden="true"> · </span>
+    </>
+  );
+});
+
+const BrunoTableSaveWorkStatus = memo(function BrunoTableSaveWorkStatus({
+  runtime,
+}: {
+  readonly runtime: BrunoTableEditMemoryRuntime;
+}): ReactElement {
   const saveWork = useSyncExternalStore(
     runtime.subscribeSaveWork,
     runtime.getSaveWorkSnapshot,
     runtime.getSaveWorkSnapshot,
   );
-  const pendingCount = status.pendingCount;
-  const statusParts: string[] = [];
-  if (status.conflictCount > 0)
-    statusParts.push(
-      `${String(status.conflictCount)} ${status.conflictCount === 1 ? "conflict" : "conflicts"}`,
-    );
-  if (status.blockedCount > 0)
-    statusParts.push(
-      `${String(status.blockedCount)} blocked ${status.blockedCount === 1 ? "change" : "changes"}`,
-    );
-  if (status.validationCount > 0) statusParts.push(`${String(status.validationCount)} invalid`);
-  if (pendingCount > 0) statusParts.push(`${String(pendingCount)} unsaved`);
   const saveWorkParts: string[] = [];
   if (saveWork.pendingImmediateCount > 0) {
     saveWorkParts.push(
@@ -185,18 +221,317 @@ const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
         : "Batch save accepted · waiting for live confirmation",
     );
   }
-  const safetyStatus =
-    statusParts.length === 0
-      ? undefined
-      : status.blockedCount === 0 && status.validationCount === 0 && status.conflictCount === 0
-        ? `${String(pendingCount)} unsaved ${pendingCount === 1 ? "change" : "changes"}`
-        : statusParts.join(" · ");
-  const visibleStatus =
-    safetyStatus === undefined ? saveWorkParts : [...saveWorkParts, safetyStatus];
+  if (saveWorkParts.length === 0) return <></>;
   return (
-    <span aria-live="polite">
-      {visibleStatus.length === 0 ? "No unsaved changes" : visibleStatus.join(" · ")}
+    <>
+      <span>{saveWorkParts.join(" · ")}</span>
+      <span aria-hidden="true"> · </span>
+    </>
+  );
+});
+
+const BrunoTableEditSummaryStatus = memo(function BrunoTableEditSummaryStatus({
+  runtime,
+}: {
+  readonly runtime: BrunoTableEditMemoryRuntime;
+}): ReactElement {
+  const summary = useSyncExternalStore(
+    runtime.subscribeEditSummary,
+    runtime.getEditSummarySnapshot,
+    runtime.getEditSummarySnapshot,
+  );
+  if (summary.pendingCount === 0 && summary.validationCount === 0) {
+    return <span>No unsaved changes</span>;
+  }
+  return (
+    <span>
+      {summary.validationCount > 0 ? `${String(summary.validationCount)} invalid · ` : undefined}
+      {summary.pendingCount > 0 ? `${String(summary.pendingCount)} unsaved` : undefined}
+      {summary.pendingCount > 0
+        ? ` ${summary.pendingCount === 1 ? "change" : "changes"}`
+        : undefined}
     </span>
+  );
+});
+
+const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
+  runtime,
+}: {
+  readonly runtime: BrunoTableEditMemoryRuntime;
+}): ReactElement {
+  return (
+    <div aria-live="polite" className="flex items-center gap-2">
+      <BrunoTableConflictCountStatus runtime={runtime} />
+      <BrunoTableBlockedCountStatus runtime={runtime} />
+      <BrunoTableSaveWorkStatus runtime={runtime} />
+      <BrunoTableEditSummaryStatus runtime={runtime} />
+    </div>
+  );
+});
+
+export type BrunoTableConflictReviewRenderer = (
+  rows: readonly BrunoTableCellEditDraftReviewSourceRow[],
+  selection: BrunoTableRowSelectionRuntime,
+  resolve: (id: string, resolution: "mine" | "server") => void,
+) => ReactNode;
+
+export type BrunoTableBlockedReviewRenderer = (
+  rows: readonly BrunoTableCellEditDraftReviewSourceRow[],
+  selection: BrunoTableRowSelectionRuntime,
+) => ReactNode;
+
+const BrunoTableConflictReview = memo(function BrunoTableConflictReview({
+  runtime,
+  renderReview,
+}: Readonly<{
+  readonly runtime: BrunoTableEditMemoryRuntime;
+  readonly renderReview: BrunoTableConflictReviewRenderer;
+}>): ReactElement {
+  const snapshot = useSyncExternalStore(
+    runtime.subscribeConflictReview,
+    runtime.getConflictReviewSnapshot,
+    runtime.getConflictReviewSnapshot,
+  );
+  useEffect(() => runtime.registerConflictReviewCommand(runtime.openConflictReview), [runtime]);
+  return (
+    <AlertDialog
+      open={snapshot.open}
+      onOpenChange={(open) => {
+        if (!open) runtime.closeConflictReview();
+      }}
+    >
+      {snapshot.open ? (
+        <BrunoTableConflictReviewContent runtime={runtime} renderReview={renderReview} />
+      ) : null}
+    </AlertDialog>
+  );
+});
+
+const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewContent({
+  runtime,
+  renderReview,
+}: Readonly<{
+  readonly runtime: BrunoTableEditMemoryRuntime;
+  readonly renderReview: BrunoTableConflictReviewRenderer;
+}>): ReactElement {
+  const [selection] = useState(() => new BrunoTableRowSelectionRuntime([]));
+  const snapshot = useSyncExternalStore(
+    runtime.subscribeConflictReview,
+    runtime.getConflictReviewSnapshot,
+    runtime.getConflictReviewSnapshot,
+  );
+  const rows = useSyncExternalStore(
+    runtime.subscribeConflictReviewRows,
+    runtime.getConflictReviewRowsSnapshot,
+    runtime.getConflictReviewRowsSnapshot,
+  );
+  useEffect(() => {
+    const rowIds = rows.map((row) => row.id);
+    selection.reconcile(rowIds, rowIds, rows);
+  }, [rows, selection]);
+  const selectionHeader = useSyncExternalStore(
+    selection.subscribeHeader,
+    selection.getHeaderSnapshot,
+    selection.getHeaderSnapshot,
+  );
+  const resolveOne = useCallback(
+    (id: string, resolution: "mine" | "server") => runtime.resolveConflictRows([id], resolution),
+    [runtime],
+  );
+  const resolveSelected = (resolution: "mine" | "server") => {
+    const activeConflictIds = new Set(
+      rows.flatMap((row) => (row.getSnapshot().conflict === undefined ? [] : [row.id])),
+    );
+    const [first, ...rest] = selection
+      .getSelectedRowIds()
+      .filter((id) => activeConflictIds.has(id));
+    if (first !== undefined && runtime.resolveConflictRows([first, ...rest], resolution)) {
+      selection.clear();
+    }
+  };
+  return (
+    <AlertDialogContent
+      className="max-w-5xl sm:max-w-5xl"
+      style={{
+        width: "min(64rem, calc(100vw - 2rem))",
+        maxHeight: "calc(100vh - 2rem)",
+        overflow: "hidden",
+        gridTemplateRows: "auto minmax(0, 1fr) auto",
+      }}
+    >
+      <AlertDialogHeader>
+        <AlertDialogTitle>Conflict Review</AlertDialogTitle>
+        <AlertDialogDescription>
+          Choose Mine or Server for every conflicted cell. Live server updates invalidate an older
+          choice so it can be reviewed again.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <div className="min-h-0 overflow-auto">{renderReview(rows, selection, resolveOne)}</div>
+      <AlertDialogFooter>
+        <AlertDialogCancel disabled={snapshot.saving} onClick={runtime.closeConflictReview}>
+          Cancel
+        </AlertDialogCancel>
+        <Button
+          disabled={selectionHeader.selectedCount === 0 || snapshot.saving}
+          variant="outline"
+          onClick={() => resolveSelected("mine")}
+        >
+          Apply Mine to Selected
+        </Button>
+        <Button
+          disabled={selectionHeader.selectedCount === 0 || snapshot.saving}
+          variant="outline"
+          onClick={() => resolveSelected("server")}
+        >
+          Apply Server to Selected
+        </Button>
+        <Button
+          disabled={snapshot.count > 0 || snapshot.resolutionCount === 0 || snapshot.saving}
+          onClick={runtime.saveConflictReview}
+        >
+          {snapshot.saving ? "Saving…" : "Save"}
+        </Button>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  );
+});
+
+type BrunoTableConflictReviewResolutionProps = Readonly<{
+  readonly row: BrunoTableCellEditDraftReviewSourceRow;
+  readonly runtime: BrunoTableEditMemoryRuntime;
+  readonly resolve: (id: string, resolution: "mine" | "server") => void;
+}>;
+
+export const BrunoTableConflictReviewResolution: NamedExoticComponent<BrunoTableConflictReviewResolutionProps> =
+  memo(function BrunoTableConflictReviewResolution({
+    row,
+    runtime,
+    resolve,
+  }: BrunoTableConflictReviewResolutionProps): ReactElement {
+    const snapshot = useSyncExternalStore(row.subscribe, row.getSnapshot, row.getSnapshot);
+    const subscribe = useCallback(
+      (listener: () => void) => runtime.subscribeConflictResolution(row.id, listener),
+      [row.id, runtime],
+    );
+    const getSnapshot = useCallback(
+      () => runtime.getConflictResolutionSnapshot(row.id),
+      [row.id, runtime],
+    );
+    const resolution = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)?.resolution;
+    const active = snapshot.conflict !== undefined;
+    return (
+      <div aria-label="Conflict resolution" className="flex items-center gap-1" role="group">
+        <Button
+          aria-label={`Keep Mine for row ${snapshot.rowId}, column ${snapshot.columnLabel}`}
+          aria-pressed={resolution === "mine"}
+          disabled={!active}
+          size="sm"
+          variant={resolution === "mine" ? "default" : "outline"}
+          onClick={() => resolve(row.id, "mine")}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          Mine
+        </Button>
+        <Button
+          aria-label={`Keep Server for row ${snapshot.rowId}, column ${snapshot.columnLabel}`}
+          aria-pressed={resolution === "server"}
+          disabled={!active}
+          size="sm"
+          variant={resolution === "server" ? "default" : "outline"}
+          onClick={() => resolve(row.id, "server")}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          Server
+        </Button>
+      </div>
+    );
+  });
+
+const BrunoTableBlockedReview = memo(function BrunoTableBlockedReview({
+  runtime,
+  renderReview,
+}: Readonly<{
+  readonly runtime: BrunoTableEditMemoryRuntime;
+  readonly renderReview: BrunoTableBlockedReviewRenderer;
+}>): ReactElement {
+  const snapshot = useSyncExternalStore(
+    runtime.subscribeBlockedReview,
+    runtime.getBlockedReviewSnapshot,
+    runtime.getBlockedReviewSnapshot,
+  );
+  return (
+    <AlertDialog
+      open={snapshot.open}
+      onOpenChange={(open) => {
+        if (!open) runtime.closeBlockedReview();
+      }}
+    >
+      {snapshot.open ? (
+        <BrunoTableBlockedReviewContent runtime={runtime} renderReview={renderReview} />
+      ) : null}
+    </AlertDialog>
+  );
+});
+
+const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewContent({
+  runtime,
+  renderReview,
+}: Readonly<{
+  readonly runtime: BrunoTableEditMemoryRuntime;
+  readonly renderReview: BrunoTableBlockedReviewRenderer;
+}>): ReactElement {
+  const [selection] = useState(() => new BrunoTableRowSelectionRuntime([]));
+  const rows = useSyncExternalStore(
+    runtime.subscribeBlockedReviewRows,
+    runtime.getBlockedReviewRowsSnapshot,
+    runtime.getBlockedReviewRowsSnapshot,
+  );
+  useEffect(() => {
+    const rowIds = rows.map((row) => row.id);
+    selection.reconcile(rowIds, rowIds, rows);
+  }, [rows, selection]);
+  const selectionHeader = useSyncExternalStore(
+    selection.subscribeHeader,
+    selection.getHeaderSnapshot,
+    selection.getHeaderSnapshot,
+  );
+  return (
+    <AlertDialogContent
+      className="max-w-5xl sm:max-w-5xl"
+      style={{
+        width: "min(64rem, calc(100vw - 2rem))",
+        maxHeight: "calc(100vh - 2rem)",
+        overflow: "hidden",
+        gridTemplateRows: "auto minmax(0, 1fr) auto",
+      }}
+    >
+      <AlertDialogHeader>
+        <AlertDialogTitle>Blocked Changes Review</AlertDialogTitle>
+        <AlertDialogDescription>
+          These changes cannot currently be saved. Select only the changes you want to discard.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <div className="min-h-0 overflow-auto">
+        {renderReview(rows, selection)}
+        {rows.length === 0 ? <p role="status">All blocked changes are current.</p> : null}
+      </div>
+      <AlertDialogFooter>
+        <AlertDialogCancel onClick={runtime.closeBlockedReview}>Close</AlertDialogCancel>
+        <Button
+          disabled={rows.length === 0 || selectionHeader.selectedCount === 0}
+          variant="destructive"
+          onClick={() => {
+            const selectedIds = selection.getSelectedRowIds();
+            const [first, ...rest] = selectedIds;
+            if (first !== undefined && runtime.discardBlockedChanges([first, ...rest])) {
+              selection.clear();
+            }
+          }}
+        >
+          Discard Selected Changes
+        </Button>
+      </AlertDialogFooter>
+    </AlertDialogContent>
   );
 });
 
@@ -502,6 +837,8 @@ type BrunoTableEditSafetyFooterProps = Readonly<{
   readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
   readonly renderReview: (rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode;
+  readonly renderConflictReview: BrunoTableConflictReviewRenderer;
+  readonly renderBlockedReview: BrunoTableBlockedReviewRenderer;
 }>;
 
 export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafetyFooterProps> =
@@ -509,6 +846,8 @@ export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafe
     dispatchGridCommand,
     runtime,
     renderReview,
+    renderConflictReview,
+    renderBlockedReview,
   }: BrunoTableEditSafetyFooterProps): ReactElement {
     return (
       <footer
@@ -523,6 +862,8 @@ export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafe
           <BrunoTableSaveEditsButton runtime={runtime} />
         </div>
         <BrunoTableResetReview runtime={runtime} renderReview={renderReview} />
+        <BrunoTableConflictReview runtime={runtime} renderReview={renderConflictReview} />
+        <BrunoTableBlockedReview runtime={runtime} renderReview={renderBlockedReview} />
       </footer>
     );
   });

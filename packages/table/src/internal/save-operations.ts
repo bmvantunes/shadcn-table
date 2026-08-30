@@ -236,6 +236,7 @@ export class BrunoTableSaveOperationRuntime {
         operation.operationId,
         this.cellEdit.getAcceptedOverlayRowCountForOperation(operation.operationId),
       );
+      this.editMemory.resolveConflictReviewSave(operation.operationId);
     });
     if (operation.actor.getSnapshot().value !== "awaitingSource") return;
     const reconcile = (): void => {
@@ -257,6 +258,7 @@ export class BrunoTableSaveOperationRuntime {
     operation.releasePromiseReferences?.();
     operation.releasePromiseReferences = undefined;
     if (!this.active || this.operations.get(operation.operationId) !== operation) return;
+    this.editMemory.rejectConflictReviewSave(operation.operationId);
     const changeSet = operation.changeSet;
     if (changeSet === undefined) return;
     batch(() => {

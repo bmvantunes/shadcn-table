@@ -144,6 +144,17 @@ export class BrunoTableRowSelectionRuntime {
     return this.projectedRowIds.length;
   };
 
+  public readonly clear = (): number => {
+    if (this.selectedRowIds.size === 0) return 0;
+    const changed = new Set(this.selectedRowIds);
+    const count = this.selectedRowIds.size;
+    this.selectedRowIds.clear();
+    this.selectedProjectedCount = 0;
+    this.anchorRowId = undefined;
+    this.publishSelectionChange(changed);
+    return count;
+  };
+
   public readonly reconcile = (
     sourceRowIds: readonly string[],
     projectedRowIds: readonly string[],

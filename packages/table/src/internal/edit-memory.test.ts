@@ -11,6 +11,96 @@ afterEach(() => {
 });
 
 describe("BrunoTable Edit Memory", () => {
+  it("releases the narrow draft-review subscription when either sparse review closes", () => {
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn(() => 1),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    disposers.push(() => vi.unstubAllGlobals());
+    type Row = Readonly<{
+      readonly id: string;
+      readonly value: string;
+      readonly editable: boolean;
+      readonly revision: bigint;
+    }>;
+    let row: Row = Object.freeze({
+      id: "row-1",
+      value: "base",
+      editable: true,
+      revision: 1n,
+    });
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: ({ row: candidate }: { readonly row: Row }) => candidate.editable,
+      },
+    ]);
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    const getDraftReviewSubscriberCount = (): number =>
+      (
+        cellEdit as unknown as {
+          readonly draftReviewSubscriberCount: number;
+        }
+      ).draftReviewSubscriberCount;
+    const getConflictResolutionStoreCount = (): number =>
+      (
+        memory as unknown as {
+          readonly conflictResolutionStores: ReadonlyMap<string, unknown>;
+        }
+      ).conflictResolutionStores.size;
+    cellEdit.activate();
+    memory.activate();
+    const disconnect = memory.connectCellEdit(cellEdit);
+    disposers.push(
+      disconnect,
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: row,
+          expectedVersion: row.revision,
+          base: "base",
+          mine: "mine",
+          conflict: { server: "server", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    row = Object.freeze({ ...row, value: "server", editable: false, revision: 2n });
+    cellEdit.reconcileSourceRows(new Set([row.id]));
+    expect(cellEdit.getActivitySnapshot()).toMatchObject({ conflictCount: 1, blockedCount: 1 });
+
+    expect(getDraftReviewSubscriberCount()).toBe(0);
+    expect(memory.openConflictReview()).toBe(true);
+    expect(getDraftReviewSubscriberCount()).toBe(1);
+    const conflictId = cellEdit.getDraftReviewSnapshot()[0]?.id;
+    expect(conflictId).toBeDefined();
+    memory.getConflictResolutionSnapshot(conflictId!);
+    expect(getConflictResolutionStoreCount()).toBe(1);
+    memory.closeConflictReview();
+    expect(getDraftReviewSubscriberCount()).toBe(0);
+    expect(getConflictResolutionStoreCount()).toBe(0);
+
+    expect(memory.openBlockedReview()).toBe(true);
+    expect(getDraftReviewSubscriberCount()).toBe(1);
+    memory.closeBlockedReview();
+    expect(getDraftReviewSubscriberCount()).toBe(0);
+  });
+
   it("reports an awaiting Batch operation even when no rows remain", () => {
     const memory = new BrunoTableEditMemoryRuntime();
     disposers.push(() => memory.dispose());
