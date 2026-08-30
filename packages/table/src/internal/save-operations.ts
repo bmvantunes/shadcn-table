@@ -10,6 +10,7 @@ import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 import type { BrunoTableColumns, BrunoTableSaveChangeSet } from "../public-types";
 
 type SaveOperationKind = "batch" | "immediate";
+type SaveOperationInitiator = "edit" | "footer" | "conflict-review";
 type SaveOperationEvent =
   | Readonly<{ readonly type: "RESOLVE" }>
   | Readonly<{ readonly type: "REJECT" }>
@@ -41,6 +42,7 @@ function createSaveOperationActor() {
 type SaveOperationRecord = {
   readonly operationId: string;
   readonly kind: SaveOperationKind;
+  readonly initiatedFrom: SaveOperationInitiator;
   changeSet: BrunoTableCellEditSaveChangeSet | undefined;
   readonly actor: ReturnType<typeof createSaveOperationActor>;
   releaseRetainedOperation: (() => void) | undefined;
@@ -86,14 +88,18 @@ export class BrunoTableSaveOperationRuntime {
     if (this.active) return this.dispose;
     this.active = true;
     this.publishCapacityAvailability();
-    this.unregisterBatch = this.editMemory.registerSaveCommand(() => {
+    this.unregisterBatch = this.editMemory.registerSaveCommand((initiatedFrom) => {
       const changeSet = this.cellEdit.createBatchSaveChangeSet();
-      if (changeSet !== undefined) this.startOperation("batch", changeSet);
+      return changeSet !== undefined && this.startOperation("batch", changeSet, initiatedFrom);
     });
     this.unregisterImmediate = this.editMemory.registerImmediateSaveCommand(
-      (changes: BrunoTableCellEditChangeGesture) => {
-        const changeSet = this.cellEdit.createImmediateSaveChangeSet(changes);
-        if (changeSet !== undefined) this.startOperation("immediate", changeSet);
+      (changes: BrunoTableCellEditChangeGesture, initiatedFrom) => {
+        const preparation = this.cellEdit.createImmediateSaveChangeSet(changes);
+        if (preparation.kind === "reconciled") return "preflight-reconciled";
+        if (preparation.kind === "rejected") return "rejected";
+        return this.startOperation("immediate", preparation.changeSet, initiatedFrom)
+          ? "admitted"
+          : "rejected";
       },
     );
     return this.dispose;
@@ -137,22 +143,27 @@ export class BrunoTableSaveOperationRuntime {
   private readonly startOperation = (
     kind: SaveOperationKind,
     changeSet: BrunoTableCellEditSaveChangeSet,
-  ): void => {
+    initiatedFrom: SaveOperationInitiator,
+  ): boolean => {
     if (!this.active || this.getCapacityOperationCount() >= BRUNO_TABLE_SAVE_OPERATION_LIMIT) {
-      return;
+      return false;
     }
     const operationId = `${kind}:${String((this.sequence += 1))}`;
     let releaseSaveWork = (): void => undefined;
     let admitted = false;
     batch(() => {
-      releaseSaveWork = this.editMemory.beginSaveWork(operationId, kind);
+      releaseSaveWork = this.editMemory.beginSaveWork(operationId, kind, initiatedFrom);
       admitted = this.cellEdit.beginSaveOperation(operationId, changeSet, kind === "batch");
-      if (!admitted) releaseSaveWork();
+      if (!admitted) {
+        releaseSaveWork();
+        this.editMemory.rejectSaveWorkAdmission(operationId, initiatedFrom);
+      }
     });
-    if (!admitted) return;
+    if (!admitted) return false;
     const operation: SaveOperationRecord = {
       operationId,
       kind,
+      initiatedFrom,
       changeSet,
       actor: createSaveOperationActor(),
       releaseRetainedOperation: this.editMemory.beginRetainedSaveOperation(),
@@ -162,39 +173,39 @@ export class BrunoTableSaveOperationRuntime {
     };
     this.operations.set(operationId, operation);
     this.publishCapacityAvailability();
-    let result: unknown;
-    try {
-      result =
-        this.handler?.(changeSet) ??
-        Promise.reject(new Error("BrunoTable save operation is unavailable."));
-    } catch (error) {
-      this.rejectOperation(operation, error);
-      return;
-    }
-    let then: unknown;
-    try {
-      then =
-        (typeof result === "object" && result !== null) || typeof result === "function"
-          ? (result as { readonly then?: unknown }).then
-          : undefined;
-    } catch (error) {
-      this.rejectOperation(operation, error);
-      return;
-    }
-    if (typeof then !== "function") {
-      this.rejectOperation(
-        operation,
-        new TypeError("BrunoTable onSaveEdits must return a PromiseLike<void>."),
-      );
-      return;
-    }
-    const promise = new Promise<void>((resolve, reject) => {
-      try {
-        Reflect.apply(then, result, [resolve, reject]);
-      } catch (error) {
-        reject(error);
+    const promise = (() => {
+      const handler = this.handler;
+      if (handler === undefined) {
+        return Promise.reject(new Error("BrunoTable save operation is unavailable."));
       }
-    });
+      let result: unknown;
+      try {
+        result = handler(changeSet);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      let then: unknown;
+      try {
+        then =
+          (typeof result === "object" && result !== null) || typeof result === "function"
+            ? (result as { readonly then?: unknown }).then
+            : undefined;
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      if (typeof then !== "function") {
+        return Promise.reject(
+          new TypeError("BrunoTable onSaveEdits must return a PromiseLike<void>."),
+        );
+      }
+      return new Promise<void>((resolve, reject) => {
+        try {
+          Reflect.apply(then, result, [resolve, reject]);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    })();
     const settlement: {
       runtime: BrunoTableSaveOperationRuntime | undefined;
       operation: SaveOperationRecord | undefined;
@@ -219,6 +230,7 @@ export class BrunoTableSaveOperationRuntime {
         }
       },
     );
+    return true;
   };
 
   private readonly resolveOperation = (operation: SaveOperationRecord): void => {
@@ -236,6 +248,7 @@ export class BrunoTableSaveOperationRuntime {
         operation.operationId,
         this.cellEdit.getAcceptedOverlayRowCountForOperation(operation.operationId),
       );
+      this.editMemory.resolveConflictReviewSave(operation.operationId);
     });
     if (operation.actor.getSnapshot().value !== "awaitingSource") return;
     const reconcile = (): void => {
@@ -257,6 +270,7 @@ export class BrunoTableSaveOperationRuntime {
     operation.releasePromiseReferences?.();
     operation.releasePromiseReferences = undefined;
     if (!this.active || this.operations.get(operation.operationId) !== operation) return;
+    this.editMemory.rejectConflictReviewSave(operation.operationId);
     const changeSet = operation.changeSet;
     if (changeSet === undefined) return;
     batch(() => {

@@ -37,6 +37,7 @@ import { recordBrunoTableGridCommand } from "./grid-command-instrumentation";
 import {
   recordBrunoTableColumnCommandSubscriptionNotification,
   recordBrunoTableColumnFilterSubscriptionEvent,
+  recordBrunoTableReviewCellSubscription,
 } from "./grid-subscription-instrumentation";
 import { recordBrunoTableClientQueryTransition } from "./render-instrumentation";
 import {
@@ -1423,6 +1424,15 @@ export class BrunoTableGridRuntime<TRow> {
     columnId: string,
     listener: Listener,
   ): (() => void) => {
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableReviewCellSubscription({
+        tableId: this.tableId,
+        rowId,
+        columnId,
+        source: "grid-row-cell",
+        phase: "subscribe",
+      });
+    }
     const snapshot = this.currentRowCellSnapshot(rowId, columnId);
     let rowListeners = this.rowCellListeners.get(rowId);
     if (rowListeners === undefined) {
@@ -1441,6 +1451,15 @@ export class BrunoTableGridRuntime<TRow> {
     return () => {
       if (!active) return;
       active = false;
+      if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+        recordBrunoTableReviewCellSubscription({
+          tableId: this.tableId,
+          rowId,
+          columnId,
+          source: "grid-row-cell",
+          phase: "unsubscribe",
+        });
+      }
       if (this.rowCellListeners.get(rowId)?.get(columnId) !== listeners) return;
       listeners.delete(listener);
       if (listeners.size > 0) return;

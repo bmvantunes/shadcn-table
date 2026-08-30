@@ -29,6 +29,19 @@ describe("BrunoTableRowSelectionRuntime", () => {
     expect(selection.getAnchorRowId()).toBe("b");
   });
 
+  it("clears a retained Shift anchor when selection is already empty", () => {
+    const selection = new BrunoTableRowSelectionRuntime(["a", "b", "c"]);
+    selection.toggleRow("b", true, false);
+    selection.toggleRow("b", false, false);
+    expect(selection.getSelectedRowIds()).toEqual([]);
+    expect(selection.getAnchorRowId()).toBe("b");
+
+    expect(selection.clear()).toBe(0);
+
+    expect(selection.getAnchorRowId()).toBeUndefined();
+    expect(selection.toggleRow("c", true, true)).toEqual({ kind: "single", checked: true });
+  });
+
   it("keeps hidden selected identities while Select All follows the current projection", () => {
     const selection = new BrunoTableRowSelectionRuntime(["a", "b", "c"]);
     selection.toggleRow("b", true, false);

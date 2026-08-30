@@ -11,6 +11,18 @@ type ColumnFilterSubscriptionListener = (event: {
   readonly listenerCount: number;
   readonly phase: "subscribe" | "unsubscribe" | "notify";
 }) => void;
+export type BrunoTableReviewCellSubscriptionEvent = Readonly<{
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly source:
+    | "grid-row-cell"
+    | "review-value-projection"
+    | "review-status"
+    | "review-resolution";
+  readonly phase: "subscribe" | "unsubscribe";
+}>;
+type ReviewCellSubscriptionListener = (event: BrunoTableReviewCellSubscriptionEvent) => void;
 
 const columnCommandSubscriptionListenersByTableId = new Map<
   string,
@@ -22,6 +34,27 @@ const columnFilterSubscriptionListenersByTableId = new Map<
 >();
 let diagnosticListenerCount = 0;
 let filterDiagnosticListenerCount = 0;
+const reviewCellSubscriptionListeners = new Set<ReviewCellSubscriptionListener>();
+
+export function recordBrunoTableReviewCellSubscription(
+  event: BrunoTableReviewCellSubscriptionEvent,
+): void {
+  if (reviewCellSubscriptionListeners.size === 0) return;
+  for (const listener of reviewCellSubscriptionListeners) {
+    try {
+      listener(event);
+    } catch {
+      // Diagnostics are observational and must never alter subscription behavior.
+    }
+  }
+}
+
+export function installBrunoTableReviewCellSubscriptionListener(
+  listener: ReviewCellSubscriptionListener,
+): () => void {
+  reviewCellSubscriptionListeners.add(listener);
+  return () => reviewCellSubscriptionListeners.delete(listener);
+}
 
 export function recordBrunoTableColumnCommandSubscriptionNotification(
   tableId: string,

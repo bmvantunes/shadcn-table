@@ -466,7 +466,7 @@ if (
     (sentinel) => rootRuntime.includes(sentinel) || effectRuntime.includes(sentinel),
   ) ||
   /__BRUNO_TABLE_TEST_DIAGNOSTICS__/u.test(rootRuntime) ||
-  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription|Toolbar(?:Subscription|Lifetime))/u.test(
+  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription|ReviewCellSubscription|Toolbar(?:Subscription|Lifetime))/u.test(
     `${rootRuntime}\n${effectRuntime}`,
   ) ||
   /installTableScopedListener/u.test(rootRuntime)

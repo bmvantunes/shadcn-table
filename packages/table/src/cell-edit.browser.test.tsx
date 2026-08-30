@@ -7,6 +7,10 @@ import { flushSync } from "react-dom";
 
 import { BrunoTableClient, BrunoTableSelectColumn } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
+import {
+  installBrunoTableReviewCellSubscriptionListener,
+  type BrunoTableReviewCellSubscriptionEvent,
+} from "./internal/grid-subscription-instrumentation";
 import type {
   BrunoTableClientProps,
   BrunoTableColumnId,
@@ -477,6 +481,7 @@ test("does not exempt a nested Table Instance's detached Cancel control", async 
       editable
       getRowVersion={(row) => row.revision}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />,
   );
   const outerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_OUTER_CANCEL_OWNER" });
@@ -542,6 +547,7 @@ test("anchors simultaneous nested editors with colliding Row Identities to their
       editable
       getRowVersion={(row) => row.revision}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />
   );
   const outerRows: readonly Row[] = [
@@ -572,6 +578,7 @@ test("anchors simultaneous nested editors with colliding Row Identities to their
       editable
       getRowVersion={(row) => row.revision}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />,
   );
   const outerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_OUTER_GEOMETRY_OWNER" });
@@ -679,6 +686,7 @@ test("does not retarget after a valid outside commit into a nested Table Instanc
       editable
       getRowVersion={(row) => row.revision}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />
   );
   const outerColumns = [
@@ -718,6 +726,7 @@ test("does not retarget after a valid outside commit into a nested Table Instanc
       editable
       getRowVersion={(row) => row.revision}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />,
   );
   const outerGrid = screen.getByRole("grid", { name: "Data for TABLE_ID_OUTER_OUTSIDE_COMMIT" });
@@ -1630,6 +1639,7 @@ test("keeps Shift interactive cell descendants behind the outside commit gate", 
       editable
       getRowVersion={(row) => row.revision}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />,
   );
   const grid = screen.getByRole("grid", {
@@ -1914,6 +1924,13 @@ test.each([
           editable
           getRowVersion={() => 1n}
           onSaveEdits={() => Promise.resolve()}
+          projectEditRow={({
+            row,
+            patch,
+          }: {
+            readonly row: DetachedMovementRow;
+            readonly patch: Readonly<Partial<Pick<DetachedMovementRow, "name" | "note" | "score">>>;
+          }) => Object.freeze({ ...row, ...patch })}
         />
       );
     });
@@ -2224,6 +2241,7 @@ test("reconciles predicate traversal from a live row replacement", async () => {
       editable
       getRowVersion={() => 1n}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />
   );
   const initialRows: readonly LiveRow[] = [
@@ -2928,6 +2946,7 @@ test("compiles exact nullable blank policies without treating zero as blank", as
       editable
       getRowVersion={() => 1n}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />,
   );
   await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
@@ -3099,6 +3118,7 @@ test("keeps nullable Boolean and Select blanks distinct from exact scalar option
       editable
       getRowVersion={() => 1n}
       onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
     />,
   );
   await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
@@ -3500,6 +3520,865 @@ test("rejects widened editable columns without a potential edit policy at runtim
   );
 });
 
+test("updates Conflict Review Server now without rerendering immutable Base presentation", async () => {
+  type ConflictRow = Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly revision: bigint;
+  }>;
+  const renderValue = vi.fn(
+    ({ value }: { readonly row: ConflictRow; readonly value: string }) => `Rendered ${value}`,
+  );
+  const conflictColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      cellRenderer: renderValue,
+    },
+  ] satisfies BrunoTableColumns<ConflictRow>;
+  const renderTable = (sourceRows: readonly ConflictRow[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_SUBSCRIPTIONS"
+      columns={conflictColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
+    />
+  );
+  const initialRows = [{ id: "ada", name: "Ada", revision: 1n }] as const;
+  const screen = await render(renderTable(initialRows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONFLICT_REVIEW_SUBSCRIPTIONS",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+
+  const conflictedRows = [{ id: "ada", name: "Server", revision: 2n }] as const;
+  await screen.rerender(renderTable(conflictedRows, 2));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const reviewGrid = screen
+    .getByRole("alertdialog", { name: "Conflict Review" })
+    .getByRole("grid", { name: "Conflict Review changes" });
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Rendered Ada", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Rendered Server", exact: true }))
+    .toBeVisible();
+  renderValue.mockClear();
+
+  const refreshedRows = [{ id: "ada", name: "New Server", revision: 3n }] as const;
+  await screen.rerender(renderTable(refreshedRows, 3));
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Rendered New Server", exact: true }))
+    .toBeVisible();
+  expect(renderValue.mock.calls.some(([context]) => context.value === "Ada")).toBe(false);
+});
+
+function expectNoActiveReviewCellSubscriptions(
+  activeSubscriptionsByColumn: ReadonlyMap<
+    string,
+    ReadonlyMap<BrunoTableReviewCellSubscriptionEvent["source"], number>
+  >,
+): void {
+  expect(activeSubscriptionsByColumn.size, "observed review subscription columns").toBeGreaterThan(
+    0,
+  );
+  for (const [columnId, subscriptions] of activeSubscriptionsByColumn) {
+    for (const [source, activeCount] of subscriptions) {
+      expect(activeCount, `${columnId} ${source} subscriptions`).toBe(0);
+    }
+  }
+}
+
+test("mounts each Conflict Review presentation with one purpose-specific subscription", async () => {
+  type ConflictRow = Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly revision: bigint;
+  }>;
+  const conflictColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      cellRenderer: ({ value }: { readonly row: ConflictRow; readonly value: string }) =>
+        `Rendered ${value}`,
+    },
+  ] satisfies BrunoTableColumns<ConflictRow>;
+  const activeSubscriptionsByColumn = new Map<
+    string,
+    Map<BrunoTableReviewCellSubscriptionEvent["source"], number>
+  >();
+  const removeInstrumentation = installBrunoTableReviewCellSubscriptionListener((event) => {
+    if (!event.tableId.startsWith("BRUNO_TABLE_INTERNAL_CONFLICT_REVIEW_")) {
+      return;
+    }
+    const subscriptions = activeSubscriptionsByColumn.get(event.columnId) ?? new Map();
+    subscriptions.set(
+      event.source,
+      (subscriptions.get(event.source) ?? 0) + (event.phase === "subscribe" ? 1 : -1),
+    );
+    activeSubscriptionsByColumn.set(event.columnId, subscriptions);
+  });
+  const initialRows = [{ id: "ada", name: "Ada", revision: 1n }] as const;
+  const renderTable = (sourceRows: readonly ConflictRow[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_SUBSCRIPTION_BOUNDARIES"
+      columns={conflictColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
+    />
+  );
+
+  try {
+    const screen = await render(renderTable(initialRows, 1));
+    await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+    const grid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_CONFLICT_REVIEW_SUBSCRIPTION_BOUNDARIES",
+    });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+    await userEvent.keyboard("{Enter}");
+    await screen.rerender(renderTable([{ id: "ada", name: "Server", revision: 2n }] as const, 2));
+    await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+    const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+    const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+    await expect
+      .element(reviewGrid.getByRole("gridcell", { name: "Rendered Ada", exact: true }))
+      .toBeVisible();
+    reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+    await expect
+      .element(reviewGrid.getByRole("gridcell", { name: "Rendered Augusta", exact: true }))
+      .toBeVisible();
+    await expect
+      .element(reviewGrid.getByRole("group", { name: "Conflict resolution" }))
+      .toBeVisible();
+
+    await vi.waitFor(() => {
+      expect(activeSubscriptionsByColumn.get("COL_ID_BASE")).toEqual(
+        new Map([["review-value-projection", 1]]),
+      );
+      expect(activeSubscriptionsByColumn.get("COL_ID_SERVER_NOW")).toEqual(
+        new Map([["review-value-projection", 1]]),
+      );
+      expect(activeSubscriptionsByColumn.get("COL_ID_YOURS")).toEqual(
+        new Map([["review-value-projection", 1]]),
+      );
+      expect(activeSubscriptionsByColumn.get("COL_ID_RESOLUTION")).toEqual(
+        new Map([["review-resolution", 1]]),
+      );
+    });
+
+    await userEvent.click(review.getByRole("button", { name: "Cancel" }));
+    await expect.element(review).not.toBeInTheDocument();
+    await vi.waitFor(() => {
+      expectNoActiveReviewCellSubscriptions(activeSubscriptionsByColumn);
+    });
+  } finally {
+    removeInstrumentation();
+  }
+});
+
+test("mounts Reset Review values and Status with one purpose-specific subscription", async () => {
+  type ReviewRow = Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly revision: bigint;
+  }>;
+  const reviewColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      cellRenderer: ({ value }: { readonly row: ReviewRow; readonly value: string }) =>
+        `Rendered ${value}`,
+    },
+  ] satisfies BrunoTableColumns<ReviewRow>;
+  const activeSubscriptionsByColumn = new Map<
+    string,
+    Map<BrunoTableReviewCellSubscriptionEvent["source"], number>
+  >();
+  const removeInstrumentation = installBrunoTableReviewCellSubscriptionListener((event) => {
+    if (!event.tableId.startsWith("BRUNO_TABLE_INTERNAL_RESET_REVIEW_")) {
+      return;
+    }
+    const subscriptions = activeSubscriptionsByColumn.get(event.columnId) ?? new Map();
+    subscriptions.set(
+      event.source,
+      (subscriptions.get(event.source) ?? 0) + (event.phase === "subscribe" ? 1 : -1),
+    );
+    activeSubscriptionsByColumn.set(event.columnId, subscriptions);
+  });
+
+  try {
+    const sourceRows = [{ id: "ada", name: "Ada", revision: 1n }] as const;
+    const screen = await render(
+      <BrunoTableClient
+        tableId="TABLE_ID_RESET_REVIEW_SUBSCRIPTION_BOUNDARIES"
+        columns={reviewColumns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows: sourceRows, totalRows: 1, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+        projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
+      />,
+    );
+    await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+    const grid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_RESET_REVIEW_SUBSCRIPTION_BOUNDARIES",
+    });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+    await userEvent.keyboard("{Enter}");
+    const resetEdits = screen.getByRole("button", { name: "Reset edits" });
+    await userEvent.click(resetEdits);
+    const review = screen.getByRole("alertdialog", { name: "Reset Review" });
+    const reviewGrid = review.getByRole("grid", { name: "Reset Review changes" });
+    await expect
+      .element(reviewGrid.getByRole("gridcell", { name: "Rendered Ada", exact: true }))
+      .toBeVisible();
+    reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+    await expect
+      .element(reviewGrid.getByRole("gridcell", { name: "Rendered Augusta", exact: true }))
+      .toBeVisible();
+
+    await vi.waitFor(() => {
+      expect(activeSubscriptionsByColumn.get("COL_ID_SERVER_NOW")).toEqual(
+        new Map([["review-value-projection", 1]]),
+      );
+      expect(activeSubscriptionsByColumn.get("COL_ID_YOURS")).toEqual(
+        new Map([["review-value-projection", 1]]),
+      );
+      expect(activeSubscriptionsByColumn.get("COL_ID_STATUS")).toEqual(
+        new Map([["review-status", 1]]),
+      );
+    });
+
+    const keepEditing = review.getByRole("button", { name: "Keep Editing" });
+    keepEditing.element().focus();
+    await expect.element(keepEditing).toHaveFocus();
+    (keepEditing.element() as HTMLButtonElement).click();
+    await expect.element(review).not.toBeInTheDocument();
+    await expect.element(resetEdits).toHaveFocus();
+    await vi.waitFor(() => {
+      expectNoActiveReviewCellSubscriptions(activeSubscriptionsByColumn);
+    });
+  } finally {
+    removeInstrumentation();
+  }
+});
+
+test("releases mounted Blocked Changes Review value and status subscriptions on close", async () => {
+  type BlockedReviewRow = Readonly<{
+    readonly id: string;
+    readonly name: string;
+    readonly revision: bigint;
+  }>;
+  const blockedReviewColumns = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: ({ row }: { readonly row: BlockedReviewRow }) => row.name !== "Locked",
+    },
+  ] satisfies BrunoTableColumns<BlockedReviewRow>;
+  const activeSubscriptionsByColumn = new Map<
+    string,
+    Map<BrunoTableReviewCellSubscriptionEvent["source"], number>
+  >();
+  const removeInstrumentation = installBrunoTableReviewCellSubscriptionListener((event) => {
+    if (!event.tableId.startsWith("BRUNO_TABLE_INTERNAL_BLOCKED_REVIEW_")) {
+      return;
+    }
+    const subscriptions = activeSubscriptionsByColumn.get(event.columnId) ?? new Map();
+    subscriptions.set(
+      event.source,
+      (subscriptions.get(event.source) ?? 0) + (event.phase === "subscribe" ? 1 : -1),
+    );
+    activeSubscriptionsByColumn.set(event.columnId, subscriptions);
+  });
+  const renderTable = (sourceRows: readonly BlockedReviewRow[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_BLOCKED_REVIEW_SUBSCRIPTION_BOUNDARIES"
+      columns={blockedReviewColumns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+
+  try {
+    const screen = await render(renderTable([{ id: "ada", name: "Ada", revision: 1n }], 1));
+    await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+    const grid = screen.getByRole("grid", {
+      name: "Data for TABLE_ID_BLOCKED_REVIEW_SUBSCRIPTION_BOUNDARIES",
+    });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+    await userEvent.keyboard("{Enter}");
+    await screen.rerender(renderTable([{ id: "ada", name: "Locked", revision: 2n }], 2));
+    await userEvent.click(screen.getByRole("button", { name: "1 blocked change" }));
+    const review = screen.getByRole("alertdialog", { name: "Blocked Changes Review" });
+    const reviewGrid = review.getByRole("grid", { name: "Blocked Changes Review changes" });
+    await expect
+      .element(reviewGrid.getByRole("gridcell", { name: "Locked", exact: true }).first())
+      .toBeVisible();
+    reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+    await expect
+      .element(reviewGrid.getByRole("gridcell", { name: "Augusta", exact: true }))
+      .toBeVisible();
+    await expect
+      .element(
+        reviewGrid.getByRole("gridcell", {
+          name: "This cell is no longer editable.",
+          exact: true,
+        }),
+      )
+      .toBeVisible();
+
+    await vi.waitFor(() => {
+      expect(activeSubscriptionsByColumn.get("COL_ID_SERVER_NOW")).toEqual(
+        new Map([["review-value-projection", 1]]),
+      );
+      expect(activeSubscriptionsByColumn.get("COL_ID_MINE")).toEqual(
+        new Map([["review-value-projection", 1]]),
+      );
+      expect(activeSubscriptionsByColumn.get("COL_ID_REASON")).toEqual(
+        new Map([["review-status", 1]]),
+      );
+    });
+
+    await userEvent.click(review.getByRole("button", { name: "Close" }));
+    await expect.element(review).not.toBeInTheDocument();
+    await vi.waitFor(() => {
+      expectNoActiveReviewCellSubscriptions(activeSubscriptionsByColumn);
+    });
+  } finally {
+    removeInstrumentation();
+  }
+});
+
+test("projects row-aware Yours while preserving mixed sibling resolutions", async () => {
+  class ConflictRow {
+    public constructor(
+      public readonly id: string,
+      public readonly primary: string,
+      private readonly contextValue: string,
+      public readonly revision: bigint,
+    ) {}
+
+    public get context(): string {
+      return this.contextValue;
+    }
+
+    public renderPrimary(value: string): string {
+      return `${this.context}: ${value}`;
+    }
+  }
+  const conflictColumns = [
+    {
+      columnId: "COL_ID_PRIMARY",
+      field: "primary",
+      headerName: "Primary",
+      valueType: "text",
+      isEditable: true,
+      cellRenderer: ({ row, value }: { readonly row: ConflictRow; readonly value: string }) =>
+        row.renderPrimary(value),
+    },
+    {
+      columnId: "COL_ID_CONTEXT",
+      field: "context",
+      headerName: "Context",
+      valueType: "text",
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<ConflictRow>;
+  const renderTable = (sourceRows: readonly ConflictRow[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_SIBLING_PROJECTION"
+      columns={conflictColumns}
+      initialOrderBy={[{ columnId: "COL_ID_PRIMARY", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) =>
+        new ConflictRow(
+          row.id,
+          patch.primary ?? row.primary,
+          patch.context ?? row.context,
+          row.revision,
+        )
+      }
+    />
+  );
+  const initialRows = [new ConflictRow("row-1", "Primary base", "Context base", 1n)] as const;
+  const screen = await render(renderTable(initialRows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONFLICT_REVIEW_SIBLING_PROJECTION",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Primary" }), "Primary mine");
+  await userEvent.keyboard("{Enter}{ArrowRight}{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Context" }), "Context mine");
+  await userEvent.keyboard("{Enter}");
+
+  const conflictedRows = [
+    new ConflictRow("row-1", "Primary server", "Context server", 2n),
+  ] as const;
+  await screen.rerender(renderTable(conflictedRows, 2));
+  await userEvent.click(screen.getByRole("button", { name: "2 conflicts" }));
+  const reviewDialog = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reviewGrid = reviewDialog.getByRole("grid", { name: "Conflict Review changes" });
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Context mine: Primary mine", exact: true }))
+    .toBeVisible();
+  expect(reviewGrid.getByRole("gridcell", { name: "Unavailable", exact: true }).all()).toHaveLength(
+    0,
+  );
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Context mine", exact: true }))
+    .toBeVisible();
+  await userEvent.click(
+    reviewDialog.getByRole("button", {
+      name: "Keep Server for row row-1, column Context",
+    }),
+  );
+
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Context mine", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(
+      reviewGrid.getByRole("gridcell", { name: "Context server: Primary mine", exact: true }),
+    )
+    .toBeVisible();
+});
+
+type ProjectionRegressionRow = Readonly<{
+  readonly id: string;
+  readonly primary: string;
+  readonly plain: string;
+  readonly revision: bigint;
+  readonly renderPrimary: (value: string) => string;
+  readonly withEditPatch: (
+    patch: Readonly<Partial<Pick<ProjectionRegressionRow, "plain" | "primary">>>,
+  ) => ProjectionRegressionRow;
+}>;
+
+type ProjectionRegressionScenario = Readonly<{
+  readonly name: string;
+  readonly tableId: string;
+  readonly makeRow: (
+    primary: string,
+    plain: string,
+    context: string,
+    revision: bigint,
+  ) => ProjectionRegressionRow;
+  readonly expectedMinePresentation: string;
+  readonly forbiddenMinePresentations: readonly string[];
+}>;
+
+const projectionRegressionScenarios: readonly ProjectionRegressionScenario[] = [
+  (() => {
+    class PrivateFieldRow implements ProjectionRegressionRow {
+      readonly #context: string;
+
+      public constructor(
+        public readonly primary: string,
+        public readonly plain: string,
+        context: string,
+        public readonly revision: bigint,
+      ) {
+        this.#context = context;
+      }
+
+      public readonly id = "row-1";
+
+      public renderPrimary(value: string): string {
+        return `${this.#context}|${this.plain}: ${value}`;
+      }
+
+      public withEditPatch(
+        patch: Readonly<Partial<Pick<ProjectionRegressionRow, "plain" | "primary">>>,
+      ): ProjectionRegressionRow {
+        return new PrivateFieldRow(
+          patch.primary ?? this.primary,
+          patch.plain ?? this.plain,
+          this.#context,
+          this.revision,
+        );
+      }
+    }
+    return {
+      name: "projects private-field rows without leaking Server sibling values into Yours",
+      tableId: "TABLE_ID_PRIVATE_CONFLICT_REVIEW_PROJECTION",
+      makeRow: (primary: string, plain: string, context: string, revision: bigint) =>
+        new PrivateFieldRow(primary, plain, context, revision),
+      expectedMinePresentation: "Context server|Plain mine: Primary mine",
+      forbiddenMinePresentations: ["Context server|Plain server: Primary mine"],
+    };
+  })(),
+  (() => {
+    const contexts = new WeakMap<object, string>();
+    const makeClosureRow = (
+      primary: string,
+      plain: string,
+      context: string,
+      revision: bigint,
+    ): ProjectionRegressionRow => {
+      const source: ProjectionRegressionRow = {
+        id: "row-1",
+        primary,
+        plain,
+        revision,
+        renderPrimary(value: string): string {
+          return `${contexts.get(this) ?? "Missing context"}|${this.plain}: ${value}`;
+        },
+        withEditPatch(patch) {
+          return makeClosureRow(
+            patch.primary ?? this.primary,
+            patch.plain ?? this.plain,
+            contexts.get(this) ?? "Missing context",
+            this.revision,
+          );
+        },
+      };
+      contexts.set(source, context);
+      return Object.freeze(source);
+    };
+    return {
+      name: "projects closure-backed rows without losing authentic Yours presentation",
+      tableId: "TABLE_ID_CLOSURE_CONFLICT_REVIEW_PROJECTION",
+      makeRow: makeClosureRow,
+      expectedMinePresentation: "Context server|Plain mine: Primary mine",
+      forbiddenMinePresentations: [
+        "Missing context|Plain mine: Primary mine",
+        "Context server|Plain server: Primary mine",
+      ],
+    };
+  })(),
+  (() => {
+    const contexts = new WeakMap<object, string>();
+    class WeakMapRow implements ProjectionRegressionRow {
+      public constructor(
+        public readonly primary: string,
+        public readonly plain: string,
+        context: string,
+        public readonly revision: bigint,
+      ) {
+        contexts.set(this, context);
+      }
+
+      public readonly id = "row-1";
+
+      public renderPrimary(value: string): string {
+        return `${contexts.get(this) ?? "Missing context"}|${this.plain}: ${value}`;
+      }
+
+      public withEditPatch(
+        patch: Readonly<Partial<Pick<ProjectionRegressionRow, "plain" | "primary">>>,
+      ): ProjectionRegressionRow {
+        return new WeakMapRow(
+          patch.primary ?? this.primary,
+          patch.plain ?? this.plain,
+          contexts.get(this) ?? "Missing context",
+          this.revision,
+        );
+      }
+    }
+    return {
+      name: "projects WeakMap-backed rows without leaking Server sibling values into Yours",
+      tableId: "TABLE_ID_WEAK_MAP_CONFLICT_REVIEW_PROJECTION",
+      makeRow: (primary: string, plain: string, context: string, revision: bigint) =>
+        new WeakMapRow(primary, plain, context, revision),
+      expectedMinePresentation: "Context server|Plain mine: Primary mine",
+      forbiddenMinePresentations: [
+        "Context server|Plain server: Primary mine",
+        "Missing context|Plain mine: Primary mine",
+      ],
+    };
+  })(),
+  (() => {
+    const contexts = new WeakMap<object, string>();
+    class OwnWeakMapAccessorRow implements ProjectionRegressionRow {
+      declare public readonly context: string;
+
+      public constructor(
+        public readonly primary: string,
+        public readonly plain: string,
+        context: string,
+        public readonly revision: bigint,
+      ) {
+        contexts.set(this, context);
+        Object.defineProperty(this, "context", {
+          configurable: true,
+          enumerable: true,
+          get(this: OwnWeakMapAccessorRow) {
+            return contexts.get(this) ?? "Missing context";
+          },
+        });
+      }
+
+      public readonly id = "row-1";
+
+      public renderPrimary(value: string): string {
+        return `${this.context}|${this.plain}: ${value}`;
+      }
+
+      public withEditPatch(
+        patch: Readonly<Partial<Pick<ProjectionRegressionRow, "plain" | "primary">>>,
+      ): ProjectionRegressionRow {
+        return new OwnWeakMapAccessorRow(
+          patch.primary ?? this.primary,
+          patch.plain ?? this.plain,
+          this.context,
+          this.revision,
+        );
+      }
+    }
+    return {
+      name: "projects rows with own WeakMap-backed accessors as authentic Yours",
+      tableId: "TABLE_ID_OWN_WEAK_MAP_CONFLICT_REVIEW_PROJECTION",
+      makeRow: (primary: string, plain: string, context: string, revision: bigint) =>
+        new OwnWeakMapAccessorRow(primary, plain, context, revision),
+      expectedMinePresentation: "Context server|Plain mine: Primary mine",
+      forbiddenMinePresentations: [
+        "Missing context|Plain mine: Primary mine",
+        "Context server|Plain server: Primary mine",
+      ],
+    };
+  })(),
+  (() => {
+    const contexts = new WeakMap<object, string>();
+    const readContext = (candidate: object): string | undefined => contexts.get(candidate);
+    const writeContext = (candidate: object, context: string): void => {
+      contexts.set(candidate, context);
+    };
+    class IndirectWeakMapRow implements ProjectionRegressionRow {
+      public constructor(
+        public readonly primary: string,
+        public readonly plain: string,
+        context: string,
+        public readonly revision: bigint,
+      ) {
+        writeContext(this, context);
+      }
+
+      public readonly id = "row-1";
+
+      public renderPrimary(value: string): string {
+        return `${readContext(this) ?? "Missing context"}|${this.plain}: ${value}`;
+      }
+
+      public withEditPatch(
+        patch: Readonly<Partial<Pick<ProjectionRegressionRow, "plain" | "primary">>>,
+      ): ProjectionRegressionRow {
+        return new IndirectWeakMapRow(
+          patch.primary ?? this.primary,
+          patch.plain ?? this.plain,
+          readContext(this) ?? "Missing context",
+          this.revision,
+        );
+      }
+    }
+    return {
+      name: "projects helper-indirected WeakMap rows as authentic Yours",
+      tableId: "TABLE_ID_INDIRECT_WEAK_MAP_CONFLICT_REVIEW_PROJECTION",
+      makeRow: (primary: string, plain: string, context: string, revision: bigint) =>
+        new IndirectWeakMapRow(primary, plain, context, revision),
+      expectedMinePresentation: "Context server|Plain mine: Primary mine",
+      forbiddenMinePresentations: [
+        "Missing context|Plain mine: Primary mine",
+        "Context server|Plain server: Primary mine",
+      ],
+    };
+  })(),
+];
+
+test.each(projectionRegressionScenarios)("$name", async (scenario) => {
+  const scenarioColumns = [
+    {
+      columnId: "COL_ID_PRIMARY",
+      field: "primary",
+      headerName: "Primary",
+      valueType: "text",
+      isEditable: true,
+      cellRenderer: ({
+        row,
+        value,
+      }: {
+        readonly row: ProjectionRegressionRow;
+        readonly value: string;
+      }) => row.renderPrimary(value),
+    },
+    {
+      columnId: "COL_ID_PLAIN",
+      field: "plain",
+      headerName: "Plain",
+      valueType: "text",
+      isEditable: true,
+    },
+  ] satisfies BrunoTableColumns<ProjectionRegressionRow>;
+  const renderTable = (sourceRows: readonly ProjectionRegressionRow[], version: number) => (
+    <BrunoTableClient
+      tableId={scenario.tableId}
+      columns={scenarioColumns}
+      initialOrderBy={[{ columnId: "COL_ID_PRIMARY", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => row.withEditPatch(patch)}
+    />
+  );
+  const screen = await render(
+    renderTable([scenario.makeRow("Primary base", "Plain base", "Context base", 1n)], 1),
+  );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: `Data for ${scenario.tableId}` });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Primary" }), "Primary mine");
+  await userEvent.keyboard("{Enter}{ArrowRight}{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Plain" }), "Plain mine");
+  await userEvent.keyboard("{Enter}");
+
+  await screen.rerender(
+    renderTable([scenario.makeRow("Primary server", "Plain server", "Context server", 2n)], 2),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "2 conflicts" }));
+  const reviewGrid = screen
+    .getByRole("alertdialog", { name: "Conflict Review" })
+    .getByRole("grid", { name: "Conflict Review changes" });
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+
+  await expect
+    .element(
+      reviewGrid.getByRole("gridcell", { name: scenario.expectedMinePresentation, exact: true }),
+    )
+    .toBeVisible();
+  expect(reviewGrid.getByRole("gridcell", { name: "Unavailable", exact: true }).all()).toHaveLength(
+    0,
+  );
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Plain mine", exact: true }))
+    .toBeVisible();
+  for (const forbiddenMinePresentation of scenario.forbiddenMinePresentations) {
+    await expect
+      .element(reviewGrid.getByRole("gridcell", { name: forbiddenMinePresentation, exact: true }))
+      .not.toBeInTheDocument();
+  }
+});
+
+test("projects row-aware Yours through self and nested aliases", async () => {
+  class HashConflictRow {
+    public constructor(
+      public readonly id: string,
+      public readonly primary: string,
+      private readonly contextValue: string,
+      public readonly revision: bigint,
+    ) {}
+
+    public get context(): string {
+      return this.contextValue;
+    }
+
+    public renderPrimary(value: string): string {
+      // oxlint-disable-next-line typescript/no-this-alias -- regression for identity aliases
+      const self = this;
+      const nested = { row: self };
+      return `# ${nested.row.context}: ${value}`;
+    }
+  }
+  const hashColumns = [
+    {
+      columnId: "COL_ID_PRIMARY",
+      field: "primary",
+      headerName: "Primary",
+      valueType: "text",
+      isEditable: true,
+      cellRenderer: ({ row, value }: { readonly row: HashConflictRow; readonly value: string }) =>
+        row.renderPrimary(value),
+    },
+  ] satisfies BrunoTableColumns<HashConflictRow>;
+  const renderTable = (sourceRows: readonly HashConflictRow[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_HASH_CONFLICT_REVIEW_PROJECTION"
+      columns={hashColumns}
+      initialOrderBy={[{ columnId: "COL_ID_PRIMARY", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) =>
+        new HashConflictRow(row.id, patch.primary ?? row.primary, row.context, row.revision)
+      }
+    />
+  );
+  const screen = await render(
+    renderTable([new HashConflictRow("row-1", "Primary base", "Context base", 1n)], 1),
+  );
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_HASH_CONFLICT_REVIEW_PROJECTION",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Primary" }), "Primary mine");
+  await userEvent.keyboard("{Enter}");
+
+  await screen.rerender(
+    renderTable([new HashConflictRow("row-1", "Primary server", "Context server", 2n)], 2),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const reviewGrid = screen
+    .getByRole("alertdialog", { name: "Conflict Review" })
+    .getByRole("grid", { name: "Conflict Review changes" });
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+
+  await expect
+    .element(
+      reviewGrid.getByRole("gridcell", { name: "# Context server: Primary mine", exact: true }),
+    )
+    .toBeVisible();
+});
+
 test("rejects a widened editable capability without onSaveEdits at runtime", async () => {
   const invalidProps = {
     tableId: "TABLE_ID_CELL_EDIT_MISSING_SAVE_HANDLER",
@@ -3529,5 +4408,32 @@ test("rejects a widened editable capability without getRowVersion at runtime", a
 
   await expect(render(<BrunoTableClient {...invalidProps} />)).rejects.toThrow(
     "BrunoTable editable Client Tables require getRowVersion.",
+  );
+});
+
+test("rejects widened row-aware editable columns without projectEditRow at runtime", async () => {
+  const widenedRowAwareColumns: BrunoTableColumns<Row> = [
+    {
+      columnId: "COL_ID_NAME",
+      field: "name",
+      headerName: "Name",
+      valueType: "text",
+      isEditable: true,
+      valueFormatter: ({ row, value }) => `${row.id}: ${value}`,
+    },
+  ];
+  const invalidProps = {
+    tableId: "TABLE_ID_CELL_EDIT_MISSING_ROW_PROJECTOR",
+    columns: widenedRowAwareColumns,
+    initialOrderBy: [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    clientSource: { rows, totalRows: rows.length, version: 1, status: "ready" },
+    getRowId: (row: Row) => row.id,
+    editable: true,
+    getRowVersion: (row: Row) => row.revision,
+    onSaveEdits: () => Promise.resolve(),
+  } as BrunoTableClientProps<Row, typeof widenedRowAwareColumns, bigint>;
+
+  await expect(render(<BrunoTableClient {...invalidProps} />)).rejects.toThrow(
+    "BrunoTable editable Client Tables with row-aware presentation require projectEditRow.",
   );
 });

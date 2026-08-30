@@ -159,6 +159,7 @@ import {
   recordBrunoTableClientColumnGestureListener,
   hasBrunoTableClientColumnGestureFrameListener,
 } from "./render-instrumentation";
+import { recordBrunoTableReviewCellSubscription } from "./grid-subscription-instrumentation";
 import {
   BrunoTableLoadingViewportAdapterBoundary,
   BrunoTableViewportAdapterBoundary,
@@ -196,7 +197,12 @@ import {
 } from "./cell-edit";
 import { BrunoTableCellEditBoundary } from "./cell-edit-boundary";
 import { BrunoTableCellEditGeometryController } from "./cell-edit-geometry";
-import { BrunoTableEditSafetyFooter } from "./edit-chrome";
+import {
+  BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY,
+  BrunoTableEditSafetyFooter,
+  type BrunoTableBlockedReviewRenderer,
+  type BrunoTableConflictReviewRenderer,
+} from "./edit-chrome";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
@@ -445,6 +451,10 @@ export type BrunoTableViewProps<
   readonly renderResetReview?:
     | ((rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode)
     | undefined;
+  /** Private Editable Client-only Conflict Review renderer. */
+  readonly renderConflictReview?: BrunoTableConflictReviewRenderer | undefined;
+  /** Private Editable Client-only Blocked Changes Review renderer. */
+  readonly renderBlockedReview?: BrunoTableBlockedReviewRenderer | undefined;
 };
 
 function getBrunoTableGridAriaKeyShortcuts({
@@ -553,6 +563,8 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   cellRange,
   editMemory,
   renderResetReview,
+  renderConflictReview,
+  renderBlockedReview,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
   const resolvedGridAriaLabel = gridAriaLabel ?? `Data for ${tableId}`;
   const tableElement = useRef<HTMLElement | null>(null);
@@ -562,14 +574,17 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   );
   useLayoutEffect(
     () =>
-      editMemory?.registerGridFocusCommand(() => {
-        const owner = tableElement.current;
-        const grid = [
-          ...(owner?.querySelectorAll<HTMLElement>("[data-bruno-scroll-owner]") ?? []),
-        ].find((candidate) => candidate.closest("[data-bruno-table]") === owner);
-        if (grid === undefined || grid === null) focusFallback();
-        else grid.focus({ preventScroll: true });
-      }),
+      editMemory?.registerGridFocusCommand(
+        () => {
+          const owner = tableElement.current;
+          const grid = [
+            ...(owner?.querySelectorAll<HTMLElement>("[data-bruno-scroll-owner]") ?? []),
+          ].find((candidate) => candidate.closest("[data-bruno-table]") === owner);
+          if (grid === undefined || grid === null) focusFallback();
+          else grid.focus({ preventScroll: true });
+        },
+        () => tableElement.current?.ownerDocument,
+      ),
     [editMemory, focusFallback],
   );
   return (
@@ -617,6 +632,8 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
             dispatchGridCommand={runtime.dispatchGridCommand}
             runtime={editMemory}
             renderReview={renderResetReview}
+            renderConflictReview={renderConflictReview}
+            renderBlockedReview={renderBlockedReview}
           />
         )}
       </div>
@@ -3103,7 +3120,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           }
         }}
         style={{
-          maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+          maxHeight: `min(var(${BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY}, ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px), ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px)`,
           overflow: "auto",
           position: "relative",
         }}
@@ -5389,6 +5406,64 @@ type BrunoTableCellProps = Readonly<{
   readonly yieldGridTabStop?: ((grid: HTMLElement) => void) | undefined;
 }>;
 
+type BrunoTableDraftReviewCellKind = "base" | "mine" | "server";
+
+type BrunoTableDraftReviewCellProjection = Readonly<{
+  readonly candidateText: string | undefined;
+  readonly column: ReturnType<BrunoTableCellEditDraftReviewSourceRow["getSnapshot"]>["column"];
+  readonly row: object | undefined;
+  readonly unavailable: boolean;
+  readonly value: unknown;
+}>;
+
+function createBrunoTableDraftReviewCellProjectionGetter(
+  source: BrunoTableCellEditDraftReviewSourceRow | undefined,
+  kind: BrunoTableDraftReviewCellKind | undefined,
+): () => BrunoTableDraftReviewCellProjection | undefined {
+  let previous: BrunoTableDraftReviewCellProjection | undefined;
+  return () => {
+    if (source === undefined || kind === undefined) return undefined;
+    const snapshot = source.getSnapshot();
+    const next =
+      kind === "base"
+        ? {
+            candidateText: undefined,
+            column: snapshot.column,
+            row: snapshot.baseRow,
+            unavailable: false,
+            value: snapshot.base,
+          }
+        : kind === "server"
+          ? {
+              candidateText: undefined,
+              column: snapshot.column,
+              row: snapshot.serverRow,
+              unavailable: !snapshot.serverValueAvailable,
+              value: snapshot.serverNow,
+            }
+          : {
+              candidateText: snapshot.candidateText,
+              column: snapshot.column,
+              row: snapshot.projectedRow,
+              unavailable:
+                !snapshot.projectedRowAvailable && cellPresentationUsesRawRow(snapshot.column),
+              value: snapshot.mine,
+            };
+    if (
+      previous !== undefined &&
+      Object.is(previous.candidateText, next.candidateText) &&
+      previous.column === next.column &&
+      previous.row === next.row &&
+      previous.unavailable === next.unavailable &&
+      Object.is(previous.value, next.value)
+    ) {
+      return previous;
+    }
+    previous = Object.freeze(next);
+    return previous;
+  };
+}
+
 const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) {
   const {
     runtime,
@@ -5467,20 +5542,57 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const edit = useSyncExternalStore(subscribeEdit, getEditSnapshot, getEditSnapshot);
   const effectivePresentationColumn =
     edit.acceptedOverlayPresentationColumn ?? edit.draftPresentationColumn ?? column;
-  const rowAware = cellPresentationUsesRawRow(effectivePresentationColumn);
+  const initialRow = runtime.getRowSnapshot(rowId);
+  const initialDraftReviewSource = isBrunoTableCellEditDraftReviewSourceRow(initialRow)
+    ? initialRow
+    : undefined;
+  const draftReviewColumnLabelSource =
+    initialDraftReviewSource !== undefined &&
+    effectivePresentationColumn.kind === "field" &&
+    effectivePresentationColumn.field === "columnLabel"
+      ? initialDraftReviewSource
+      : undefined;
+  const subscribeDraftReviewColumnLabel = useMemo(
+    () =>
+      draftReviewColumnLabelSource === undefined
+        ? (_listener: () => void) => () => undefined
+        : draftReviewColumnLabelSource.subscribe,
+    [draftReviewColumnLabelSource],
+  );
+  const getDraftReviewColumnLabelSnapshot = useMemo(
+    () => () => draftReviewColumnLabelSource?.getSnapshot().columnLabel,
+    [draftReviewColumnLabelSource],
+  );
+  const draftReviewColumnLabel = useSyncExternalStore(
+    subscribeDraftReviewColumnLabel,
+    getDraftReviewColumnLabelSnapshot,
+    getDraftReviewColumnLabelSnapshot,
+  );
+  // Review rows intentionally skip the grid's row-cell subscription: their reactive value and
+  // presentation snapshots arrive through subscribeDraftReview, avoiding duplicate listeners.
+  const rowAware =
+    initialDraftReviewSource !== undefined ||
+    cellPresentationUsesRawRow(effectivePresentationColumn);
+  const initialRowSnapshot = rowAware
+    ? runtime.getRowCellSnapshot(rowId, column.columnId)
+    : undefined;
   const subscribe = useMemo(
-    () => (listener: () => void) =>
-      rowAware
+    () => (listener: () => void) => {
+      if (!rowAware) return runtime.subscribeCell(rowId, column.columnId, listener);
+      return initialDraftReviewSource === undefined
         ? runtime.subscribeRowCell(rowId, column.columnId, listener)
-        : runtime.subscribeCell(rowId, column.columnId, listener),
-    [column.columnId, rowAware, rowId, runtime],
+        : () => undefined;
+    },
+    [column.columnId, initialDraftReviewSource, rowAware, rowId, runtime],
   );
   const getSnapshot = useMemo(
     () => () =>
-      rowAware
-        ? runtime.getRowCellSnapshot(rowId, column.columnId)
-        : runtime.getCellSnapshot(rowId, column.columnId),
-    [column.columnId, rowAware, rowId, runtime],
+      initialDraftReviewSource !== undefined && initialRowSnapshot !== undefined
+        ? initialRowSnapshot
+        : rowAware
+          ? runtime.getRowCellSnapshot(rowId, column.columnId)
+          : runtime.getCellSnapshot(rowId, column.columnId),
+    [column.columnId, initialDraftReviewSource, initialRowSnapshot, rowAware, rowId, runtime],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cellSnapshot = rowAware ? undefined : (snapshot as BrunoTableCellSnapshot);
@@ -5488,48 +5600,76 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const presentationColumn =
     edit.acceptedOverlayPresentationColumn ?? edit.draftPresentationColumn ?? snapshot.column;
   const row = rowSnapshot?.row;
-  const draftReviewSource = isBrunoTableCellEditDraftReviewSourceRow(row) ? row : undefined;
+  const draftReviewSource = initialDraftReviewSource;
+  const draftReviewKind: BrunoTableDraftReviewCellKind | undefined =
+    draftReviewSource !== undefined &&
+    presentationColumn?.kind === "field" &&
+    presentationColumn.field === "baseText"
+      ? "base"
+      : draftReviewSource !== undefined &&
+          presentationColumn?.kind === "field" &&
+          presentationColumn.field === "serverText"
+        ? "server"
+        : draftReviewSource !== undefined &&
+            presentationColumn?.kind === "field" &&
+            presentationColumn.field === "mineText"
+          ? "mine"
+          : undefined;
   const subscribeDraftReview = useMemo(
     () =>
-      draftReviewSource === undefined
+      draftReviewSource === undefined || draftReviewKind === undefined
         ? (_listener: () => void) => () => undefined
-        : draftReviewSource.subscribe,
-    [draftReviewSource],
+        : (listener: () => void) => {
+            if (__BRUNO_TABLE_TEST_DIAGNOSTICS__ && tableId !== undefined) {
+              recordBrunoTableReviewCellSubscription({
+                tableId,
+                rowId,
+                columnId: column.columnId,
+                source: "review-value-projection",
+                phase: "subscribe",
+              });
+            }
+            const unsubscribe = draftReviewSource.subscribe(listener);
+            return () => {
+              unsubscribe();
+              if (__BRUNO_TABLE_TEST_DIAGNOSTICS__ && tableId !== undefined) {
+                recordBrunoTableReviewCellSubscription({
+                  tableId,
+                  rowId,
+                  columnId: column.columnId,
+                  source: "review-value-projection",
+                  phase: "unsubscribe",
+                });
+              }
+            };
+          },
+    [column.columnId, draftReviewKind, draftReviewSource, rowId, tableId],
   );
   const getDraftReviewSnapshot = useMemo(
-    () => (draftReviewSource === undefined ? () => undefined : draftReviewSource.getSnapshot),
-    [draftReviewSource],
+    () => createBrunoTableDraftReviewCellProjectionGetter(draftReviewSource, draftReviewKind),
+    [draftReviewKind, draftReviewSource],
   );
   const draftReview = useSyncExternalStore(
     subscribeDraftReview,
     getDraftReviewSnapshot,
     getDraftReviewSnapshot,
   );
-  const draftReviewKind =
-    draftReviewSource !== undefined &&
-    presentationColumn?.kind === "field" &&
-    presentationColumn.field === "serverText"
-      ? "server"
-      : draftReviewSource !== undefined &&
-          presentationColumn?.kind === "field" &&
-          presentationColumn.field === "mineText"
-        ? "mine"
-        : undefined;
-  const draftReviewRow =
-    draftReviewKind === "server" ? draftReview?.serverRow : draftReview?.projectedRow;
-  const draftReviewValue =
-    draftReviewKind === "server" ? draftReview?.serverNow : draftReview?.mine;
-  const draftReviewValueUnavailable =
-    draftReviewKind === "server" && draftReview?.serverValueAvailable === false;
-  const draftReviewCandidateText =
-    draftReviewKind === "mine" ? draftReview?.candidateText : undefined;
+  const draftReviewRow = draftReview?.row;
+  const draftReviewValue = draftReview?.value;
+  const draftReviewValueUnavailable = draftReview?.unavailable === true;
+  const draftReviewCandidateText = draftReview?.candidateText;
+  const draftReviewPresentationAvailable =
+    draftReview !== undefined &&
+    !draftReviewValueUnavailable &&
+    (draftReviewRow !== undefined || !cellPresentationUsesRawRow(draftReview.column));
   const unavailable =
     presentationColumn === undefined ||
     (rowAware ? rowSnapshot?.kind === "unavailable" : cellSnapshot?.kind === "unavailable");
   const rowMissing = rowAware
     ? row === undefined
     : cellSnapshot?.kind === "available" && !cellSnapshot.rowPresent;
-  const sourceValue = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
+  const sourceValue =
+    draftReviewColumnLabel ?? (rowAware ? rowSnapshot?.value : cellSnapshot?.value);
   const value = edit.hasAcceptedOverlay
     ? edit.acceptedOverlay
     : edit.hasDraft
@@ -5539,13 +5679,19 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const className =
     draftReviewValueUnavailable || draftReviewCandidateText !== undefined
       ? undefined
-      : draftReviewKind !== undefined && draftReview !== undefined && draftReviewRow !== undefined
+      : draftReviewPresentationAvailable
         ? resolveProxyCellClassName(draftReview.column, draftReviewRow, draftReviewValue)
         : invalid || unavailable || rowMissing || presentationColumn === undefined
           ? undefined
           : resolveCellClassName(presentationColumn, row, value);
   const content =
-    unavailable || rowMissing || presentationColumn === undefined ? null : invalid ? (
+    draftReviewCandidateText !== undefined ? (
+      draftReviewCandidateText
+    ) : draftReviewValueUnavailable ? (
+      "Unavailable"
+    ) : draftReviewPresentationAvailable ? (
+      resolveCellContent(draftReview.column, draftReviewRow, draftReviewValue)
+    ) : unavailable || rowMissing || presentationColumn === undefined ? null : invalid ? (
       <span role="alert">{invalidSourceDetails(invalid.invalid)}</span>
     ) : (
       resolveCellContent(presentationColumn, row, value)
@@ -6324,7 +6470,7 @@ const LoadingRows = memo(function LoadingRows({
               role="grid"
               tabIndex={0}
               style={{
-                maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+                maxHeight: `min(var(${BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY}, ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px), ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px)`,
                 overflow: "auto",
                 position: "relative",
               }}

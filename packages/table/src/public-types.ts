@@ -365,7 +365,7 @@ export type BrunoTableClientSource<TRow> = BrunoTableSourceChrome & {
 /**
  * The lifecycle envelope returned by a long-lived server viewport hook.
  *
- * `TViewport` stays opaque at the public boundary. The private server adapter is responsible for
+ * `TViewport` stays opaque at the public interface. The private server adapter is responsible for
  * narrowing it to the transport it supports; consumers never depend on rendering-engine state or
  * types.
  */
@@ -945,7 +945,7 @@ export type BrunoTableComputedColumnInput<
 
 /**
  * Captures a Computed Column's exact dependency tuple before contextually typing its getter.
- * Built-in Value Type helpers will delegate to this strict construction boundary.
+ * Built-in Value Type helpers will delegate to this strict construction seam.
  */
 export function BrunoTableComputedColumn<
   TRow,
@@ -1022,7 +1022,7 @@ type HelperGroupedPresentationCallbacks = Readonly<{
   aggregateCellRenderer?: unknown;
 }>;
 
-/** @internal Exact helper output recognized by the plain BrunoTable column-array boundary. */
+/** @internal Exact helper output recognized by the plain BrunoTable column-array interface. */
 export type BrunoTableColumnHelperOutput<TColumn> = TColumn &
   BrunoTableColumnHelperProvenanceCarrier<
     TColumn extends { readonly field: infer TField }
@@ -1547,6 +1547,51 @@ export type BrunoTableSaveCellChange<
   TColumns extends BrunoTableColumns<TRow>,
 > = SaveCellChangeForColumn<TRow, PotentiallyEditableFieldColumn<TColumns>>;
 
+type PotentiallyEditableField<TRow, TColumns extends BrunoTableColumns<TRow>> =
+  PotentiallyEditableFieldColumn<TColumns> extends infer TColumn
+    ? TColumn extends { readonly field: infer TField extends keyof TRow & string }
+      ? TField
+      : never
+    : never;
+
+/** Exact sparse field values used to project one editable source Row for presentation. */
+export type BrunoTableEditRowPatch<TRow, TColumns extends BrunoTableColumns<TRow>> = Readonly<
+  Partial<Pick<TRow, PotentiallyEditableField<TRow, TColumns>>>
+>;
+
+/** Input to an Editable Client Table's trusted Row projection seam. */
+export type BrunoTableEditRowProjectorInput<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion = unknown,
+> = Readonly<{
+  readonly row: TRow;
+  readonly patch: BrunoTableEditRowPatch<TRow, TColumns>;
+  readonly rowVersion: TRowVersion;
+}>;
+
+/**
+ * Reconstructs the consumer's authentic Row shape for row-aware edit-review presentation.
+ *
+ * The returned Row is presentation evidence only. It does not replace the source Row, Row Version,
+ * or Save Change Set authority. A memoized projection remains valid while the source Row reference,
+ * opaque Row Version, projector configuration, and exact patch are identical, including after a
+ * review closes and reopens. Changed source, Row Version, or patch evidence requires a fresh
+ * immutable Row replacement. The opaque Row Version is cache-key evidence only.
+ *
+ * Missing required configuration is an explicit configuration error. Before this Row has published
+ * one valid projection, a projector failure, null or non-object result, source-Row result for a
+ * non-empty patch, Row Identity read failure, changed Row Identity, or reused historical result is
+ * also explicit. After a valid projection has been published, the same failure classes on changed
+ * inputs instead withdraw row-aware Yours as unavailable. Exact Mine, Base, and Server evidence
+ * remains available; BrunoTable never substitutes stale or Server evidence for Yours.
+ */
+export type BrunoTableEditRowProjector<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion = unknown,
+> = (input: BrunoTableEditRowProjectorInput<TRow, TColumns, TRowVersion>) => TRow;
+
 export type BrunoTableSaveCellChangeSet<TRow, TColumns extends BrunoTableColumns<TRow>> = readonly [
   BrunoTableSaveCellChange<TRow, TColumns>,
   ...BrunoTableSaveCellChange<TRow, TColumns>[],
@@ -1585,6 +1630,7 @@ export type BrunoTableReadOnlyCapability = {
   readonly editable?: false;
   readonly getRowVersion?: never;
   readonly onSaveEdits?: never;
+  readonly projectEditRow?: never;
 };
 
 export type BrunoTableNoGroupingCapability = {
@@ -1594,6 +1640,31 @@ export type BrunoTableNoGroupingCapability = {
 export type BrunoTableGroupingCapability<TRow, TColumns extends BrunoTableColumns<TRow>> = {
   readonly groupRowsColumn?: BrunoTableGroupRowsColumnOptions<TRow, TColumns>;
 };
+
+type PotentiallyEditableRowAwarePresentationColumn<
+  TColumns extends readonly { readonly columnId: BrunoTableColumnId }[],
+> =
+  PotentiallyEditableFieldColumn<TColumns> extends infer TColumn
+    ? TColumn extends unknown
+      ? TColumn extends { readonly valueFormatter: (...parameters: never[]) => unknown }
+        ? TColumn
+        : TColumn extends { readonly cellClassName: (...parameters: never[]) => unknown }
+          ? TColumn
+          : TColumn extends { readonly cellRenderer: (...parameters: never[]) => unknown }
+            ? TColumn
+            : never
+      : never
+    : never;
+
+type BrunoTableEditRowProjectionCapability<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+> = number extends TColumns["length"]
+  ? { readonly projectEditRow?: BrunoTableEditRowProjector<TRow, TColumns, TRowVersion> }
+  : [PotentiallyEditableRowAwarePresentationColumn<TColumns>] extends [never]
+    ? { readonly projectEditRow?: BrunoTableEditRowProjector<TRow, TColumns, TRowVersion> }
+    : { readonly projectEditRow: BrunoTableEditRowProjector<TRow, TColumns, TRowVersion> };
 
 export type BrunoTableEditableCapability<
   TRow,
@@ -1606,7 +1677,8 @@ export type BrunoTableEditableCapability<
         readonly editable: true;
         readonly getRowVersion: (row: TRow) => TRowVersion;
         readonly onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, NoInfer<TRowVersion>>;
-      } & BrunoTableNoGroupingCapability;
+      } & BrunoTableEditRowProjectionCapability<TRow, TColumns, TRowVersion> &
+        BrunoTableNoGroupingCapability;
 
 export type BrunoTableEditingCapability<
   TRow,

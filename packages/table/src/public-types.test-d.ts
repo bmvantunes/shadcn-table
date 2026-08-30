@@ -45,6 +45,9 @@ import type {
   BrunoTableColumnValue,
   BrunoTableDecodeResult,
   BrunoTableEditableColumnId,
+  BrunoTableEditRowPatch,
+  BrunoTableEditRowProjector,
+  BrunoTableEditRowProjectorInput,
   BrunoTableEditingCapability,
   BrunoTableFilterableColumnId,
   BrunoTableFilterExpression,
@@ -380,6 +383,40 @@ const columns = [
 ] as const satisfies BrunoTableColumns<Order>;
 
 type Columns = typeof columns;
+
+const rowAwareEditableColumns = [
+  {
+    columnId: "COL_ID_SYMBOL",
+    field: "symbol",
+    headerName: "Symbol",
+    valueType: "text",
+    isEditable: true,
+    valueFormatter: ({ row, value }) => `${row.hiddenLabel}:${value}`,
+  },
+  {
+    columnId: "COL_ID_PRICE",
+    field: "price",
+    headerName: "Price",
+    valueType: "number",
+    isEditable: true,
+    cellClassName: ({ row }) => (row.status === "open" ? "open" : undefined),
+  },
+  {
+    columnId: "COL_ID_QUANTITY",
+    field: "quantity",
+    headerName: "Quantity",
+    valueType: "bigint",
+    isEditable: true,
+    cellRenderer: ({ row, value }) => `${row.symbol}:${value}`,
+  },
+  {
+    columnId: "COL_ID_REVISION",
+    field: "revision",
+    headerName: "Revision",
+    valueType: "bigint",
+    valueFormatter: ({ row, value }) => `${row.id}:${value}`,
+  },
+] as const satisfies BrunoTableColumns<Order>;
 
 const serverWitnessConfig = defineViewServerConfig({
   topics: {
@@ -1624,6 +1661,179 @@ describe("BrunoTable public types", () => {
     expectTypeOf(widenedEditableCapability.getRowVersion).returns.toEqualTypeOf<bigint>();
   });
 
+  it("types the edit-row projector from exact potentially editable fields", () => {
+    expectTypeOf<BrunoTableEditRowPatch<Order, typeof rowAwareEditableColumns>>().toEqualTypeOf<
+      Readonly<Partial<Pick<Order, "symbol" | "price" | "quantity">>>
+    >();
+
+    const input: BrunoTableEditRowProjectorInput<Order, typeof rowAwareEditableColumns, bigint> = {
+      row: {} as Order,
+      patch: { symbol: "AMD", price: 128, quantity: 4n },
+      rowVersion: 1n,
+    };
+    const projector: BrunoTableEditRowProjector<Order, typeof rowAwareEditableColumns, bigint> = ({
+      row,
+      patch,
+    }) => ({ ...row, ...patch });
+
+    expectTypeOf(input.row).toEqualTypeOf<Order>();
+    expectTypeOf(input.patch).toEqualTypeOf<
+      BrunoTableEditRowPatch<Order, typeof rowAwareEditableColumns>
+    >();
+    expectTypeOf(input.rowVersion).toEqualTypeOf<bigint>();
+    expectTypeOf(projector).returns.toEqualTypeOf<Order>();
+
+    const invalidPatch: BrunoTableEditRowPatch<Order, typeof rowAwareEditableColumns> = {
+      // @ts-expect-error Non-editable fields are not part of the exact edit projection patch.
+      revision: 2n,
+    };
+    void invalidPatch;
+    const invalidValuePatch: BrunoTableEditRowPatch<Order, typeof rowAwareEditableColumns> = {
+      // @ts-expect-error Edit projection values retain their exact source field types.
+      quantity: 4,
+    };
+    void invalidValuePatch;
+  });
+
+  it("requires a projector when an exact editable tuple declares row-aware presentation", () => {
+    const missingProjector = {
+      editable: true,
+      getRowVersion: (row: Order) => row.revision,
+      onSaveEdits: () => Promise.resolve(),
+    } as const;
+
+    // @ts-expect-error Row-aware editable presentation requires a trusted projected Row seam.
+    const invalidCapability: BrunoTableEditingCapability<
+      Order,
+      typeof rowAwareEditableColumns,
+      bigint
+    > = missingProjector;
+    void invalidCapability;
+
+    const validCapability = {
+      ...missingProjector,
+      projectEditRow: ({
+        row,
+        patch,
+      }: BrunoTableEditRowProjectorInput<Order, typeof rowAwareEditableColumns, bigint>) => ({
+        ...row,
+        ...patch,
+      }),
+    } satisfies BrunoTableEditingCapability<Order, typeof rowAwareEditableColumns, bigint>;
+    expectTypeOf(validCapability.projectEditRow).toMatchTypeOf<
+      BrunoTableEditRowProjector<Order, typeof rowAwareEditableColumns, bigint>
+    >();
+
+    const widened: BrunoTableColumns<Order> = rowAwareEditableColumns;
+    const widenedCapabilityWithoutStaticProof = {
+      editable: true,
+      getRowVersion: (row: Order) => row.revision,
+      onSaveEdits: () => Promise.resolve(),
+    } satisfies BrunoTableEditingCapability<Order, typeof widened, bigint>;
+    void widenedCapabilityWithoutStaticProof;
+
+    const directClientProps = {
+      tableId: "row-aware-editable-client",
+      columns: rowAwareEditableColumns,
+      initialOrderBy: [{ columnId: "COL_ID_SYMBOL", direction: "asc" }],
+      getRowId: (row: Order) => row.id,
+      clientSource: directViewServerResult,
+      editable: true,
+      getRowVersion: (row: Order) => row.revision,
+      onSaveEdits: () => Promise.resolve(),
+    } as const;
+
+    // @ts-expect-error Direct Editable Client calls require the trusted projection seam.
+    void BrunoTableClient(directClientProps);
+    void BrunoTableClient({
+      ...directClientProps,
+      projectEditRow: ({ row, patch }) => ({ ...row, ...patch }),
+    });
+  });
+
+  it("detects each row-aware callback without widening value-only edit capabilities", () => {
+    const formatterColumns = [
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+        isEditable: true,
+        valueFormatter: ({ value }) => value,
+      },
+    ] as const satisfies BrunoTableColumns<Order>;
+    const classColumns = [
+      {
+        columnId: "COL_ID_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: "number",
+        isEditable: true,
+        cellClassName: ({ value }) => (value > 0 ? "positive" : undefined),
+      },
+    ] as const satisfies BrunoTableColumns<Order>;
+    const rendererColumns = [
+      {
+        columnId: "COL_ID_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+        isEditable: true,
+        cellRenderer: ({ value }) => value.toString(10),
+      },
+    ] as const satisfies BrunoTableColumns<Order>;
+    const capabilityWithoutProjector = {
+      editable: true,
+      getRowVersion: (row: Order) => row.revision,
+      onSaveEdits: () => Promise.resolve(),
+    } as const;
+
+    // @ts-expect-error An editable value formatter can consume the projected Row.
+    const invalidFormatter: BrunoTableEditingCapability<Order, typeof formatterColumns, bigint> =
+      capabilityWithoutProjector;
+    // @ts-expect-error An editable Cell Class callback can consume the projected Row.
+    const invalidClass: BrunoTableEditingCapability<Order, typeof classColumns, bigint> =
+      capabilityWithoutProjector;
+    // @ts-expect-error An editable Cell Renderer can consume the projected Row.
+    const invalidRenderer: BrunoTableEditingCapability<Order, typeof rendererColumns, bigint> =
+      capabilityWithoutProjector;
+    void invalidFormatter;
+    void invalidClass;
+    void invalidRenderer;
+
+    const valueOnlyColumns = [
+      {
+        columnId: "COL_ID_SYMBOL",
+        field: "symbol",
+        headerName: "Symbol",
+        valueType: "text",
+        isEditable: true,
+        cellClassName: "tabular-nums",
+      },
+      {
+        columnId: "COL_ID_REVISION",
+        field: "revision",
+        headerName: "Revision",
+        valueType: "bigint",
+        valueFormatter: ({ row, value }) => `${row.id}:${value}`,
+      },
+    ] as const satisfies BrunoTableColumns<Order>;
+    const valueOnlyCapability = {
+      ...capabilityWithoutProjector,
+    } satisfies BrunoTableEditingCapability<Order, typeof valueOnlyColumns, bigint>;
+    void valueOnlyCapability;
+
+    const readOnlyWithProjector = {
+      editable: false,
+      projectEditRow: ({ row }: BrunoTableEditRowProjectorInput<Order, typeof valueOnlyColumns>) =>
+        row,
+    } as const;
+    // @ts-expect-error Read-only Tables reject the edit-only Row projection seam.
+    const invalidReadOnly: BrunoTableEditingCapability<Order, typeof valueOnlyColumns, bigint> =
+      readOnlyWithProjector;
+    void invalidReadOnly;
+  });
+
   it("correlates row-grouped saves with source fields and exact row versions", () => {
     expectTypeOf<BrunoTableColumnField<Columns, "COL_ID_PRICE">>().toEqualTypeOf<"price">();
     expectTypeOf<BrunoTableSaveCellChange<Order, Columns>>().toEqualTypeOf<
@@ -1664,6 +1874,13 @@ describe("BrunoTable public types", () => {
         expectTypeOf(changes[0].expectedVersion).toEqualTypeOf<bigint>();
         return Promise.resolve();
       },
+      projectEditRow: ({
+        row,
+        patch,
+      }: BrunoTableEditRowProjectorInput<Order, Columns, bigint>) => ({
+        ...row,
+        ...patch,
+      }),
     } as const;
 
     // @ts-expect-error Explicit editable calls require the third Row Version authority generic.
