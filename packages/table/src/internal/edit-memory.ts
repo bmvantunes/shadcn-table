@@ -342,6 +342,7 @@ export class BrunoTableEditMemoryRuntime {
     CLEAN_EDIT_SAFETY_STATUS,
   );
   private readonly conflictCountStore = new Store(0);
+  private readonly canOpenConflictReviewStore = new Store(true);
   private readonly blockedCountStore = new Store(0);
   private readonly editSummaryStore = new Store<BrunoTableEditSummarySnapshot>(CLEAN_EDIT_SUMMARY);
   private readonly canResetStore = new Store(false);
@@ -569,6 +570,14 @@ export class BrunoTableEditMemoryRuntime {
 
   public readonly subscribeConflictCount = (listener: Listener): (() => void) => {
     const subscription = this.conflictCountStore.subscribe(listener);
+    return () => subscription.unsubscribe();
+  };
+
+  public readonly getCanOpenConflictReviewSnapshot = (): boolean =>
+    this.canOpenConflictReviewStore.get();
+
+  public readonly subscribeCanOpenConflictReview = (listener: Listener): (() => void) => {
+    const subscription = this.canOpenConflictReviewStore.subscribe(listener);
     return () => subscription.unsubscribe();
   };
 
@@ -961,6 +970,7 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly openConflictReview = (focusReturn?: EventTarget | null): boolean => {
+    if (!this.canOpenConflictReviewStore.get()) return false;
     this.captureReviewFocus(focusReturn);
     this.actor.send({ type: "OPEN_CONFLICT_REVIEW" });
     if (!this.actor.getSnapshot().context.conflictReviewOpen) {
@@ -1083,10 +1093,7 @@ export class BrunoTableEditMemoryRuntime {
       const retainedServerResolutionIds = [
         ...this.actor.getSnapshot().context.conflictReviewResolutions.values(),
       ].flatMap((resolution) => (resolution.resolution === "server" ? [resolution.id] : []));
-      if (
-        this.actor.getSnapshot().context.mode === "immediate" &&
-        retainedServerResolutionIds.length > 0
-      ) {
+      if (retainedServerResolutionIds.length > 0) {
         const runtime = this.cellEdit;
         if (runtime === undefined) return false;
         for (const id of retainedServerResolutionIds) {
@@ -1338,6 +1345,10 @@ export class BrunoTableEditMemoryRuntime {
       }
       if (this.conflictCountStore.get() !== activity.conflictCount) {
         this.conflictCountStore.setState(() => activity.conflictCount);
+      }
+      const canOpenConflictReview = !activity.activeEditor;
+      if (this.canOpenConflictReviewStore.get() !== canOpenConflictReview) {
+        this.canOpenConflictReviewStore.setState(() => canOpenConflictReview);
       }
       if (this.blockedCountStore.get() !== activity.blockedCount) {
         this.blockedCountStore.setState(() => activity.blockedCount);

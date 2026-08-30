@@ -4471,12 +4471,21 @@ test("exposes live conflict and permission-block evidence without replacing Your
   await expect
     .element(conflictEditor)
     .toHaveAccessibleDescription("The server value conflicts with your unsaved change.");
+  const activeConflictControl = screen.getByRole("button", { name: "1 conflict" });
+  await expect.element(activeConflictControl).toBeDisabled();
+  await expect
+    .element(activeConflictControl)
+    .toHaveAttribute("title", "Finish editing the active cell before reviewing conflicts");
+  await expect
+    .element(screen.getByRole("alertdialog", { name: "Conflict Review" }))
+    .not.toBeInTheDocument();
   const activeConflictMarker = conflictedCell
     .element()
     .querySelector<HTMLElement>("[data-bruno-edit-conflict-indicator]");
   expect(activeConflictMarker).not.toBeNull();
   await expect.element(activeConflictMarker!).toBeVisible();
   await userEvent.keyboard("{Escape}");
+  await expect.element(activeConflictControl).toBeEnabled();
 
   await screen.rerender(renderTable([{ id: "ada", name: "Augusta", revision: 0n }] as const, 5));
   const convergedCell = grid.getByRole("gridcell", { name: "Augusta", exact: true });
@@ -4653,41 +4662,7 @@ test("discards one conflict with Server as one reversible local command", async 
     .toHaveTextContent("No unsaved changes");
   expect(onSaveEdits).not.toHaveBeenCalled();
   await screen.rerender(renderTable([{ id: "ada", name: "Server", revision: 3n }] as const, 3));
-  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
-  review = screen.getByRole("alertdialog", { name: "Conflict Review" });
-  reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
-  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
-  serverChoice = review.getByRole("button", {
-    name: "Keep Server for row ada, column Name",
-  });
-  await expect.element(serverChoice).toHaveAttribute("aria-pressed", "false");
-  await expect.element(serverChoice).toBeEnabled();
-  await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
-  await userEvent.click(serverChoice);
-  await expect.element(serverChoice).toHaveAttribute("aria-pressed", "true");
-  await screen.rerender(
-    renderTable([{ id: "ada", name: "Newest Server", revision: 4n }] as const, 4),
-  );
-  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
-  await expect.element(serverChoice).toHaveAttribute("aria-pressed", "false");
-  await expect.element(serverChoice).toBeEnabled();
-  await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
-  await expect
-    .poll(() =>
-      reviewGrid
-        .getByRole("gridcell")
-        .all()
-        .map((cell) => cell.element().textContent),
-    )
-    .toEqual(expect.arrayContaining(["Ada", "Newest Server", "Augusta"]));
-  expect(onSaveEdits).not.toHaveBeenCalled();
-  await userEvent.click(serverChoice);
-  await userEvent.click(review.getByRole("button", { name: "Cancel" }));
-  await expect.element(review).not.toBeInTheDocument();
-  await expect
-    .element(screen.getByRole("region", { name: "Edit safety" }))
-    .toHaveTextContent("No unsaved changes");
-  expect(onSaveEdits).not.toHaveBeenCalled();
+  await expect.element(screen.getByRole("button", { name: "1 conflict" })).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "Test Undo" }));
   const restoredConflict = screen.getByRole("button", { name: "1 conflict" });
@@ -4708,51 +4683,28 @@ test("discards one conflict with Server as one reversible local command", async 
   await screen.rerender(
     renderTable([{ id: "ada", name: "After Redo Server", revision: 5n }] as const, 5),
   );
-  const invalidatedRedoConflict = screen.getByRole("button", { name: "1 conflict" });
-  await expect.element(invalidatedRedoConflict).toBeVisible();
-  await userEvent.click(invalidatedRedoConflict);
-  const invalidatedRedoReview = screen.getByRole("alertdialog", { name: "Conflict Review" });
-  const invalidatedRedoGrid = invalidatedRedoReview.getByRole("grid", {
-    name: "Conflict Review changes",
-  });
-  invalidatedRedoGrid.element().scrollLeft = invalidatedRedoGrid.element().scrollWidth;
+  await userEvent.click(screen.getByRole("button", { name: "Test Undo" }));
+  const latestConflict = screen.getByRole("button", { name: "1 conflict" });
+  await expect.element(latestConflict).toBeVisible();
+  await userEvent.click(latestConflict);
+  const latestReview = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const latestReviewGrid = latestReview.getByRole("grid", { name: "Conflict Review changes" });
+  latestReviewGrid.element().scrollLeft = latestReviewGrid.element().scrollWidth;
   await expect
     .poll(() =>
-      invalidatedRedoGrid
+      latestReviewGrid
         .getByRole("gridcell")
         .all()
         .map((cell) => cell.element().textContent),
     )
     .toEqual(expect.arrayContaining(["After Redo Server", "Augusta"]));
-  await userEvent.click(
-    invalidatedRedoReview.getByRole("button", {
-      name: "Keep Server for row ada, column Name",
-    }),
-  );
-  await userEvent.click(invalidatedRedoReview.getByRole("button", { name: "Cancel" }));
-  await userEvent.click(screen.getByRole("button", { name: "Test Undo" }));
+  await userEvent.click(latestReview.getByRole("button", { name: "Cancel" }));
   await screen.rerender(
     renderTable([{ id: "ada", name: "After Undo Server", revision: 6n }] as const, 6),
   );
   await userEvent.click(screen.getByRole("button", { name: "Test Redo" }));
-  expect(onHistoryResult).toHaveBeenLastCalledWith("redo", false);
-  const sourceInvalidatedUndoConflict = screen.getByRole("button", { name: "1 conflict" });
-  await userEvent.click(sourceInvalidatedUndoConflict);
-  const sourceInvalidatedUndoReview = screen.getByRole("alertdialog", {
-    name: "Conflict Review",
-  });
-  const sourceInvalidatedUndoGrid = sourceInvalidatedUndoReview.getByRole("grid", {
-    name: "Conflict Review changes",
-  });
-  sourceInvalidatedUndoGrid.element().scrollLeft = sourceInvalidatedUndoGrid.element().scrollWidth;
-  await expect
-    .poll(() =>
-      sourceInvalidatedUndoGrid
-        .getByRole("gridcell")
-        .all()
-        .map((cell) => cell.element().textContent),
-    )
-    .toEqual(expect.arrayContaining(["After Undo Server", "Augusta"]));
+  expect(onHistoryResult).toHaveBeenLastCalledWith("redo", true);
+  await expect.element(screen.getByRole("button", { name: "1 conflict" })).not.toBeInTheDocument();
 });
 
 test.each(["mine", "server"] as const)(

@@ -11,6 +11,119 @@ afterEach(() => {
 });
 
 describe("BrunoTable Edit Memory", () => {
+  it("keeps Conflict Review closed while another cell editor is active", () => {
+    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    const rows = new Map<string, Row>([
+      ["row-1", Object.freeze({ id: "row-1", value: "base-1", revision: 1n })],
+      ["row-2", Object.freeze({ id: "row-2", value: "base-2", revision: 1n })],
+    ]);
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rows.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    cellEdit.activate();
+    memory.activate();
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    const conflictedRow = rows.get("row-1")!;
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: conflictedRow.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: conflictedRow,
+          expectedVersion: conflictedRow.revision,
+          base: conflictedRow.value,
+          mine: "mine",
+          conflict: { server: "server", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    expect(cellEdit.start("row-2", "COL_ID_VALUE")).toBe(true);
+
+    expect(memory.openConflictReview()).toBe(false);
+    expect(memory.getConflictReviewSnapshot().open).toBe(false);
+
+    cellEdit.cancel();
+    expect(memory.openConflictReview()).toBe(true);
+  });
+
+  it("finalizes an all-Server Batch review without discarding its undo history", () => {
+    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    cellEdit.activate();
+    memory.activate();
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      memory.registerSaveCommand(() => undefined),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    expect(memory.requestMode("batch")).toBe(true);
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: row,
+          expectedVersion: row.revision,
+          base: row.value,
+          mine: "mine",
+        },
+      ]),
+    ).toBe(true);
+    row = Object.freeze({ ...row, value: "server", revision: 2n });
+    cellEdit.reconcileSourceRows(new Set([row.id]));
+    expect(memory.openConflictReview()).toBe(true);
+    const id = cellEdit.getDraftReviewSnapshot()[0]!.id;
+    expect(memory.resolveConflictRows([id], "server")).toBe(true);
+    expect(cellEdit.getActivitySnapshot()).toMatchObject({
+      conflictCount: 0,
+      draftCount: 0,
+      undoCount: 2,
+    });
+
+    expect(memory.saveConflictReview()).toBe(true);
+    expect(memory.getConflictReviewSnapshot().open).toBe(false);
+
+    row = Object.freeze({ ...row, revision: 3n });
+    cellEdit.reconcileSourceRows(new Set([row.id]));
+    expect(cellEdit.getActivitySnapshot()).toMatchObject({ conflictCount: 0, undoCount: 2 });
+    expect(memory.undo()).toBe(true);
+    expect(cellEdit.getActivitySnapshot()).toMatchObject({ conflictCount: 1, draftCount: 1 });
+  });
+
   it("accepts a fresh conflict choice after retained evidence is invalidated", () => {
     type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
     let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });

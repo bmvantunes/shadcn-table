@@ -168,6 +168,11 @@ const BrunoTableConflictCountStatus = memo(function BrunoTableConflictCountStatu
     runtime.getConflictCountSnapshot,
     runtime.getConflictCountSnapshot,
   );
+  const canOpen = useSyncExternalStore(
+    runtime.subscribeCanOpenConflictReview,
+    runtime.getCanOpenConflictReviewSnapshot,
+    runtime.getCanOpenConflictReviewSnapshot,
+  );
   const reviewControlRef = useCallback(
     (element: HTMLButtonElement | null) =>
       element === null ? undefined : runtime.registerResetControl(element),
@@ -181,8 +186,10 @@ const BrunoTableConflictCountStatus = memo(function BrunoTableConflictCountStatu
         <Button
           data-bruno-cell-edit-reset=""
           data-bruno-table-review-focus="conflict"
+          disabled={!canOpen}
           ref={reviewControlRef}
           size="sm"
+          title={canOpen ? undefined : "Finish editing the active cell before reviewing conflicts"}
           variant="ghost"
           onClick={(event) => runtime.openConflictReview(event.currentTarget)}
         >

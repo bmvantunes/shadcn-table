@@ -2487,8 +2487,7 @@ export class BrunoTableCellEditRuntime {
       if (
         memory.drafts.has(id) ||
         !this.resolvedDraftReviewIds.has(id) ||
-        !this.resolvedDraftReviewEntriesById.has(id) ||
-        this.resolvedDraftReviewLineagesById.has(id)
+        !this.resolvedDraftReviewEntriesById.has(id)
       ) {
         return false;
       }
