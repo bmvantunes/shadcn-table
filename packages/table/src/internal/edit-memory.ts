@@ -3,6 +3,7 @@ import { assign, createActor, createMachine } from "xstate";
 
 import type {
   BrunoTableCellEditChangeGesture,
+  BrunoTableCellEditImmediateSaveResult,
   BrunoTableCellEditActivitySnapshot,
   BrunoTableCellEditConflictResolution,
   BrunoTableCellEditDraftReviewSourceRow,
@@ -401,7 +402,9 @@ export class BrunoTableEditMemoryRuntime {
   >(Object.freeze([]));
   private cellEdit: BrunoTableCellEditRuntime | undefined;
   private saveCommand: (() => void) | undefined;
-  private immediateSaveCommand: ((changes: BrunoTableCellEditChangeGesture) => boolean) | undefined;
+  private immediateSaveCommand:
+    | ((changes: BrunoTableCellEditChangeGesture) => BrunoTableCellEditImmediateSaveResult)
+    | undefined;
   private conflictReviewCommand: (() => void) | undefined;
   private gridFocusCommand: (() => void) | undefined;
   private gridOwnerDocument: (() => Document | undefined) | undefined;
@@ -462,10 +465,7 @@ export class BrunoTableEditMemoryRuntime {
     }
     this.reviewFocusFrame = undefined;
     this.reviewFocusFrameWindow = undefined;
-    this.reviewFocusReturn = undefined;
-    this.reviewFocusRoot = undefined;
-    this.reviewFocusFallbackSelector = undefined;
-    this.reviewFocusWindow = undefined;
+    this.clearReviewFocus();
     this.modeStore.setState(() => INITIAL_MODE_SNAPSHOT);
     this.reconcileCellEditActivity(CLEAN_CELL_EDIT_ACTIVITY);
     this.canResetStore.setState(() => false);
@@ -730,7 +730,7 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly registerImmediateSaveCommand = (
-    command: (changes: BrunoTableCellEditChangeGesture) => boolean,
+    command: (changes: BrunoTableCellEditChangeGesture) => BrunoTableCellEditImmediateSaveResult,
   ): (() => void) => {
     this.immediateSaveCommand = command;
     return () => {
@@ -738,9 +738,11 @@ export class BrunoTableEditMemoryRuntime {
     };
   };
 
-  public readonly requestImmediateSave = (changes: BrunoTableCellEditChangeGesture): boolean => {
-    if (!this.canRequestImmediateSave()) return false;
-    return this.immediateSaveCommand?.(changes) === true;
+  public readonly requestImmediateSave = (
+    changes: BrunoTableCellEditChangeGesture,
+  ): BrunoTableCellEditImmediateSaveResult => {
+    if (!this.canRequestImmediateSave()) return "rejected";
+    return this.immediateSaveCommand?.(changes) ?? "rejected";
   };
 
   private readonly canRequestImmediateSave = (): boolean =>
@@ -962,7 +964,7 @@ export class BrunoTableEditMemoryRuntime {
     this.captureReviewFocus(focusReturn);
     this.actor.send({ type: "OPEN_CONFLICT_REVIEW" });
     if (!this.actor.getSnapshot().context.conflictReviewOpen) {
-      this.reviewFocusReturn = undefined;
+      this.clearReviewFocus();
       return false;
     }
     this.subscribeToDraftReview();
@@ -973,6 +975,24 @@ export class BrunoTableEditMemoryRuntime {
   public readonly closeConflictReview = (): void => {
     if (this.conflictReviewStore.get().saving) return;
     if (!this.conflictReviewStore.get().open) return;
+    const runtime = this.cellEdit;
+    const context = this.actor.getSnapshot().context;
+    if (runtime !== undefined && this.modeStore.get().mode === "immediate") {
+      const serverResolutionIds = [...context.conflictReviewResolutions].flatMap(
+        ([id, resolution]) => (resolution.resolution === "server" ? [id] : []),
+      );
+      if (serverResolutionIds.length > 0) {
+        for (const id of serverResolutionIds) this.conflictResolutionInProgressIds.add(id);
+        const reconciledIds = runtime.reconcileResolvedConflictIds(serverResolutionIds);
+        for (const id of serverResolutionIds) this.conflictResolutionInProgressIds.delete(id);
+        if (reconciledIds.size > 0) {
+          this.actor.send({
+            type: "INVALIDATE_CONFLICT_RESOLUTIONS",
+            ids: Object.freeze([...reconciledIds]),
+          });
+        }
+      }
+    }
     this.actor.send({ type: "CLOSE_CONFLICT_REVIEW" });
     this.conflictReviewSourcesById.clear();
     this.conflictReviewRowsStore.setState(() => Object.freeze([]));
@@ -1040,6 +1060,8 @@ export class BrunoTableEditMemoryRuntime {
     if (immediateSaveExpected && this.conflictReviewSaveRequested) {
       this.conflictReviewSaveRequested = false;
       this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
+    } else if (immediateSaveExpected && this.conflictReviewSaveOperationIds.size > 0) {
+      this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: true });
     }
     for (const id of ids) this.conflictResolutionInProgressIds.delete(id);
     this.publishSparseReviewRows();
@@ -1130,7 +1152,7 @@ export class BrunoTableEditMemoryRuntime {
     this.captureReviewFocus(focusReturn);
     this.actor.send({ type: "OPEN_BLOCKED_REVIEW" });
     if (!this.actor.getSnapshot().context.blockedReviewOpen) {
-      this.reviewFocusReturn = undefined;
+      this.clearReviewFocus();
       return false;
     }
     this.subscribeToDraftReview();
@@ -1250,10 +1272,7 @@ export class BrunoTableEditMemoryRuntime {
       ) {
         this.conflictReviewStore.setState(() => nextConflictReview);
       }
-      for (const [id, store] of this.conflictResolutionStores) {
-        const resolution = this.getProjectedConflictResolution(id);
-        if (store.get() !== resolution) store.setState(() => resolution);
-      }
+      this.syncConflictResolutionStores();
       const previousBlockedReview = this.blockedReviewStore.get();
       const nextBlockedReview = Object.freeze({
         open: context.blockedReviewOpen,
@@ -1337,6 +1356,11 @@ export class BrunoTableEditMemoryRuntime {
       }
       this.publishSparseReviewRows();
     });
+    const runtime = this.cellEdit;
+    const retainedResolutionCandidates = runtime?.getRetainedResolutionPublicationSnapshot();
+    if (runtime !== undefined && retainedResolutionCandidates !== undefined) {
+      this.reconcileRecordedConflictResolutions(retainedResolutionCandidates);
+    }
   };
 
   private readonly publishCanSave = (
@@ -1378,10 +1402,7 @@ export class BrunoTableEditMemoryRuntime {
     const runtime = this.cellEdit;
     const rows = runtime.getDraftReviewSourceSnapshot();
     const context = this.actor.getSnapshot().context;
-    for (const [id, store] of this.conflictResolutionStores) {
-      const resolution = this.getProjectedConflictResolution(id);
-      if (store.get() !== resolution) store.setState(() => resolution);
-    }
+    this.syncConflictResolutionStores();
 
     if (this.conflictReviewStore.get().open) {
       const activeConflictIds = new Set<string>();
@@ -1444,16 +1465,27 @@ export class BrunoTableEditMemoryRuntime {
         );
       });
       if (sourceInvalidatedIds.length > 0) {
-        batch(() => {
-          runtime.reopenResolvedConflicts(sourceInvalidatedIds);
-          this.actor.send({
-            type: "INVALIDATE_CONFLICT_RESOLUTIONS",
-            ids: Object.freeze(sourceInvalidatedIds),
+        const reconciledIds = runtime.reconcileResolvedConflictIds(sourceInvalidatedIds);
+        const releasedIds = sourceInvalidatedIds.filter(
+          (id) => !runtime.hasRetainedConflictResolution(id),
+        );
+        const invalidatedIds = new Set([...reconciledIds, ...releasedIds]);
+        if (invalidatedIds.size > 0) {
+          batch(() => {
+            this.actor.send({
+              type: "INVALIDATE_CONFLICT_RESOLUTIONS",
+              ids: Object.freeze([...invalidatedIds]),
+            });
           });
-        });
-        context = this.actor.getSnapshot().context;
+          context = this.actor.getSnapshot().context;
+          this.publishSparseReviewRows();
+        }
       }
     }
+    this.syncConflictResolutionStores();
+  };
+
+  private readonly syncConflictResolutionStores = (): void => {
     for (const [id, store] of this.conflictResolutionStores) {
       const resolution = this.getProjectedConflictResolution(id);
       if (store.get() !== resolution) store.setState(() => resolution);
@@ -1508,10 +1540,7 @@ export class BrunoTableEditMemoryRuntime {
     const root = this.reviewFocusRoot;
     const fallbackSelector = this.reviewFocusFallbackSelector;
     const ownerWindow = this.reviewFocusWindow;
-    this.reviewFocusReturn = undefined;
-    this.reviewFocusRoot = undefined;
-    this.reviewFocusFallbackSelector = undefined;
-    this.reviewFocusWindow = undefined;
+    this.clearReviewFocus();
     if (ownerWindow === undefined) {
       this.gridFocusCommand?.();
       return;
@@ -1532,6 +1561,13 @@ export class BrunoTableEditMemoryRuntime {
         this.gridFocusCommand?.();
       });
     });
+  };
+
+  private readonly clearReviewFocus = (): void => {
+    this.reviewFocusReturn = undefined;
+    this.reviewFocusRoot = undefined;
+    this.reviewFocusFallbackSelector = undefined;
+    this.reviewFocusWindow = undefined;
   };
 
   private readonly publishSaveFailures = (): void => {

@@ -44,6 +44,7 @@ type SaveFailureToasterEntry = Readonly<{
 
 const saveFailureToastersByDocument = new WeakMap<Document, SaveFailureToasterEntry>();
 const pendingSaveFailureToasterDisposals = new Map<Document, SaveFailureToasterEntry>();
+const REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY = "--bruno-table-review-viewport-max-height";
 const saveFailureToasterDisposalQueue = new Debouncer(
   () => {
     const pending = [...pendingSaveFailureToasterDisposals];
@@ -60,6 +61,21 @@ const saveFailureToasterDisposalQueue = new Debouncer(
   { wait: 0 },
 );
 let saveFailureToastIdSequence = 0;
+
+function useReviewViewportRef(): (element: HTMLDivElement | null) => (() => void) | undefined {
+  return useCallback((element: HTMLDivElement | null) => {
+    if (element === null) return undefined;
+    const updateMaxHeight = (): void => {
+      element.style.setProperty(REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY, `${element.clientHeight}px`);
+    };
+    updateMaxHeight();
+    const ResizeObserverConstructor = element.ownerDocument.defaultView?.ResizeObserver;
+    if (ResizeObserverConstructor === undefined) return undefined;
+    const observer = new ResizeObserverConstructor(updateMaxHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+}
 
 function createSaveFailureToasterEntry(ownerDocument: Document): SaveFailureToasterEntry {
   const manager = createToastManager();
@@ -399,6 +415,7 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
       element === null ? undefined : runtime.registerResetControl(element),
     [runtime],
   );
+  const reviewViewportRef = useReviewViewportRef();
   return (
     <AlertDialogContent
       data-bruno-cell-edit-reset=""
@@ -418,7 +435,13 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
           choice so it can be reviewed again.
         </AlertDialogDescription>
       </AlertDialogHeader>
-      <div className="min-h-0 overflow-hidden">{renderReview(rows, selection, resolveOne)}</div>
+      <div
+        ref={reviewViewportRef}
+        className="min-h-0 overflow-hidden"
+        data-bruno-review-viewport=""
+      >
+        {renderReview(rows, selection, resolveOne)}
+      </div>
       <AlertDialogFooter>
         <AlertDialogCancel disabled={snapshot.saving} onClick={runtime.closeConflictReview}>
           Cancel
@@ -571,6 +594,7 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
       element === null ? undefined : runtime.registerResetControl(element),
     [runtime],
   );
+  const reviewViewportRef = useReviewViewportRef();
   return (
     <AlertDialogContent
       data-bruno-cell-edit-reset=""
@@ -589,7 +613,11 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
           These changes cannot currently be saved. Select only the changes you want to discard.
         </AlertDialogDescription>
       </AlertDialogHeader>
-      <div className="min-h-0 overflow-hidden">
+      <div
+        ref={reviewViewportRef}
+        className="min-h-0 overflow-hidden"
+        data-bruno-review-viewport=""
+      >
         {renderReview(rows, selection)}
         {rows.length === 0 ? <p role="status">All blocked changes are current.</p> : null}
       </div>

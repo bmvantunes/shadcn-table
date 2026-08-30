@@ -1135,6 +1135,26 @@ test("resolves an Immediate conflict with Server without starting a save", async
   await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
   let review = screen.getByRole("alertdialog", { name: "Conflict Review" });
   let reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  const reviewViewport = review
+    .element()
+    .querySelector<HTMLElement>("[data-bruno-review-viewport]");
+  expect(reviewViewport).not.toBeNull();
+  await expect
+    .poll(() => reviewViewport?.style.getPropertyValue("--bruno-table-review-viewport-max-height"))
+    .toBe(`${reviewViewport?.clientHeight}px`);
+  expect(parseFloat(getComputedStyle(reviewGrid.element()).maxHeight)).toBeLessThanOrEqual(
+    reviewViewport?.clientHeight ?? 0,
+  );
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  await userEvent.click(
+    review.getByRole("button", { name: "Keep Server for row ada, column Name" }),
+  );
+  await userEvent.click(review.getByRole("button", { name: "Cancel" }));
+  await expect.element(review).not.toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "1 conflict" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
   reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
   await userEvent.click(
     review.getByRole("button", { name: "Keep Server for row ada, column Name" }),

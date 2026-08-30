@@ -66,6 +66,210 @@ describe("BrunoTable Edit Memory", () => {
     expect(memory.getConflictResolutionSnapshot(id!)).toMatchObject({ resolution: "mine" });
   });
 
+  it("retains a Mine acknowledgement while its authoritative row is absent", () => {
+    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    let row: Row | undefined = Object.freeze({
+      id: "row-1",
+      value: "base",
+      revision: 1n,
+    });
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    cellEdit.activate();
+    memory.activate();
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    expect(memory.requestMode("batch")).toBe(true);
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: "row-1",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: row!,
+          expectedVersion: 1n,
+          base: "base",
+          mine: "mine",
+        },
+      ]),
+    ).toBe(true);
+    row = Object.freeze({ id: "row-1", value: "server", revision: 3n });
+    cellEdit.reconcileSourceRows(new Set(["row-1"]));
+    expect(memory.openConflictReview()).toBe(true);
+    const id = cellEdit.getDraftReviewSnapshot()[0]!.id;
+    expect(memory.resolveConflictRows([id], "mine")).toBe(true);
+
+    row = undefined;
+    cellEdit.reconcileSourceRows(undefined);
+    expect(memory.getConflictResolutionSnapshot(id)).toMatchObject({ resolution: "mine" });
+
+    row = Object.freeze({ id: "row-1", value: "server", revision: 2n });
+    cellEdit.reconcileSourceRows(undefined);
+    expect(memory.getConflictResolutionSnapshot(id)).toBeUndefined();
+    expect(cellEdit.getActivitySnapshot().conflictCount).toBe(1);
+    expect(memory.resolveConflictRows([id], "mine")).toBe(true);
+    row = Object.freeze({ id: "row-1", value: "mine", revision: 4n });
+    cellEdit.reconcileSourceRows(new Set(["row-1"]));
+    expect(cellEdit.getRetainedResolutionPublicationSnapshot()).toContain(id);
+    expect(cellEdit.isDraftConflictEvidenceCurrent(id, "mine", "server", 2n)).toBe(false);
+    expect(cellEdit.isConflictResolutionLocallyUndone(id, "server", 2n)).toBe(false);
+    expect(cellEdit.isConflictResolutionTemporarilyDiscarded(id)).toBe(false);
+    expect(cellEdit.hasRetainedConflictResolution(id)).toBe(false);
+    expect(memory.getConflictResolutionSnapshot(id)).toBeUndefined();
+    expect(cellEdit.getActivitySnapshot().conflictCount).toBe(0);
+    expect(memory.getConflictReviewRowsSnapshot()).toHaveLength(0);
+  });
+
+  it("closes an Immediate Server review while its row is absent and reopens on return", () => {
+    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    let row: Row | undefined = Object.freeze({ id: "row-1", value: "base", revision: 1n });
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    cellEdit.activate();
+    memory.activate();
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: "row-1",
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: row!,
+          expectedVersion: 1n,
+          base: "base",
+          mine: "mine",
+        },
+      ]),
+    ).toBe(true);
+    row = Object.freeze({ id: "row-1", value: "server", revision: 2n });
+    cellEdit.reconcileSourceRows(new Set(["row-1"]));
+    expect(memory.openConflictReview()).toBe(true);
+    const id = cellEdit.getDraftReviewSnapshot()[0]!.id;
+    expect(memory.resolveConflictRows([id], "server")).toBe(true);
+
+    row = undefined;
+    cellEdit.reconcileSourceRows(new Set(["row-1"]));
+    memory.closeConflictReview();
+    expect(memory.getConflictReviewSnapshot().open).toBe(false);
+    expect(memory.getConflictResolutionSnapshot(id)).toMatchObject({ resolution: "server" });
+
+    row = Object.freeze({ id: "row-1", value: "server", revision: 3n });
+    cellEdit.reconcileSourceRows(new Set(["row-1"]));
+    expect(cellEdit.getActivitySnapshot().conflictCount).toBe(1);
+  });
+
+  it("reconciles only the authoritative subset when an Immediate Server review closes", () => {
+    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    const rows = new Map<string, Row>([
+      ["row-1", Object.freeze({ id: "row-1", value: "base-1", revision: 1n })],
+      ["row-2", Object.freeze({ id: "row-2", value: "base-2", revision: 1n })],
+    ]);
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rows.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    cellEdit.activate();
+    memory.activate();
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    const [firstRow, secondRow] = [...rows.values()] as [Row, Row];
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: firstRow.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: firstRow,
+          expectedVersion: firstRow.revision,
+          base: firstRow.value,
+          mine: `mine-${firstRow.id}`,
+        },
+        {
+          rowId: secondRow.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: secondRow,
+          expectedVersion: secondRow.revision,
+          base: secondRow.value,
+          mine: `mine-${secondRow.id}`,
+        },
+      ]),
+    ).toBe(true);
+    rows.set("row-1", Object.freeze({ id: "row-1", value: "server-1", revision: 2n }));
+    rows.set("row-2", Object.freeze({ id: "row-2", value: "server-2", revision: 2n }));
+    cellEdit.reconcileSourceRows(undefined);
+    expect(memory.openConflictReview()).toBe(true);
+    const idsByRow = new Map(
+      cellEdit.getDraftReviewSnapshot().map((row) => [row.rowId, row.id] as const),
+    );
+    const firstId = idsByRow.get("row-1")!;
+    const secondId = idsByRow.get("row-2")!;
+    expect(memory.resolveConflictRows([firstId, secondId], "server")).toBe(true);
+
+    rows.delete("row-2");
+    cellEdit.reconcileSourceRows(new Set(["row-2"]));
+    memory.closeConflictReview();
+
+    expect(memory.getConflictReviewSnapshot().open).toBe(false);
+    expect(memory.getConflictResolutionSnapshot(firstId)).toBeUndefined();
+    expect(memory.getConflictResolutionSnapshot(secondId)).toMatchObject({
+      resolution: "server",
+    });
+    expect(cellEdit.getActivitySnapshot().conflictCount).toBe(1);
+
+    rows.set("row-2", Object.freeze({ id: "row-2", value: "server-2", revision: 3n }));
+    cellEdit.reconcileSourceRows(new Set(["row-2"]));
+    expect(memory.getConflictResolutionSnapshot(secondId)).toBeUndefined();
+    expect(cellEdit.getActivitySnapshot().conflictCount).toBe(2);
+  });
+
   it.each(["mine", "server"] as const)(
     "reconciles an undone %s resolution after the source returns to the safe base",
     (resolution) => {

@@ -145,7 +145,10 @@ export class BrunoTableRowSelectionRuntime {
   };
 
   public readonly clear = (): number => {
-    if (this.selectedRowIds.size === 0) return 0;
+    if (this.selectedRowIds.size === 0) {
+      this.anchorRowId = undefined;
+      return 0;
+    }
     const changed = new Set(this.selectedRowIds);
     const count = this.selectedRowIds.size;
     this.selectedRowIds.clear();

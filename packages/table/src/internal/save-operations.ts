@@ -92,8 +92,10 @@ export class BrunoTableSaveOperationRuntime {
     });
     this.unregisterImmediate = this.editMemory.registerImmediateSaveCommand(
       (changes: BrunoTableCellEditChangeGesture) => {
-        const changeSet = this.cellEdit.createImmediateSaveChangeSet(changes);
-        return changeSet !== undefined && this.startOperation("immediate", changeSet);
+        const preparation = this.cellEdit.createImmediateSaveChangeSet(changes);
+        if (preparation.kind === "reconciled") return "preflight-reconciled";
+        if (preparation.kind === "rejected") return "rejected";
+        return this.startOperation("immediate", preparation.changeSet) ? "admitted" : "rejected";
       },
     );
     return this.dispose;

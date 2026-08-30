@@ -3118,7 +3118,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           }
         }}
         style={{
-          maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+          maxHeight: `min(var(--bruno-table-review-viewport-max-height, ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px), ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px)`,
           overflow: "auto",
           position: "relative",
         }}
@@ -6358,7 +6358,7 @@ const LoadingRows = memo(function LoadingRows({
               role="grid"
               tabIndex={0}
               style={{
-                maxHeight: BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+                maxHeight: `min(var(--bruno-table-review-viewport-max-height, ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px), ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px)`,
                 overflow: "auto",
                 position: "relative",
               }}

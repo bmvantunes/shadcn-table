@@ -28,6 +28,115 @@ afterEach(() => {
 });
 
 describe("BrunoTableSaveOperationRuntime", () => {
+  it("rejects a scalar Immediate admission when its second Row Version read fails", () => {
+    let immediateVersionReads = 0;
+    let editMemory!: BrunoTableEditMemoryRuntime;
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => {
+        immediateVersionReads += 1;
+        if (immediateVersionReads === 3) throw new Error("version unavailable");
+        return (candidate as Row).revision;
+      },
+      onCommit: (change) => editMemory.requestImmediateSave([change]),
+      onCommitGesture: (changes) => editMemory.requestImmediateSave(changes),
+    });
+    editMemory = new BrunoTableEditMemoryRuntime();
+    const saveOperations = new BrunoTableSaveOperationRuntime(cellEdit, editMemory);
+    const handler = vi.fn(() => Promise.resolve());
+    const traversalInvalidation = vi.fn();
+    const draftObservations: boolean[] = [];
+    cellEdit.activate();
+    editMemory.activate();
+    disposers.push(
+      () => cellEdit.dispose(),
+      () => editMemory.dispose(),
+      saveOperations.activate(),
+      editMemory.connectCellEdit(cellEdit),
+      saveOperations.setHandler(handler),
+      cellEdit.subscribeTraversalInvalidation(traversalInvalidation),
+      cellEdit.subscribeCell(row.id, "COL_ID_VALUE", () => {
+        draftObservations.push(cellEdit.getDraftSnapshot(row.id, "COL_ID_VALUE") !== undefined);
+      }),
+    );
+
+    expect(cellEdit.start(row.id, "COL_ID_VALUE")).toBe(true);
+    cellEdit.updateActiveCandidate("mine", false);
+
+    expect(cellEdit.commit("mine")).toBe(false);
+    expect(cellEdit.getSessionSnapshot()).toMatchObject({
+      kind: "editing",
+      rowId: row.id,
+      columnId: "COL_ID_VALUE",
+    });
+    expect(cellEdit.getActiveCandidateSnapshot()).toEqual({
+      kind: "scalar",
+      rawText: "mine",
+      nativeInvalid: false,
+    });
+    expect(cellEdit.getDraftSnapshot(row.id, "COL_ID_VALUE")).toBeUndefined();
+    expect(draftObservations.every((hasDraft) => !hasDraft)).toBe(true);
+    expect(immediateVersionReads).toBe(3);
+    expect(traversalInvalidation).not.toHaveBeenCalled();
+    expect(saveOperations.getRetainedOperationCount()).toBe(0);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("rejects an Immediate gesture when its second Row Version read fails", () => {
+    let immediateVersionReads = 0;
+    let editMemory!: BrunoTableEditMemoryRuntime;
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => {
+        immediateVersionReads += 1;
+        if (immediateVersionReads === 2) throw new Error("version unavailable");
+        return (candidate as Row).revision;
+      },
+      onCommit: (change) => editMemory.requestImmediateSave([change]),
+      onCommitGesture: (changes) => editMemory.requestImmediateSave(changes),
+    });
+    editMemory = new BrunoTableEditMemoryRuntime();
+    const saveOperations = new BrunoTableSaveOperationRuntime(cellEdit, editMemory);
+    const handler = vi.fn(() => Promise.resolve());
+    const traversalInvalidation = vi.fn();
+    const draftObservations: boolean[] = [];
+    cellEdit.activate();
+    editMemory.activate();
+    disposers.push(
+      () => cellEdit.dispose(),
+      () => editMemory.dispose(),
+      saveOperations.activate(),
+      editMemory.connectCellEdit(cellEdit),
+      saveOperations.setHandler(handler),
+      cellEdit.subscribeTraversalInvalidation(traversalInvalidation),
+      cellEdit.subscribeCell(row.id, "COL_ID_VALUE", () => {
+        draftObservations.push(cellEdit.getDraftSnapshot(row.id, "COL_ID_VALUE") !== undefined);
+      }),
+    );
+
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: row,
+          expectedVersion: row.revision,
+          base: row.value,
+          mine: "mine",
+        },
+      ]),
+    ).toBe(false);
+    expect(cellEdit.getDraftSnapshot(row.id, "COL_ID_VALUE")).toBeUndefined();
+    expect(draftObservations.every((hasDraft) => !hasDraft)).toBe(true);
+    expect(immediateVersionReads).toBe(2);
+    expect(traversalInvalidation).not.toHaveBeenCalled();
+    expect(saveOperations.getRetainedOperationCount()).toBe(0);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("releases Conflict Review saving state when Batch admission fails", () => {
     let currentRow: Row = row;
     const cellEdit = new BrunoTableCellEditRuntime({
