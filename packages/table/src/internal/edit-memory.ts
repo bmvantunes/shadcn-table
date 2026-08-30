@@ -401,7 +401,7 @@ export class BrunoTableEditMemoryRuntime {
   >(Object.freeze([]));
   private cellEdit: BrunoTableCellEditRuntime | undefined;
   private saveCommand: (() => void) | undefined;
-  private immediateSaveCommand: ((changes: BrunoTableCellEditChangeGesture) => void) | undefined;
+  private immediateSaveCommand: ((changes: BrunoTableCellEditChangeGesture) => boolean) | undefined;
   private conflictReviewCommand: (() => void) | undefined;
   private gridFocusCommand: (() => void) | undefined;
   private gridOwnerDocument: (() => Document | undefined) | undefined;
@@ -419,7 +419,8 @@ export class BrunoTableEditMemoryRuntime {
   private saveOperationCapacityAvailable = true;
   private savePreflightAvailable = true;
   private conflictReviewSaveRequested = false;
-  private conflictReviewSaveOperationId: string | undefined;
+  private readonly conflictReviewSaveOperationIds = new Set<string>();
+  private conflictReviewSaveRejected = false;
   private readonly conflictReviewSourcesById = new Map<
     string,
     BrunoTableCellEditDraftReviewSourceRow
@@ -446,7 +447,8 @@ export class BrunoTableEditMemoryRuntime {
     this.saveOperationCapacityAvailable = true;
     this.savePreflightAvailable = true;
     this.conflictReviewSaveRequested = false;
-    this.conflictReviewSaveOperationId = undefined;
+    this.conflictReviewSaveOperationIds.clear();
+    this.conflictReviewSaveRejected = false;
     this.saveCommand = undefined;
     this.immediateSaveCommand = undefined;
     this.conflictReviewCommand = undefined;
@@ -506,8 +508,16 @@ export class BrunoTableEditMemoryRuntime {
     };
     reconcile();
     const unsubscribe = runtime.subscribeActivity(reconcile);
+    const unsubscribeRetainedResolutions = runtime.subscribeRetainedResolutionPublication(() => {
+      if (this.cellEdit === runtime) {
+        this.reconcileRecordedConflictResolutions(
+          runtime.getRetainedResolutionPublicationSnapshot(),
+        );
+      }
+    });
     return () => {
       unsubscribe();
+      unsubscribeRetainedResolutions();
       for (const unregister of this.unregisterResetControls.values()) unregister();
       this.unregisterResetControls.clear();
       this.unsubscribeDraftReview?.();
@@ -720,7 +730,7 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly registerImmediateSaveCommand = (
-    command: (changes: BrunoTableCellEditChangeGesture) => void,
+    command: (changes: BrunoTableCellEditChangeGesture) => boolean,
   ): (() => void) => {
     this.immediateSaveCommand = command;
     return () => {
@@ -729,17 +739,15 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly requestImmediateSave = (changes: BrunoTableCellEditChangeGesture): boolean => {
-    if (
-      !this.saveOperationCapacityAvailable ||
-      !this.savePreflightAvailable ||
-      this.modeStore.get().mode !== "immediate" ||
-      this.immediateSaveCommand === undefined
-    ) {
-      return false;
-    }
-    this.immediateSaveCommand(changes);
-    return true;
+    if (!this.canRequestImmediateSave()) return false;
+    return this.immediateSaveCommand?.(changes) === true;
   };
+
+  private readonly canRequestImmediateSave = (): boolean =>
+    this.saveOperationCapacityAvailable &&
+    this.savePreflightAvailable &&
+    this.modeStore.get().mode === "immediate" &&
+    this.immediateSaveCommand !== undefined;
 
   public readonly setSaveOperationCapacityAvailable = (available: boolean): void => {
     if (this.saveOperationCapacityAvailable === available) return;
@@ -798,7 +806,10 @@ export class BrunoTableEditMemoryRuntime {
     this.activeSaveWorkCount += 1;
     if (operationId !== undefined && this.conflictReviewSaveRequested) {
       this.conflictReviewSaveRequested = false;
-      this.conflictReviewSaveOperationId = operationId;
+      if (this.conflictReviewSaveOperationIds.size === 0) {
+        this.conflictReviewSaveRejected = false;
+      }
+      this.conflictReviewSaveOperationIds.add(operationId);
       this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: true });
     }
     if (operationId !== undefined) {
@@ -824,10 +835,12 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly rejectSaveWorkAdmission = (operationId: string): void => {
-    if (this.conflictReviewSaveOperationId !== operationId) return;
-    this.conflictReviewSaveOperationId = undefined;
+    if (!this.conflictReviewSaveOperationIds.delete(operationId)) return;
     this.conflictReviewSaveRequested = true;
-    this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
+    this.actor.send({
+      type: "SET_CONFLICT_REVIEW_SAVING",
+      active: this.conflictReviewSaveOperationIds.size > 0,
+    });
   };
 
   public readonly beginRetainedSaveOperation = (): (() => void) => {
@@ -911,8 +924,7 @@ export class BrunoTableEditMemoryRuntime {
     const previous = this.resetReviewStore.get();
     if (!previous.open) return;
     this.actor.send({ type: "CLOSE_RESET_REVIEW" });
-    this.unsubscribeDraftReview?.();
-    this.unsubscribeDraftReview = undefined;
+    this.releaseDraftReviewSubscriptionWhenClosed();
     this.resetReviewRowsStore.setState(() => Object.freeze([]));
     if (!this.canResetStore.get()) this.scheduleGridFocus();
   };
@@ -1002,6 +1014,7 @@ export class BrunoTableEditMemoryRuntime {
     const [first, ...rest] = records;
     const immediateSaveExpected =
       this.modeStore.get().mode === "immediate" && resolution === "mine";
+    if (immediateSaveExpected && !this.canRequestImmediateSave()) return false;
     if (immediateSaveExpected) {
       this.conflictReviewSaveRequested = true;
     }
@@ -1045,6 +1058,24 @@ export class BrunoTableEditMemoryRuntime {
       return false;
     }
     if (this.cellEditActivity.draftCount === 0) {
+      const retainedServerResolutionIds = [
+        ...this.actor.getSnapshot().context.conflictReviewResolutions.values(),
+      ].flatMap((resolution) => (resolution.resolution === "server" ? [resolution.id] : []));
+      if (
+        this.actor.getSnapshot().context.mode === "immediate" &&
+        retainedServerResolutionIds.length > 0
+      ) {
+        const runtime = this.cellEdit;
+        if (runtime === undefined) return false;
+        for (const id of retainedServerResolutionIds) {
+          this.conflictResolutionInProgressIds.add(id);
+        }
+        const finalized = runtime.finalizeRetainedConflictResolutions(retainedServerResolutionIds);
+        for (const id of retainedServerResolutionIds) {
+          this.conflictResolutionInProgressIds.delete(id);
+        }
+        if (!finalized) return false;
+      }
       this.clearRecordedConflictResolutions();
       this.closeConflictReview();
       return true;
@@ -1062,18 +1093,21 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly resolveConflictReviewSave = (operationId: string): void => {
-    if (this.conflictReviewSaveOperationId !== operationId) return;
-    this.conflictReviewSaveOperationId = undefined;
+    if (!this.conflictReviewSaveOperationIds.delete(operationId)) return;
+    if (this.conflictReviewSaveOperationIds.size > 0) return;
     this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
+    if (this.conflictReviewSaveRejected) return;
     this.clearRecordedConflictResolutions();
-    this.closeConflictReview();
+    if (this.cellEditActivity.conflictCount === 0) this.closeConflictReview();
   };
 
   public readonly rejectConflictReviewSave = (operationId: string): void => {
-    if (this.conflictReviewSaveOperationId === operationId) {
-      this.conflictReviewSaveOperationId = undefined;
-      this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
-    }
+    if (!this.conflictReviewSaveOperationIds.delete(operationId)) return;
+    this.conflictReviewSaveRejected = true;
+    this.actor.send({
+      type: "SET_CONFLICT_REVIEW_SAVING",
+      active: this.conflictReviewSaveOperationIds.size > 0,
+    });
   };
 
   public readonly getBlockedReviewSnapshot = (): BrunoTableSparseEditReviewSnapshot =>
@@ -1343,41 +1377,7 @@ export class BrunoTableEditMemoryRuntime {
     if (this.cellEdit === undefined || this.unsubscribeDraftReview === undefined) return;
     const runtime = this.cellEdit;
     const rows = runtime.getDraftReviewSourceSnapshot();
-    let context = this.actor.getSnapshot().context;
-    const invalidResolutionIds = [...context.conflictReviewResolutions].flatMap(
-      ([id, resolution]) =>
-        runtime.isDraftConflictEvidenceCurrent(
-          id,
-          resolution.resolution,
-          resolution.reviewedServer,
-          resolution.reviewedServerVersion,
-        )
-          ? []
-          : [id],
-    );
-    if (invalidResolutionIds.length > 0) {
-      const sourceInvalidatedIds = invalidResolutionIds.filter((id) => {
-        const resolution = context.conflictReviewResolutions.get(id);
-        return (
-          resolution === undefined ||
-          !runtime.isConflictResolutionLocallyUndone(
-            id,
-            resolution.reviewedServer,
-            resolution.reviewedServerVersion,
-          )
-        );
-      });
-      if (sourceInvalidatedIds.length > 0) {
-        batch(() => {
-          runtime.reopenResolvedConflicts(sourceInvalidatedIds);
-          this.actor.send({
-            type: "INVALIDATE_CONFLICT_RESOLUTIONS",
-            ids: Object.freeze(sourceInvalidatedIds),
-          });
-        });
-        context = this.actor.getSnapshot().context;
-      }
-    }
+    const context = this.actor.getSnapshot().context;
     for (const [id, store] of this.conflictResolutionStores) {
       const resolution = this.getProjectedConflictResolution(id);
       if (store.get() !== resolution) store.setState(() => resolution);
@@ -1411,14 +1411,58 @@ export class BrunoTableEditMemoryRuntime {
     }
   };
 
+  private readonly reconcileRecordedConflictResolutions = (
+    candidateIds: ReadonlySet<string>,
+  ): void => {
+    const runtime = this.cellEdit;
+    if (runtime === undefined) return;
+    let context = this.actor.getSnapshot().context;
+    const invalidResolutionIds = [...candidateIds].flatMap((id) => {
+      if (this.conflictResolutionInProgressIds.has(id)) return [];
+      const resolution = context.conflictReviewResolutions.get(id);
+      return resolution !== undefined &&
+        runtime.isDraftConflictEvidenceCurrent(
+          id,
+          resolution.resolution,
+          resolution.reviewedServer,
+          resolution.reviewedServerVersion,
+        )
+        ? []
+        : [id];
+    });
+    if (invalidResolutionIds.length > 0) {
+      const sourceInvalidatedIds = invalidResolutionIds.filter((id) => {
+        const resolution = context.conflictReviewResolutions.get(id);
+        return (
+          resolution === undefined ||
+          (!runtime.isConflictResolutionLocallyUndone(
+            id,
+            resolution.reviewedServer,
+            resolution.reviewedServerVersion,
+          ) &&
+            !runtime.isConflictResolutionTemporarilyDiscarded(id))
+        );
+      });
+      if (sourceInvalidatedIds.length > 0) {
+        batch(() => {
+          runtime.reopenResolvedConflicts(sourceInvalidatedIds);
+          this.actor.send({
+            type: "INVALIDATE_CONFLICT_RESOLUTIONS",
+            ids: Object.freeze(sourceInvalidatedIds),
+          });
+        });
+        context = this.actor.getSnapshot().context;
+      }
+    }
+    for (const [id, store] of this.conflictResolutionStores) {
+      const resolution = this.getProjectedConflictResolution(id);
+      if (store.get() !== resolution) store.setState(() => resolution);
+    }
+  };
+
   private readonly releaseDraftReviewSubscriptionWhenClosed = (): void => {
     const context = this.actor.getSnapshot().context;
-    if (
-      context.resetReviewOpen ||
-      context.conflictReviewOpen ||
-      context.blockedReviewOpen ||
-      context.conflictReviewResolutions.size > 0
-    ) {
+    if (context.resetReviewOpen || context.conflictReviewOpen || context.blockedReviewOpen) {
       return;
     }
     this.unsubscribeDraftReview?.();
@@ -1478,14 +1522,14 @@ export class BrunoTableEditMemoryRuntime {
         this.reviewFocusFrame = undefined;
         this.reviewFocusFrameWindow = undefined;
         if (target?.isConnected) target.focus();
-        else {
-          const fallback =
-            fallbackSelector === undefined
-              ? undefined
-              : root?.querySelector<HTMLElement>(fallbackSelector);
-          if (fallback?.isConnected) fallback.focus();
-          else this.gridFocusCommand?.();
-        }
+        if (target !== undefined && target.ownerDocument.activeElement === target) return;
+        const fallback =
+          fallbackSelector === undefined
+            ? undefined
+            : root?.querySelector<HTMLElement>(fallbackSelector);
+        if (fallback?.isConnected) fallback.focus();
+        if (fallback != null && fallback.ownerDocument.activeElement === fallback) return;
+        this.gridFocusCommand?.();
       });
     });
   };

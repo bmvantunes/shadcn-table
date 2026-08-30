@@ -152,13 +152,20 @@ const BrunoTableConflictCountStatus = memo(function BrunoTableConflictCountStatu
     runtime.getConflictCountSnapshot,
     runtime.getConflictCountSnapshot,
   );
+  const reviewControlRef = useCallback(
+    (element: HTMLButtonElement | null) =>
+      element === null ? undefined : runtime.registerResetControl(element),
+    [runtime],
+  );
   if (count === 0) return <></>;
   const label = `${String(count)} ${count === 1 ? "conflict" : "conflicts"}`;
   return (
     <>
       {interactive ? (
         <Button
+          data-bruno-cell-edit-reset=""
           data-bruno-table-review-focus="conflict"
+          ref={reviewControlRef}
           size="sm"
           variant="ghost"
           onClick={(event) => runtime.openConflictReview(event.currentTarget)}
@@ -185,13 +192,20 @@ const BrunoTableBlockedCountStatus = memo(function BrunoTableBlockedCountStatus(
     runtime.getBlockedCountSnapshot,
     runtime.getBlockedCountSnapshot,
   );
+  const reviewControlRef = useCallback(
+    (element: HTMLButtonElement | null) =>
+      element === null ? undefined : runtime.registerResetControl(element),
+    [runtime],
+  );
   if (count === 0) return <></>;
   const label = `${String(count)} blocked ${count === 1 ? "change" : "changes"}`;
   return (
     <>
       {interactive ? (
         <Button
+          data-bruno-cell-edit-reset=""
           data-bruno-table-review-focus="blocked"
+          ref={reviewControlRef}
           size="sm"
           variant="ghost"
           onClick={(event) => runtime.openBlockedReview(event.currentTarget)}
@@ -380,8 +394,15 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
       selection.clear();
     }
   };
+  const reviewSurfaceRef = useCallback(
+    (element: HTMLDivElement | null) =>
+      element === null ? undefined : runtime.registerResetControl(element),
+    [runtime],
+  );
   return (
     <AlertDialogContent
+      data-bruno-cell-edit-reset=""
+      ref={reviewSurfaceRef}
       className="max-w-5xl sm:max-w-5xl"
       style={{
         width: "min(64rem, calc(100vw - 2rem))",
@@ -397,7 +418,7 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
           choice so it can be reviewed again.
         </AlertDialogDescription>
       </AlertDialogHeader>
-      <div className="min-h-0 overflow-auto">{renderReview(rows, selection, resolveOne)}</div>
+      <div className="min-h-0 overflow-hidden">{renderReview(rows, selection, resolveOne)}</div>
       <AlertDialogFooter>
         <AlertDialogCancel disabled={snapshot.saving} onClick={runtime.closeConflictReview}>
           Cancel
@@ -522,6 +543,11 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
     runtime.getBlockedReviewRowsSnapshot,
     runtime.getBlockedReviewRowsSnapshot,
   );
+  const saveWork = useSyncExternalStore(
+    runtime.subscribeSaveWork,
+    runtime.getSaveWorkSnapshot,
+    runtime.getSaveWorkSnapshot,
+  );
   useEffect(() => {
     if (rows.length === 0) selection.clear();
   }, [rows, selection]);
@@ -531,10 +557,24 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
     selection.getHeaderSnapshot,
   );
   const selectedIds = selectionHeader.selectedCount === 0 ? [] : selection.getSelectedRowIds();
+  const saveWorkActive =
+    saveWork.pendingBatchCount > 0 ||
+    saveWork.awaitingBatchCount > 0 ||
+    saveWork.pendingImmediateCount > 0 ||
+    saveWork.awaitingImmediateCount > 0;
   const selectedBlockedChangesDiscardable =
-    selectedIds.length > 0 && selectedIds.every(runtime.isBlockedChangeDiscardable);
+    !saveWorkActive &&
+    selectedIds.length > 0 &&
+    selectedIds.every(runtime.isBlockedChangeDiscardable);
+  const reviewSurfaceRef = useCallback(
+    (element: HTMLDivElement | null) =>
+      element === null ? undefined : runtime.registerResetControl(element),
+    [runtime],
+  );
   return (
     <AlertDialogContent
+      data-bruno-cell-edit-reset=""
+      ref={reviewSurfaceRef}
       className="max-w-5xl sm:max-w-5xl"
       style={{
         width: "min(64rem, calc(100vw - 2rem))",
@@ -549,7 +589,7 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
           These changes cannot currently be saved. Select only the changes you want to discard.
         </AlertDialogDescription>
       </AlertDialogHeader>
-      <div className="min-h-0 overflow-auto">
+      <div className="min-h-0 overflow-hidden">
         {renderReview(rows, selection)}
         {rows.length === 0 ? <p role="status">All blocked changes are current.</p> : null}
       </div>

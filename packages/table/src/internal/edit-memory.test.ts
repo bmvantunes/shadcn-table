@@ -11,6 +11,125 @@ afterEach(() => {
 });
 
 describe("BrunoTable Edit Memory", () => {
+  it("accepts a fresh conflict choice after retained evidence is invalidated", () => {
+    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    cellEdit.activate();
+    memory.activate();
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    expect(memory.requestMode("batch")).toBe(true);
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: row,
+          expectedVersion: row.revision,
+          base: row.value,
+          mine: "mine",
+          conflict: { server: "server-1", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    row = Object.freeze({ ...row, value: "server-1", revision: 2n });
+    cellEdit.reconcileSourceRows(new Set([row.id]));
+    expect(memory.openConflictReview()).toBe(true);
+    const id = cellEdit.getDraftReviewSnapshot()[0]?.id;
+    expect(id).toBeDefined();
+    expect(memory.resolveConflictRows([id!], "mine")).toBe(true);
+    expect(memory.getConflictResolutionSnapshot(id!)).toMatchObject({ resolution: "mine" });
+
+    row = Object.freeze({ ...row, value: "server-2" });
+    cellEdit.reconcileSourceRows(new Set([row.id]));
+    expect(memory.getConflictResolutionSnapshot(id!)).toBeUndefined();
+    expect(memory.resolveConflictRows([id!], "mine")).toBe(true);
+    expect(memory.getConflictResolutionSnapshot(id!)).toMatchObject({ resolution: "mine" });
+  });
+
+  it.each(["mine", "server"] as const)(
+    "reconciles an undone %s resolution after the source returns to the safe base",
+    (resolution) => {
+      type Row = Readonly<{
+        readonly id: string;
+        readonly value: string;
+        readonly revision: bigint;
+      }>;
+      let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
+      const columns = compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType: "text",
+          isEditable: true,
+        },
+      ]);
+      const cellEdit = new BrunoTableCellEditRuntime({
+        columns,
+        getRow: () => row,
+        getRowVersion: (candidate) => (candidate as Row).revision,
+      });
+      const memory = new BrunoTableEditMemoryRuntime();
+      cellEdit.activate();
+      memory.activate();
+      disposers.push(
+        memory.connectCellEdit(cellEdit),
+        () => memory.dispose(),
+        () => cellEdit.dispose(),
+      );
+      expect(memory.requestMode("batch")).toBe(true);
+      expect(
+        cellEdit.applyAcceptedDraftGesture([
+          {
+            rowId: row.id,
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            baseRow: row,
+            expectedVersion: row.revision,
+            base: row.value,
+            mine: "mine",
+          },
+        ]),
+      ).toBe(true);
+      row = Object.freeze({ ...row, value: "server", revision: 2n });
+      cellEdit.reconcileSourceRows(new Set([row.id]));
+      expect(memory.openConflictReview()).toBe(true);
+      const id = cellEdit.getDraftReviewSnapshot()[0]!.id;
+      expect(memory.resolveConflictRows([id], resolution)).toBe(true);
+      memory.closeConflictReview();
+      expect(memory.undo()).toBe(true);
+      expect(cellEdit.getActivitySnapshot().conflictCount).toBe(1);
+
+      row = Object.freeze({ ...row, value: "base", revision: 3n });
+      cellEdit.reconcileSourceRows(new Set([row.id]));
+      expect(cellEdit.getActivitySnapshot()).toMatchObject({
+        draftCount: 1,
+        conflictCount: 0,
+        redoCount: 0,
+      });
+    },
+  );
+
   it("releases the narrow draft-review subscription when either sparse review closes", () => {
     vi.stubGlobal(
       "requestAnimationFrame",

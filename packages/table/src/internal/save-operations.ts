@@ -93,7 +93,7 @@ export class BrunoTableSaveOperationRuntime {
     this.unregisterImmediate = this.editMemory.registerImmediateSaveCommand(
       (changes: BrunoTableCellEditChangeGesture) => {
         const changeSet = this.cellEdit.createImmediateSaveChangeSet(changes);
-        if (changeSet !== undefined) this.startOperation("immediate", changeSet);
+        return changeSet !== undefined && this.startOperation("immediate", changeSet);
       },
     );
     return this.dispose;
@@ -137,9 +137,9 @@ export class BrunoTableSaveOperationRuntime {
   private readonly startOperation = (
     kind: SaveOperationKind,
     changeSet: BrunoTableCellEditSaveChangeSet,
-  ): void => {
+  ): boolean => {
     if (!this.active || this.getCapacityOperationCount() >= BRUNO_TABLE_SAVE_OPERATION_LIMIT) {
-      return;
+      return false;
     }
     const operationId = `${kind}:${String((this.sequence += 1))}`;
     let releaseSaveWork = (): void => undefined;
@@ -152,7 +152,7 @@ export class BrunoTableSaveOperationRuntime {
         this.editMemory.rejectSaveWorkAdmission(operationId);
       }
     });
-    if (!admitted) return;
+    if (!admitted) return false;
     const operation: SaveOperationRecord = {
       operationId,
       kind,
@@ -172,7 +172,7 @@ export class BrunoTableSaveOperationRuntime {
         Promise.reject(new Error("BrunoTable save operation is unavailable."));
     } catch (error) {
       this.rejectOperation(operation, error);
-      return;
+      return true;
     }
     let then: unknown;
     try {
@@ -182,14 +182,14 @@ export class BrunoTableSaveOperationRuntime {
           : undefined;
     } catch (error) {
       this.rejectOperation(operation, error);
-      return;
+      return true;
     }
     if (typeof then !== "function") {
       this.rejectOperation(
         operation,
         new TypeError("BrunoTable onSaveEdits must return a PromiseLike<void>."),
       );
-      return;
+      return true;
     }
     const promise = new Promise<void>((resolve, reject) => {
       try {
@@ -222,6 +222,7 @@ export class BrunoTableSaveOperationRuntime {
         }
       },
     );
+    return true;
   };
 
   private readonly resolveOperation = (operation: SaveOperationRecord): void => {

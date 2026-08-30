@@ -457,7 +457,7 @@ function BrunoTableClientInstance<
           rowPipeline={BrunoTableClientRowPipeline}
           rowPipelineAdapter={rowPipelineAdapter}
           rowSelection={rowSelection}
-          cellRange={cellRange}
+          cellRange={reviewRowSelection === undefined ? cellRange : undefined}
           cellEdit={cellEdit}
           editMemory={editMemory}
           renderResetReview={renderResetReview}
