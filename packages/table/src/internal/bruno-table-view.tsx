@@ -5545,6 +5545,8 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const initialDraftReviewSource = isBrunoTableCellEditDraftReviewSourceRow(initialRow)
     ? initialRow
     : undefined;
+  // Review rows intentionally skip the grid's row-cell subscription: their reactive value and
+  // presentation snapshots arrive through subscribeDraftReview, avoiding duplicate listeners.
   const rowAware =
     initialDraftReviewSource !== undefined ||
     cellPresentationUsesRawRow(effectivePresentationColumn);

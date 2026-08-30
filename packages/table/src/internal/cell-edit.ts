@@ -13,6 +13,18 @@ import {
 type Listener = () => void;
 const brunoTableCellEditDraftReviewSources = new WeakSet<object>();
 
+export type BrunoTableCellEditRowPatch = Readonly<Record<string, unknown>>;
+/**
+ * Projects presentation-only draft evidence onto the current authoritative Row. A changed source
+ * or patch must return a fresh immutable Row reference; identical inputs are cached by the runtime.
+ */
+export type BrunoTableCellEditRowProjector = (
+  input: Readonly<{
+    readonly row: object;
+    readonly patch: BrunoTableCellEditRowPatch;
+  }>,
+) => unknown;
+
 export type BrunoTableCellEditChange = Readonly<{
   readonly rowId: string;
   readonly columnId: string;
@@ -132,6 +144,11 @@ export type BrunoTableCellEditDraftReviewSourceRow = Readonly<{
   readonly subscribe: (listener: Listener) => () => void;
 }>;
 
+export type BrunoTableCellEditDraftReviewClassificationSnapshot = Readonly<{
+  readonly conflictIds: ReadonlySet<string>;
+  readonly blockedIds: ReadonlySet<string>;
+}>;
+
 export type BrunoTableCellEditConflictResolution = Readonly<{
   readonly id: string;
   readonly resolution: "mine" | "server";
@@ -152,6 +169,49 @@ type DraftEntry = BrunoTableCellEditDraftSnapshot &
     readonly blockedReason?: string;
     readonly presentationColumn?: CompiledFieldColumn;
   }>;
+
+type DraftReviewProjectedRow = Readonly<{
+  readonly available: boolean;
+  readonly row: object | undefined;
+  readonly serverCandidate: unknown;
+}>;
+
+type DraftReviewProjectedRowCacheEntry = Readonly<{
+  readonly patch: BrunoTableCellEditRowPatch;
+  readonly projectorEpoch: number;
+  readonly projectedRow: object;
+  readonly sourceRevision: unknown;
+  readonly sourceRow: object;
+}>;
+
+function sameEditRowPatch(
+  left: BrunoTableCellEditRowPatch,
+  right: BrunoTableCellEditRowPatch,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) => Object.hasOwn(right, key) && Object.is(left[key as string], right[key as string]),
+    )
+  );
+}
+
+function sameDraftReviewProjectionInput(
+  entry: DraftReviewProjectedRowCacheEntry,
+  sourceRow: object,
+  sourceRevision: unknown,
+  projectorEpoch: number,
+  patch: BrunoTableCellEditRowPatch,
+): boolean {
+  return (
+    entry.projectorEpoch === projectorEpoch &&
+    entry.sourceRow === sourceRow &&
+    Object.is(entry.sourceRevision, sourceRevision) &&
+    sameEditRowPatch(entry.patch, patch)
+  );
+}
 
 type DraftPatch =
   | Readonly<{ readonly kind: "remove"; readonly cellKey: string; readonly value: unknown }>
@@ -355,6 +415,18 @@ function* flattenRejectedEvidence(
   evidenceByRow: RejectedOperationEvidence,
 ): Generator<AcceptedOverlayEntry> {
   for (const evidence of evidenceByRow.values()) yield* evidence;
+}
+
+function* iterateDraftEvidenceKeysByRowId(
+  index: ReadonlyMap<string, string | ReadonlySet<string>>,
+  rowIds: Iterable<string>,
+): Generator<string> {
+  for (const rowId of rowIds) {
+    const rowKeys = index.get(rowId);
+    if (rowKeys === undefined) continue;
+    if (typeof rowKeys === "string") yield rowKeys;
+    else yield* rowKeys;
+  }
 }
 
 function readCanonicalSourceValueFromRawRow(
@@ -1423,6 +1495,11 @@ const IDLE_ACTIVITY: BrunoTableCellEditActivitySnapshot = Object.freeze({
   validationCount: 0,
   conflictCount: 0,
 });
+const EMPTY_DRAFT_REVIEW_CLASSIFICATION: BrunoTableCellEditDraftReviewClassificationSnapshot =
+  Object.freeze({
+    conflictIds: new Set<string>(),
+    blockedIds: new Set<string>(),
+  });
 const BRUNO_TABLE_BATCH_HISTORY_LIMIT = 100;
 type ActiveCandidateSnapshot =
   | Readonly<{ readonly kind: "scalar"; readonly rawText: string; readonly nativeInvalid: boolean }>
@@ -1441,6 +1518,17 @@ export class BrunoTableCellEditRuntime {
     | ((rowId: string, columnId: string) => CanonicalSourceValue)
     | undefined;
   private getRowVersion: ((row: object) => unknown) | undefined;
+  private projectEditRow: BrunoTableCellEditRowProjector | undefined;
+  private getProjectedRowId: ((row: object) => string) | undefined;
+  private editRowProjectorEpoch = 0;
+  private readonly draftReviewProjectedRowsByRowId = new Map<
+    string,
+    DraftReviewProjectedRowCacheEntry
+  >();
+  private draftReviewProjectionHistoryByRowId = new Map<
+    string,
+    DraftReviewProjectedRowCacheEntry
+  >();
   private readonly isSourceAuthoritative: () => boolean;
   private canonicalSourceValueCache = new WeakMap<
     object,
@@ -1471,6 +1559,12 @@ export class BrunoTableCellEditRuntime {
   private readonly draftReviewStore = new Store<readonly BrunoTableCellEditDraftReviewSourceRow[]>(
     Object.freeze([]),
   );
+  private readonly draftReviewClassificationStore =
+    new Store<BrunoTableCellEditDraftReviewClassificationSnapshot>(
+      EMPTY_DRAFT_REVIEW_CLASSIFICATION,
+    );
+  private readonly draftReviewConflictIds = new Set<string>();
+  private readonly draftReviewBlockedIds = new Set<string>();
   private readonly retainedResolutionPublicationStore = new Store<ReadonlySet<string>>(
     new Set<string>(),
   );
@@ -1484,7 +1578,7 @@ export class BrunoTableCellEditRuntime {
   private readonly resolvedDraftReviewLineagesById = new Map<string, object>();
   private readonly resolvedDraftReviewIdsByLineage = new Map<object, string | Set<string>>();
   private readonly pendingReleasedResolutionIds = new Set<string>();
-  private readonly resetControls = new WeakSet<Element>();
+  private readonly editOwnedControls = new WeakSet<Element>();
   private readonly candidateStore = new Store<ActiveCandidateSnapshot>(EMPTY_CANDIDATE);
   private readonly cellStores = new Map<string, Store<BrunoTableCellEditProjection>>();
   private readonly cellSubscriberCounts = new Map<string, number>();
@@ -1571,6 +1665,8 @@ export class BrunoTableCellEditRuntime {
       readonly getRow: (rowId: string) => unknown;
       readonly getCanonicalValue?: (rowId: string, columnId: string) => CanonicalSourceValue;
       readonly getRowVersion?: (row: object) => unknown;
+      readonly getRowId?: (row: object) => string;
+      readonly projectEditRow?: BrunoTableCellEditRowProjector;
       readonly isSourceAuthoritative?: () => boolean;
       readonly onCommit?: (
         change: BrunoTableCellEditChange,
@@ -1586,6 +1682,13 @@ export class BrunoTableCellEditRuntime {
     this.getRow = options.getRow;
     this.getCanonicalValue = options.getCanonicalValue;
     this.getRowVersion = options.getRowVersion;
+    this.getProjectedRowId = options.getRowId;
+    this.projectEditRow = options.projectEditRow;
+    if ((this.projectEditRow === undefined) !== (this.getProjectedRowId === undefined)) {
+      throw new TypeError(
+        "BrunoTable Edit Row projection requires both projectEditRow and getRowId.",
+      );
+    }
     this.isSourceAuthoritative = options.isSourceAuthoritative ?? (() => true);
     this.onCommit = options.onCommit ?? (() => undefined);
     this.onCommitGesture = options.onCommitGesture ?? (() => undefined);
@@ -1633,6 +1736,28 @@ export class BrunoTableCellEditRuntime {
     }
     if (this.resolvedDraftReviewIds.size > 0) {
       this.retainedResolutionPublicationStore.setState(() => new Set(this.resolvedDraftReviewIds));
+    }
+  };
+
+  public readonly setEditRowProjector = (
+    projectEditRow: BrunoTableCellEditRowProjector | undefined,
+    getRowId: ((row: object) => string) | undefined,
+  ): void => {
+    if ((projectEditRow === undefined) !== (getRowId === undefined)) {
+      throw new TypeError(
+        "BrunoTable Edit Row projection requires both projectEditRow and getRowId.",
+      );
+    }
+    if (this.projectEditRow === projectEditRow && this.getProjectedRowId === getRowId) return;
+    this.projectEditRow = projectEditRow;
+    this.getProjectedRowId = getRowId;
+    this.editRowProjectorEpoch += 1;
+    this.draftReviewProjectedRowsByRowId.clear();
+    if (this.draftReviewSubscriberCount > 0) {
+      this.publishDraftReview(
+        this.draftStore.get(),
+        new Set([...this.draftStore.get().keys(), ...this.resolvedDraftReviewEntriesById.keys()]),
+      );
     }
   };
 
@@ -2262,12 +2387,22 @@ export class BrunoTableCellEditRuntime {
 
   public readonly getDraftReviewSnapshot = (): readonly BrunoTableCellEditDraftReviewRow[] =>
     this.draftReviewSubscriberCount === 0
-      ? Object.freeze(
-          [...this.draftStore.get()].flatMap(([id, draft]) => {
-            const row = this.createDraftReviewRow(id, draft);
-            return row === undefined ? [] : [row];
-          }),
-        )
+      ? (() => {
+          const drafts = this.draftStore.get();
+          const projectedRows = this.createDraftReviewProjectedRows(drafts, new Set(drafts.keys()));
+          return Object.freeze(
+            [...drafts].flatMap(([id, draft]) => {
+              const row = this.createDraftReviewRow(
+                id,
+                draft,
+                projectedRows.get(draft.rowId)?.serverCandidate,
+                undefined,
+                projectedRows.get(draft.rowId),
+              );
+              return row === undefined ? [] : [row];
+            }),
+          );
+        })()
       : Object.freeze(this.draftReviewStore.get().map((row) => row.getSnapshot()));
 
   public readonly getDraftReviewSourceSnapshot =
@@ -2485,7 +2620,21 @@ export class BrunoTableCellEditRuntime {
 
   public readonly subscribeDraftReview = (listener: Listener): (() => void) => {
     this.draftReviewSubscriberCount += 1;
-    if (this.draftReviewSubscriberCount === 1) this.publishDraftReview(this.draftStore.get());
+    if (this.draftReviewSubscriberCount === 1) {
+      const previousProjectionHistory = new Map(this.draftReviewProjectionHistoryByRowId);
+      try {
+        this.publishDraftReview(this.draftStore.get());
+      } catch (error) {
+        this.draftReviewSubscriberCount = 0;
+        this.draftReviewRowsById.clear();
+        this.draftReviewRowStoresById.clear();
+        this.draftReviewEntriesById.clear();
+        this.draftReviewProjectedRowsByRowId.clear();
+        this.draftReviewProjectionHistoryByRowId = previousProjectionHistory;
+        this.clearDraftReviewClassification();
+        throw error;
+      }
+    }
     const subscription = this.draftReviewStore.subscribe(listener);
     return () => {
       subscription.unsubscribe();
@@ -2495,8 +2644,19 @@ export class BrunoTableCellEditRuntime {
         this.draftReviewRowsById.clear();
         this.draftReviewRowStoresById.clear();
         this.draftReviewEntriesById.clear();
+        this.draftReviewProjectedRowsByRowId.clear();
+        this.clearDraftReviewClassification();
       }
     };
+  };
+
+  public readonly getDraftReviewClassificationSnapshot =
+    (): BrunoTableCellEditDraftReviewClassificationSnapshot =>
+      this.draftReviewClassificationStore.get();
+
+  public readonly subscribeDraftReviewClassification = (listener: Listener): (() => void) => {
+    const subscription = this.draftReviewClassificationStore.subscribe(listener);
+    return () => subscription.unsubscribe();
   };
 
   public readonly subscribeRetainedResolutionPublication = (listener: Listener): (() => void) => {
@@ -2596,15 +2756,15 @@ export class BrunoTableCellEditRuntime {
 
   public readonly getRetainedDraftDependencyCellCount = (): number => this.draftEvidenceKeys.size;
 
-  public readonly registerResetControl = (element: Element): (() => void) => {
-    this.resetControls.add(element);
-    return () => this.resetControls.delete(element);
+  public readonly registerEditOwnedControl = (element: Element): (() => void) => {
+    this.editOwnedControls.add(element);
+    return () => this.editOwnedControls.delete(element);
   };
 
-  public readonly ownsResetControl = (target: EventTarget | null): boolean => {
+  public readonly ownsEditOwnedControl = (target: EventTarget | null): boolean => {
     if (!(target instanceof Element)) return false;
-    const control = target.closest("[data-bruno-cell-edit-reset]");
-    return control !== null && this.resetControls.has(control);
+    const control = target.closest("[data-bruno-cell-edit-owned-control]");
+    return control !== null && this.editOwnedControls.has(control);
   };
 
   public readonly setBatchHistoryEnabled = (enabled: boolean): void => {
@@ -3163,10 +3323,10 @@ export class BrunoTableCellEditRuntime {
 
   public readonly reconcileSourceRows = (changedRowIds: ReadonlySet<string> | undefined): void => {
     if (!this.isSourceAuthoritative()) return;
-    const retainedResolutionCandidates = new Set<string>();
+    let retainedResolutionCandidates: Set<string> | undefined;
     if (changedRowIds === undefined) {
-      for (const id of this.resolvedDraftReviewIds) {
-        retainedResolutionCandidates.add(id);
+      if (this.resolvedDraftReviewIds.size > 0) {
+        retainedResolutionCandidates = new Set(this.resolvedDraftReviewIds);
       }
     } else {
       for (const rowId of changedRowIds) {
@@ -3174,12 +3334,14 @@ export class BrunoTableCellEditRuntime {
         if (rowKeys === undefined) continue;
         if (typeof rowKeys === "string") {
           if (this.resolvedDraftReviewIds.has(rowKeys)) {
-            retainedResolutionCandidates.add(rowKeys);
+            (retainedResolutionCandidates ??= new Set()).add(rowKeys);
           }
           continue;
         }
         for (const id of rowKeys) {
-          if (this.resolvedDraftReviewIds.has(id)) retainedResolutionCandidates.add(id);
+          if (this.resolvedDraftReviewIds.has(id)) {
+            (retainedResolutionCandidates ??= new Set()).add(id);
+          }
         }
       }
     }
@@ -3187,7 +3349,7 @@ export class BrunoTableCellEditRuntime {
     const draftsChanged = this.reconcileDraftRows(changedRowIds, false, submittedConvergedKeys);
     const overlaysChanged = this.reconcileAcceptedOverlays(changedRowIds);
     const rejectedChanged = this.reconcileRejectedOperations(changedRowIds);
-    if (retainedResolutionCandidates.size > 0) {
+    if (retainedResolutionCandidates !== undefined) {
       this.retainedResolutionPublicationStore.setState(() => retainedResolutionCandidates);
     }
     if (draftsChanged || overlaysChanged || rejectedChanged) this.publishTraversalInvalidation();
@@ -3774,6 +3936,9 @@ export class BrunoTableCellEditRuntime {
     this.draftReviewRowsById.clear();
     this.draftReviewRowStoresById.clear();
     this.draftReviewEntriesById.clear();
+    this.draftReviewProjectedRowsByRowId.clear();
+    this.draftReviewProjectionHistoryByRowId.clear();
+    this.clearDraftReviewClassification();
     this.draftReviewSubscriberCount = 0;
     this.activityStore.setState(() => IDLE_ACTIVITY);
     this.candidateStore.setState(() => EMPTY_CANDIDATE);
@@ -4357,16 +4522,25 @@ export class BrunoTableCellEditRuntime {
       this.draftHistoryLocations.clear();
       this.draftHistoryLineagesByCellKey.clear();
       this.soleDraftHistoryLineage = undefined;
+      this.draftReviewProjectedRowsByRowId.clear();
+      this.draftReviewProjectionHistoryByRowId.clear();
       this.pendingDraftHistoryEvidenceKeys.clear();
       this.undoHistoryCount = 0;
       this.redoHistoryCount = 0;
       this.flushReleasedResolutionPublications();
       return;
     }
-    for (const key of affectedKeys) this.syncDraftEvidenceKey(key, next);
-    for (const key of this.pendingDraftHistoryEvidenceKeys) this.syncDraftEvidenceKey(key, next);
+    const resolvedEvidenceCandidates = new Set<string>();
+    for (const key of affectedKeys) {
+      resolvedEvidenceCandidates.add(key);
+      this.syncDraftEvidenceKey(key, next);
+    }
+    for (const key of this.pendingDraftHistoryEvidenceKeys) {
+      resolvedEvidenceCandidates.add(key);
+      this.syncDraftEvidenceKey(key, next);
+    }
     this.pendingDraftHistoryEvidenceKeys.clear();
-    this.releaseOrphanedResolvedDraftReviewEvidence(next);
+    this.releaseOrphanedResolvedDraftReviewEvidence(next, resolvedEvidenceCandidates);
     this.flushReleasedResolutionPublications();
   };
 
@@ -4465,17 +4639,25 @@ export class BrunoTableCellEditRuntime {
             projectionChangedRowIds = changedRowIds;
             if (changedRowIds.size === 0) return changedKeys;
             const expandedKeys = new Set(changedKeys);
-            for (const source of this.draftReviewRowsById.values()) {
-              if (changedRowIds.has(source.rowId)) expandedKeys.add(source.id);
+            for (const id of iterateDraftEvidenceKeysByRowId(
+              this.draftKeysByRowId,
+              changedRowIds,
+            )) {
+              expandedKeys.add(id);
             }
             return expandedKeys;
           })();
+    const projectedRows = this.createDraftReviewProjectedRows(drafts, keys, serverRows);
     let membershipChanged = forceMembershipPublication && keys.size > 0;
+    let classificationChanged = false;
     for (const id of keys) {
       const draft = drafts.get(id) ?? this.resolvedDraftReviewEntriesById.get(id);
       const activeRow =
-        activeKey === id ? this.createActiveCandidateReviewRow(id, draft) : undefined;
+        activeKey === id
+          ? this.createActiveCandidateReviewRow(id, draft, projectedRows.get(draft?.rowId ?? ""))
+          : undefined;
       if (draft === undefined && activeRow === undefined) {
+        classificationChanged = this.syncDraftReviewClassification(id) || classificationChanged;
         if (this.draftReviewRowsById.delete(id)) membershipChanged = true;
         this.draftReviewRowStoresById.delete(id);
         this.draftReviewEntriesById.delete(id);
@@ -4491,22 +4673,16 @@ export class BrunoTableCellEditRuntime {
           : this.createDraftReviewRow(
               id,
               draft,
-              serverRows?.has(id) === true ? serverRows.get(id) : this.getRow(draft.rowId),
+              projectedRows.get(draft.rowId)?.serverCandidate,
               canonicalSources?.get(id),
+              projectedRows.get(draft.rowId),
             ));
       if (nextRow === undefined) {
+        classificationChanged = this.syncDraftReviewClassification(id) || classificationChanged;
         if (this.draftReviewRowsById.delete(id)) membershipChanged = true;
         this.draftReviewRowStoresById.delete(id);
         this.draftReviewEntriesById.delete(id);
         continue;
-      }
-      if (
-        previousRow !== undefined &&
-        ((previousRow.conflict === undefined) !== (nextRow.conflict === undefined) ||
-          (previousRow.blockedReason === undefined) !== (nextRow.blockedReason === undefined) ||
-          this.resolvedDraftReviewLineagesById.has(id))
-      ) {
-        membershipChanged = true;
       }
       if (
         previousRow !== undefined &&
@@ -4551,7 +4727,11 @@ export class BrunoTableCellEditRuntime {
       }
       if (draft === undefined) this.draftReviewEntriesById.delete(id);
       else this.draftReviewEntriesById.set(id, draft);
+      classificationChanged =
+        this.syncDraftReviewClassification(id, nextRow) || classificationChanged;
     }
+    this.releaseUnusedDraftReviewProjectedRows(drafts, projectionChangedRowIds);
+    if (classificationChanged) this.publishDraftReviewClassification();
     if (!membershipChanged) return;
     const rows = Object.freeze(
       [
@@ -4566,11 +4746,295 @@ export class BrunoTableCellEditRuntime {
     this.draftReviewStore.setState(() => rows);
   };
 
+  private readonly syncDraftReviewClassification = (
+    id: string,
+    row?: BrunoTableCellEditDraftReviewRow,
+  ): boolean => {
+    const conflict = row?.conflict !== undefined;
+    const blocked = row?.blockedReason !== undefined;
+    const conflictChanged = conflict
+      ? !this.draftReviewConflictIds.has(id) && (this.draftReviewConflictIds.add(id), true)
+      : this.draftReviewConflictIds.delete(id);
+    const blockedChanged = blocked
+      ? !this.draftReviewBlockedIds.has(id) && (this.draftReviewBlockedIds.add(id), true)
+      : this.draftReviewBlockedIds.delete(id);
+    return conflictChanged || blockedChanged;
+  };
+
+  private readonly publishDraftReviewClassification = (): void => {
+    this.draftReviewClassificationStore.setState(() =>
+      Object.freeze({
+        conflictIds: new Set(this.draftReviewConflictIds),
+        blockedIds: new Set(this.draftReviewBlockedIds),
+      }),
+    );
+  };
+
+  private readonly clearDraftReviewClassification = (): void => {
+    if (this.draftReviewConflictIds.size === 0 && this.draftReviewBlockedIds.size === 0) return;
+    this.draftReviewConflictIds.clear();
+    this.draftReviewBlockedIds.clear();
+    this.draftReviewClassificationStore.setState(() => EMPTY_DRAFT_REVIEW_CLASSIFICATION);
+  };
+
+  private readonly releaseUnusedDraftReviewProjectedRows = (
+    drafts: ReadonlyMap<string, DraftEntry>,
+    affectedRowIds?: ReadonlySet<string>,
+  ): void => {
+    const rowIds =
+      affectedRowIds ??
+      new Set([
+        ...this.draftReviewProjectionHistoryByRowId.keys(),
+        ...this.draftReviewProjectedRowsByRowId.keys(),
+      ]);
+    for (const rowId of rowIds) {
+      let retained = false;
+      const rowKeys = this.draftKeysByRowId.get(rowId);
+      const keys =
+        rowKeys === undefined ? [] : typeof rowKeys === "string" ? [rowKeys] : rowKeys.values();
+      for (const id of keys) {
+        if (drafts.has(id) || this.resolvedDraftReviewEntriesById.has(id)) {
+          retained = true;
+          break;
+        }
+      }
+      if (retained) continue;
+      this.releaseDraftReviewProjectionHistory(rowId);
+    }
+  };
+
+  private readonly releaseDraftReviewProjectionHistory = (rowId: string): void => {
+    this.draftReviewProjectionHistoryByRowId.delete(rowId);
+    this.draftReviewProjectedRowsByRowId.delete(rowId);
+  };
+
+  private readonly createDraftReviewProjectedRows = (
+    drafts: ReadonlyMap<string, DraftEntry>,
+    requestedIds?: ReadonlySet<string>,
+    serverRows?: ReadonlyMap<string, unknown>,
+  ): ReadonlyMap<string, DraftReviewProjectedRow> => {
+    const requestedRowIds = new Set<string>();
+    const entriesByRowId = new Map<string, Array<Readonly<{ id: string; entry: DraftEntry }>>>();
+    const addEntry = (id: string, entry: DraftEntry): void => {
+      const entries = entriesByRowId.get(entry.rowId) ?? [];
+      entries.push({ id, entry });
+      entriesByRowId.set(entry.rowId, entries);
+    };
+    if (requestedIds === undefined) {
+      for (const [id, draft] of drafts) {
+        requestedRowIds.add(draft.rowId);
+        addEntry(id, draft);
+      }
+      for (const [id, entry] of this.resolvedDraftReviewEntriesById) {
+        if (drafts.has(id)) continue;
+        requestedRowIds.add(entry.rowId);
+        addEntry(id, entry);
+      }
+    } else {
+      for (const id of requestedIds) {
+        const entry = drafts.get(id) ?? this.resolvedDraftReviewEntriesById.get(id);
+        if (entry !== undefined) requestedRowIds.add(entry.rowId);
+      }
+      for (const rowId of requestedRowIds) {
+        const indexedKeys = this.draftKeysByRowId.get(rowId);
+        if (indexedKeys === undefined) continue;
+        const keys = typeof indexedKeys === "string" ? [indexedKeys] : indexedKeys;
+        for (const id of keys) {
+          const entry = drafts.get(id) ?? this.resolvedDraftReviewEntriesById.get(id);
+          if (entry !== undefined && entry.rowId === rowId) addEntry(id, entry);
+        }
+      }
+    }
+    const projectedRows = new Map<string, DraftReviewProjectedRow>();
+    for (const [rowId, entries] of entriesByRowId) {
+      const authoritativeEntry = entries.find(({ id }) => serverRows?.has(id) === true);
+      const serverCandidate =
+        authoritativeEntry === undefined
+          ? this.getRow(rowId)
+          : serverRows?.get(authoritativeEntry.id);
+      if (typeof serverCandidate !== "object" || serverCandidate === null) {
+        projectedRows.set(
+          rowId,
+          Object.freeze({ available: false, row: undefined, serverCandidate }),
+        );
+        continue;
+      }
+      const sourceRow = serverCandidate;
+      const patch: Record<string, unknown> = {};
+      const columnsByField = new Map<string, CompiledFieldColumn>();
+      let patchAvailable = true;
+      for (const { id, entry } of entries) {
+        const column = entry.presentationColumn ?? this.fieldColumnsById.get(entry.columnId);
+        if (column === undefined) {
+          patchAvailable = false;
+          break;
+        }
+        const activeDraft = drafts.get(id);
+        const value =
+          activeDraft === undefined
+            ? typeof serverCandidate === "object" && serverCandidate !== null
+              ? this.readCanonicalSourceValue(rowId, serverCandidate, column)
+              : ({ _tag: "Failure" } as const)
+            : ({ _tag: "Success", value: activeDraft.mine } as const);
+        if (value._tag !== "Success") {
+          patchAvailable = false;
+          break;
+        }
+        if (Object.hasOwn(patch, entry.field)) {
+          const previousColumn = columnsByField.get(entry.field);
+          if (
+            previousColumn === undefined ||
+            safeEquivalentEditValue(previousColumn, patch[entry.field], value.value) !== true ||
+            safeEquivalentEditValue(column, value.value, patch[entry.field]) !== true
+          ) {
+            const [firstColumnId, secondColumnId] = [
+              previousColumn?.columnId ?? "unknown",
+              column.columnId,
+            ].sort();
+            throw new TypeError(
+              `BrunoTable Edit Row projection cannot collate columns ${firstColumnId} and ${secondColumnId} for row ${rowId}, field ${entry.field}: exact values are not semantically equal.`,
+            );
+          }
+          continue;
+        }
+        Object.defineProperty(patch, entry.field, {
+          configurable: false,
+          enumerable: true,
+          value: value.value,
+          writable: false,
+        });
+        columnsByField.set(entry.field, column);
+      }
+      if (!patchAvailable) {
+        projectedRows.set(
+          rowId,
+          Object.freeze({ available: false, row: undefined, serverCandidate }),
+        );
+        continue;
+      }
+      projectedRows.set(
+        rowId,
+        this.projectDraftReviewRow(rowId, sourceRow, Object.freeze(patch), serverCandidate),
+      );
+    }
+    return projectedRows;
+  };
+
+  private readonly projectDraftReviewRow = (
+    rowId: string,
+    sourceRow: object,
+    patch: BrunoTableCellEditRowPatch,
+    serverCandidate: unknown,
+  ): DraftReviewProjectedRow => {
+    const projector = this.projectEditRow;
+    const getRowId = this.getProjectedRowId;
+    if (projector === undefined || getRowId === undefined) {
+      return Object.freeze({ available: false, row: undefined, serverCandidate });
+    }
+    let sourceRevision: unknown;
+    try {
+      sourceRevision = this.getRowVersion?.(sourceRow);
+    } catch {
+      return Object.freeze({ available: false, row: undefined, serverCandidate });
+    }
+    const cached = this.draftReviewProjectedRowsByRowId.get(rowId);
+    if (
+      cached !== undefined &&
+      sameDraftReviewProjectionInput(
+        cached,
+        sourceRow,
+        sourceRevision,
+        this.editRowProjectorEpoch,
+        patch,
+      )
+    ) {
+      return Object.freeze({ available: true, row: cached.projectedRow, serverCandidate });
+    }
+    const previousProjection = this.draftReviewProjectionHistoryByRowId.get(rowId);
+    const inputsMatchPrevious =
+      previousProjection !== undefined &&
+      sameDraftReviewProjectionInput(
+        previousProjection,
+        sourceRow,
+        sourceRevision,
+        this.editRowProjectorEpoch,
+        patch,
+      );
+    const rejectChangedProjection = (): DraftReviewProjectedRow | undefined => {
+      if (previousProjection === undefined) {
+        return undefined;
+      }
+      this.draftReviewProjectedRowsByRowId.delete(rowId);
+      return Object.freeze({ available: false, row: undefined, serverCandidate });
+    };
+    let projected: unknown;
+    try {
+      projected = projector(Object.freeze({ row: sourceRow, patch }));
+    } catch (error) {
+      const unavailable = rejectChangedProjection();
+      if (unavailable !== undefined) return unavailable;
+      throw error;
+    }
+    if (typeof projected !== "object" || projected === null) {
+      const unavailable = rejectChangedProjection();
+      if (unavailable !== undefined) return unavailable;
+      throw new TypeError(
+        `BrunoTable projectEditRow must return a non-null object for row ${rowId}.`,
+      );
+    }
+    if (Reflect.ownKeys(patch).length > 0 && projected === sourceRow) {
+      const unavailable = rejectChangedProjection();
+      if (unavailable !== undefined) return unavailable;
+      throw new TypeError(
+        `BrunoTable projectEditRow must return a distinct row for non-empty patch: ${rowId}.`,
+      );
+    }
+    // A changed source or patch must produce a fresh immutable Row reference. Reusing the
+    // previous result would leave row-aware presentation unable to observe sibling changes, so
+    // reject that result as unavailable while allowing the already-admitted edit transition to
+    // publish its coherent review state.
+    if (projected === previousProjection?.projectedRow && !inputsMatchPrevious) {
+      const unavailable = rejectChangedProjection();
+      if (unavailable !== undefined) return unavailable;
+      throw new TypeError(
+        `BrunoTable projectEditRow must return a fresh row when projection inputs change: ${rowId}.`,
+      );
+    }
+    let projectedRowId: string;
+    try {
+      projectedRowId = getRowId(projected);
+    } catch {
+      const unavailable = rejectChangedProjection();
+      if (unavailable !== undefined) return unavailable;
+      throw new TypeError(`BrunoTable getRowId rejected the projected edit row: ${rowId}.`);
+    }
+    if (projectedRowId !== rowId) {
+      const unavailable = rejectChangedProjection();
+      if (unavailable !== undefined) return unavailable;
+      throw new TypeError(
+        `BrunoTable projectEditRow changed Row Identity from ${rowId} to ${projectedRowId}.`,
+      );
+    }
+    const entry = Object.freeze({
+      patch,
+      projectorEpoch: this.editRowProjectorEpoch,
+      projectedRow: projected,
+      sourceRevision,
+      sourceRow,
+    });
+    this.draftReviewProjectionHistoryByRowId.set(rowId, entry);
+    if (this.draftReviewSubscriberCount > 0) {
+      this.draftReviewProjectedRowsByRowId.set(rowId, entry);
+    }
+    return Object.freeze({ available: true, row: projected, serverCandidate });
+  };
+
   private readonly createDraftReviewRow = (
     id: string,
     draft: DraftEntry,
-    serverCandidate = this.getRow(draft.rowId),
+    serverCandidate: unknown,
     canonicalSource?: CanonicalSourceValue,
+    projected?: DraftReviewProjectedRow,
   ): BrunoTableCellEditDraftReviewRow | undefined => {
     const serverRow =
       typeof serverCandidate === "object" && serverCandidate !== null ? serverCandidate : undefined;
@@ -4604,11 +5068,8 @@ export class BrunoTableCellEditRuntime {
         (draft.conflict === undefined ? "Draft" : "Conflict"),
       column,
       serverRow,
-      // Arbitrary row-aware presentation can depend on identity through closures, Proxies, or
-      // private state. Until a trusted explicit projector exists, exact Mine remains value-only;
-      // custom raw-row presentation must render Unavailable rather than observe a synthetic row.
-      projectedRow: undefined,
-      projectedRowAvailable: false,
+      projectedRow: projected?.row,
+      projectedRowAvailable: projected?.available === true,
       serverNow: canonical._tag === "Success" ? canonical.value : undefined,
       serverValueAvailable: canonical._tag === "Success",
       blockedReason: draft.blockedReason,
@@ -4619,6 +5080,7 @@ export class BrunoTableCellEditRuntime {
   private readonly createActiveCandidateReviewRow = (
     id: string,
     draft: DraftEntry | undefined,
+    projected?: DraftReviewProjectedRow,
   ): BrunoTableCellEditDraftReviewRow | undefined => {
     const session = this.actor.getSnapshot().context.session;
     if (
@@ -4649,7 +5111,13 @@ export class BrunoTableCellEditRuntime {
         ? {}
         : { blockedReason: draft?.blockedReason ?? candidateBlockedReason }),
     });
-    const row = this.createDraftReviewRow(id, activeDraft);
+    const row = this.createDraftReviewRow(
+      id,
+      activeDraft,
+      projected === undefined ? this.getRow(activeDraft.rowId) : projected.serverCandidate,
+      undefined,
+      projected,
+    );
     if (row === undefined) return undefined;
     return Object.freeze({
       ...row,
@@ -4676,32 +5144,21 @@ export class BrunoTableCellEditRuntime {
     const reviewServerRows = new Map<string, unknown>();
     const rowVersionAvailability = new Map<string, boolean>();
     const rowVersions = new Map<string, unknown>();
-    const visitedRowIds = new Set<string>();
+    let visitedRowIds: Set<string> | undefined;
+    const hasSaveLocks = this.saveLockedCellKeys.size > 0;
     const keys =
       candidateKeys !== undefined
         ? candidateKeys.values()
         : changedRowIds === undefined
           ? this.draftEvidenceKeys.values()
-          : (function* (
-              byRowId: ReadonlyMap<string, string | ReadonlySet<string>>,
-              rowIds: ReadonlySet<string>,
-            ): Generator<string> {
-              for (const rowId of rowIds) {
-                const rowKeys = byRowId.get(rowId);
-                if (rowKeys === undefined) continue;
-                if (typeof rowKeys === "string") yield rowKeys;
-                else yield* rowKeys;
-              }
-            })(this.draftKeysByRowId, changedRowIds);
+          : iterateDraftEvidenceKeysByRowId(this.draftKeysByRowId, changedRowIds);
     for (const key of keys) {
       const draft = previousDrafts.get(key);
       let reconciledDraft = draft;
       const representative = draft ?? this.findIndexedDraftHistoryEntry(key);
       if (representative === undefined) continue;
-      visitedRowIds.add(representative.rowId);
       if (submittedConvergedKeys.has(key)) {
         convergedKeys.push(key);
-        changedKeys.push(key);
         continue;
       }
       const row = authoritativeRows?.has(representative.rowId)
@@ -4709,12 +5166,14 @@ export class BrunoTableCellEditRuntime {
         : this.getRow(representative.rowId);
       if (this.draftReviewSubscriberCount > 0) {
         reviewServerRows.set(key, row);
-        if (this.draftReviewRowStoresById.get(key)?.get().serverRow !== row) {
-          reviewChangedKeys.add(key);
-        }
+        // A reported source-row publication may retain the same object reference
+        // while changing its opaque Row Version. Re-evaluate the sparse review
+        // projection so the row/revision cache, rather than reference identity,
+        // remains authoritative.
+        reviewChangedKeys.add(key);
       }
       const column = this.fieldColumnsById.get(representative.columnId);
-      const saveLocked = this.saveLockedCellKeys.has(key);
+      const saveLocked = hasSaveLocks && this.saveLockedCellKeys.has(key);
       const source =
         typeof row === "object" && row !== null && column !== undefined
           ? this.readCanonicalSourceValue(representative.rowId, row, column)
@@ -4730,7 +5189,6 @@ export class BrunoTableCellEditRuntime {
       if (typeof row === "object" && row !== null && column !== undefined) {
         if (!saveLocked && source._tag === "Success" && mineEquivalent === true) {
           convergedKeys.push(key);
-          changedKeys.push(key);
           continue;
         }
         let rowVersionAvailable = rowVersionAvailability.get(representative.rowId);
@@ -4746,6 +5204,7 @@ export class BrunoTableCellEditRuntime {
           rowVersionAvailability.set(representative.rowId, rowVersionAvailable);
         }
       }
+      (visitedRowIds ??= new Set()).add(representative.rowId);
       const reconcileEntry = (entry: DraftEntry | undefined): DraftEntry | undefined => {
         if (entry === undefined) return undefined;
         let nextEntry = entry;
@@ -4812,24 +5271,32 @@ export class BrunoTableCellEditRuntime {
       }
     }
     if (this.draftReviewSubscriberCount > 0) {
-      for (const [key, resolved] of this.resolvedDraftReviewEntriesById) {
-        if (changedRowIds !== undefined && !changedRowIds.has(resolved.rowId)) continue;
+      const resolvedKeys =
+        candidateKeys ??
+        (changedRowIds === undefined
+          ? this.resolvedDraftReviewEntriesById.keys()
+          : iterateDraftEvidenceKeysByRowId(this.draftKeysByRowId, changedRowIds));
+      for (const key of resolvedKeys) {
+        const resolved = this.resolvedDraftReviewEntriesById.get(key);
+        if (resolved === undefined) continue;
         reviewChangedKeys.add(key);
         const serverRow = authoritativeRows?.get(resolved.rowId) ?? this.getRow(resolved.rowId);
         reviewServerRows.set(key, serverRow);
       }
     }
-    for (const rowId of visitedRowIds) {
+    for (const rowId of visitedRowIds ?? []) {
       if (rowVersionAvailability.get(rowId) === false) this.rowVersionBlockedRowIds.add(rowId);
       else this.rowVersionBlockedRowIds.delete(rowId);
     }
-    for (const key of convergedKeys) {
-      const operationId = this.saveLockedCellKeys.get(key);
-      if (operationId === undefined || !this.batchSaveOperationIds.has(operationId)) continue;
-      const operationKeys =
-        this.pendingConvergedCellKeysByOperation.get(operationId) ?? new Set<string>();
-      operationKeys.add(key);
-      this.pendingConvergedCellKeysByOperation.set(operationId, operationKeys);
+    if (this.batchSaveOperationIds.size > 0) {
+      for (const key of convergedKeys) {
+        const operationId = this.saveLockedCellKeys.get(key);
+        if (operationId === undefined || !this.batchSaveOperationIds.has(operationId)) continue;
+        const operationKeys =
+          this.pendingConvergedCellKeysByOperation.get(operationId) ?? new Set<string>();
+        operationKeys.add(key);
+        this.pendingConvergedCellKeysByOperation.set(operationId, operationKeys);
+      }
     }
     if (
       nextDrafts === undefined &&
@@ -4842,16 +5309,20 @@ export class BrunoTableCellEditRuntime {
       }
       return false;
     }
-    const converged = new Set(convergedKeys);
     const allRetainedEvidenceConverged =
-      converged.size > 0 && converged.size === this.draftEvidenceKeys.size;
+      changedRowIds === undefined &&
+      candidateKeys === undefined &&
+      this.resolvedDraftReviewIds.size === 0 &&
+      convergedKeys.length > 0 &&
+      convergedKeys.length === this.draftEvidenceKeys.size;
+    const converged = allRetainedEvidenceConverged ? undefined : new Set(convergedKeys);
     if (allRetainedEvidenceConverged) nextDrafts = new Map();
     else {
       nextDrafts ??= new Map(previousDrafts);
-      for (const key of converged) nextDrafts.delete(key);
+      for (const key of converged ?? []) nextDrafts.delete(key);
     }
     if (!allRetainedEvidenceConverged) {
-      for (const key of converged) {
+      for (const key of converged ?? []) {
         const history = this.transformIndexedDraftHistoryCell(
           nextUndoStack,
           nextRedoStack,
@@ -4869,14 +5340,19 @@ export class BrunoTableCellEditRuntime {
       this.validationDraftKeys.clear();
       this.conflictDraftKeys.clear();
     } else {
+      for (const key of converged ?? []) this.syncBlockedDraftKey(key, undefined);
       for (const key of changedKeys) this.syncBlockedDraftKey(key, nextDrafts.get(key));
     }
+    const affectedKeys =
+      allRetainedEvidenceConverged || convergedKeys.length === 0
+        ? changedKeys
+        : [...convergedKeys, ...changedKeys];
     batch(() => {
-      this.setDraftMemory(nextDrafts, finalUndoStack, finalRedoStack, changedKeys, true);
+      this.setDraftMemory(nextDrafts, finalUndoStack, finalRedoStack, affectedKeys, true);
       if (this.draftReviewSubscriberCount > 0) {
         this.publishDraftReview(
           nextDrafts,
-          new Set([...changedKeys, ...reviewChangedKeys]),
+          new Set([...affectedKeys, ...reviewChangedKeys]),
           reviewServerRows,
         );
       }
@@ -4884,7 +5360,7 @@ export class BrunoTableCellEditRuntime {
         this.traversalIndex.reconcileRows(undefined);
         for (const key of this.cellStores.keys()) this.publishCell(key, nextDrafts);
       } else {
-        for (const key of changedKeys) {
+        for (const key of affectedKeys) {
           this.invalidateDraftCell(key, false);
           this.publishCell(key, nextDrafts);
         }
@@ -4895,9 +5371,9 @@ export class BrunoTableCellEditRuntime {
     if (allRetainedEvidenceConverged) {
       for (const key of this.cellStores.keys()) this.releaseUnusedCellStore(key);
     } else {
-      for (const key of changedKeys) this.releaseUnusedCellStore(key);
+      for (const key of affectedKeys) this.releaseUnusedCellStore(key);
     }
-    return changedKeys.length > 0;
+    return affectedKeys.length > 0 || allRetainedEvidenceConverged;
   };
 
   private readonly syncBlockedDraftKey = (key: string, draft: DraftEntry | undefined): void => {
@@ -4957,8 +5433,10 @@ export class BrunoTableCellEditRuntime {
 
   private readonly releaseOrphanedResolvedDraftReviewEvidence = (
     memory: DraftMemoryState,
+    candidateIds: Iterable<string>,
   ): void => {
-    for (const id of this.resolvedDraftReviewIds) {
+    for (const id of candidateIds) {
+      if (!this.resolvedDraftReviewIds.has(id)) continue;
       if (memory.drafts.has(id)) continue;
       const lineage = this.resolvedDraftReviewLineagesById.get(id);
       if (lineage === undefined && this.resolvedDraftReviewEntriesById.has(id)) continue;
@@ -5001,6 +5479,7 @@ export class BrunoTableCellEditRuntime {
       if (rowKeys === key) {
         this.draftKeysByRowId.delete(rowId);
         this.rowVersionBlockedRowIds.delete(rowId);
+        this.releaseDraftReviewProjectionHistory(rowId);
       }
       return;
     }
@@ -5008,6 +5487,7 @@ export class BrunoTableCellEditRuntime {
     if (rowKeys?.size === 0) {
       this.draftKeysByRowId.delete(rowId);
       this.rowVersionBlockedRowIds.delete(rowId);
+      this.releaseDraftReviewProjectionHistory(rowId);
     } else if (rowKeys?.size === 1) {
       const remaining = rowKeys.values().next().value;
       if (remaining !== undefined) this.draftKeysByRowId.set(rowId, remaining);

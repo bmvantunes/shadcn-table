@@ -652,8 +652,8 @@ export class BrunoTableEditMemoryRuntime {
   private reviewFocusFallbackSelector: string | undefined;
   private reviewFocusWindow: Window | undefined;
   private unsubscribeDraftReview: (() => void) | undefined;
-  private readonly resetControls = new Set<Element>();
-  private readonly unregisterResetControls = new Map<Element, () => void>();
+  private readonly editOwnedControls = new Set<Element>();
+  private readonly unregisterEditOwnedControls = new Map<Element, () => void>();
   private cellEditActivity: BrunoTableCellEditActivitySnapshot = CLEAN_CELL_EDIT_ACTIVITY;
   private saveOperationCapacityAvailable = true;
   private savePreflightAvailable = true;
@@ -713,9 +713,9 @@ export class BrunoTableEditMemoryRuntime {
     this.blockedReviewStore.setState(() => CLOSED_SPARSE_EDIT_REVIEW);
     this.unsubscribeDraftReview?.();
     this.unsubscribeDraftReview = undefined;
-    for (const unregister of this.unregisterResetControls.values()) unregister();
-    this.unregisterResetControls.clear();
-    this.resetControls.clear();
+    for (const unregister of this.unregisterEditOwnedControls.values()) unregister();
+    this.unregisterEditOwnedControls.clear();
+    this.editOwnedControls.clear();
     this.resetReviewRowsStore.setState(() => Object.freeze([]));
     this.conflictReviewRowsStore.setState(() => Object.freeze([]));
     this.conflictReviewSourcesById.clear();
@@ -725,8 +725,8 @@ export class BrunoTableEditMemoryRuntime {
 
   public readonly connectCellEdit = (runtime: BrunoTableCellEditRuntime): (() => void) => {
     this.cellEdit = runtime;
-    for (const element of this.resetControls) {
-      this.unregisterResetControls.set(element, runtime.registerResetControl(element));
+    for (const element of this.editOwnedControls) {
+      this.unregisterEditOwnedControls.set(element, runtime.registerEditOwnedControl(element));
     }
     runtime.setBatchHistoryEnabled(this.modeStore.get().mode === "batch");
     const reconcile = (): void => {
@@ -746,8 +746,8 @@ export class BrunoTableEditMemoryRuntime {
     return () => {
       unsubscribe();
       unsubscribeRetainedResolutions();
-      for (const unregister of this.unregisterResetControls.values()) unregister();
-      this.unregisterResetControls.clear();
+      for (const unregister of this.unregisterEditOwnedControls.values()) unregister();
+      this.unregisterEditOwnedControls.clear();
       this.unsubscribeDraftReview?.();
       this.unsubscribeDraftReview = undefined;
       if (this.cellEdit === runtime) this.cellEdit = undefined;
@@ -758,15 +758,18 @@ export class BrunoTableEditMemoryRuntime {
     };
   };
 
-  public readonly registerResetControl = (element: Element): (() => void) => {
-    this.resetControls.add(element);
+  public readonly registerEditOwnedControl = (element: Element): (() => void) => {
+    this.editOwnedControls.add(element);
     if (this.cellEdit !== undefined) {
-      this.unregisterResetControls.set(element, this.cellEdit.registerResetControl(element));
+      this.unregisterEditOwnedControls.set(
+        element,
+        this.cellEdit.registerEditOwnedControl(element),
+      );
     }
     return () => {
-      this.unregisterResetControls.get(element)?.();
-      this.unregisterResetControls.delete(element);
-      this.resetControls.delete(element);
+      this.unregisterEditOwnedControls.get(element)?.();
+      this.unregisterEditOwnedControls.delete(element);
+      this.editOwnedControls.delete(element);
     };
   };
 
@@ -1759,7 +1762,14 @@ export class BrunoTableEditMemoryRuntime {
       }
       this.publishSparseReviewRows();
     };
-    this.unsubscribeDraftReview = runtime.subscribeDraftReview(reconcile);
+    const unsubscribeReview = runtime.subscribeDraftReview(reconcile);
+    const unsubscribeClassification = runtime.subscribeDraftReviewClassification(() => {
+      if (this.cellEdit === runtime) this.publishSparseReviewRows();
+    });
+    this.unsubscribeDraftReview = () => {
+      unsubscribeClassification();
+      unsubscribeReview();
+    };
     reconcile();
   };
 
@@ -1767,13 +1777,14 @@ export class BrunoTableEditMemoryRuntime {
     if (this.cellEdit === undefined || this.unsubscribeDraftReview === undefined) return;
     const runtime = this.cellEdit;
     const rows = runtime.getDraftReviewSourceSnapshot();
+    const classification = runtime.getDraftReviewClassificationSnapshot();
     const context = this.actor.getSnapshot().context;
     this.syncConflictResolutionStores();
 
     if (this.conflictReviewStore.get().open) {
       const activeConflictIds = new Set<string>();
       for (const row of rows) {
-        if (row.getSnapshot().conflict === undefined) continue;
+        if (!classification.conflictIds.has(row.id)) continue;
         activeConflictIds.add(row.id);
         this.conflictReviewSourcesById.set(row.id, row);
       }
@@ -1793,7 +1804,7 @@ export class BrunoTableEditMemoryRuntime {
     }
     if (this.blockedReviewStore.get().open) {
       this.blockedReviewRowsStore.setState(() =>
-        Object.freeze(rows.filter((row) => row.getSnapshot().blockedReason !== undefined)),
+        Object.freeze(rows.filter((row) => classification.blockedIds.has(row.id))),
       );
     }
   };

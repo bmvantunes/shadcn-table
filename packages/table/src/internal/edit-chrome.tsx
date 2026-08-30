@@ -176,7 +176,7 @@ const BrunoTableConflictCountStatus = memo(function BrunoTableConflictCountStatu
   );
   const reviewControlRef = useCallback(
     (element: HTMLButtonElement | null) =>
-      element === null ? undefined : runtime.registerResetControl(element),
+      element === null ? undefined : runtime.registerEditOwnedControl(element),
     [runtime],
   );
   if (count === 0) return <></>;
@@ -185,7 +185,7 @@ const BrunoTableConflictCountStatus = memo(function BrunoTableConflictCountStatu
     <>
       {interactive ? (
         <Button
-          data-bruno-cell-edit-reset=""
+          data-bruno-cell-edit-owned-control=""
           data-bruno-table-review-focus="conflict"
           disabled={!canOpen}
           ref={reviewControlRef}
@@ -218,7 +218,7 @@ const BrunoTableBlockedCountStatus = memo(function BrunoTableBlockedCountStatus(
   );
   const reviewControlRef = useCallback(
     (element: HTMLButtonElement | null) =>
-      element === null ? undefined : runtime.registerResetControl(element),
+      element === null ? undefined : runtime.registerEditOwnedControl(element),
     [runtime],
   );
   if (count === 0) return <></>;
@@ -227,7 +227,7 @@ const BrunoTableBlockedCountStatus = memo(function BrunoTableBlockedCountStatus(
     <>
       {interactive ? (
         <Button
-          data-bruno-cell-edit-reset=""
+          data-bruno-cell-edit-owned-control=""
           data-bruno-table-review-focus="blocked"
           ref={reviewControlRef}
           size="sm"
@@ -342,6 +342,7 @@ const getSelectedConflictResolutionReason = (
   resolution: "mine" | "server",
   availabilityVersion: number,
 ): string | undefined => {
+  // The value is intentionally read so live source changes recompute fresh Mine/Server reasons.
   void availabilityVersion;
   return ids
     .map((id) => {
@@ -368,7 +369,7 @@ const BrunoTableConflictReview = memo(function BrunoTableConflictReview({
     <AlertDialog
       open={snapshot.open}
       onOpenChange={(open) => {
-        if (!open) runtime.closeConflictReview();
+        if (!open && !snapshot.saving) runtime.closeConflictReview();
       }}
     >
       {snapshot.open ? (
@@ -450,13 +451,13 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
   };
   const reviewSurfaceRef = useCallback(
     (element: HTMLDivElement | null) =>
-      element === null ? undefined : runtime.registerResetControl(element),
+      element === null ? undefined : runtime.registerEditOwnedControl(element),
     [runtime],
   );
   const reviewViewportRef = useReviewViewportRef();
   return (
     <AlertDialogContent
-      data-bruno-cell-edit-reset=""
+      data-bruno-cell-edit-owned-control=""
       ref={reviewSurfaceRef}
       className="max-w-5xl sm:max-w-5xl"
       style={{
@@ -663,13 +664,13 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
     selectedIds.every(runtime.isBlockedChangeDiscardable);
   const reviewSurfaceRef = useCallback(
     (element: HTMLDivElement | null) =>
-      element === null ? undefined : runtime.registerResetControl(element),
+      element === null ? undefined : runtime.registerEditOwnedControl(element),
     [runtime],
   );
   const reviewViewportRef = useReviewViewportRef();
   return (
     <AlertDialogContent
-      data-bruno-cell-edit-reset=""
+      data-bruno-cell-edit-owned-control=""
       ref={reviewSurfaceRef}
       className="max-w-5xl sm:max-w-5xl"
       style={{
@@ -691,8 +692,8 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
         data-bruno-review-viewport=""
       >
         {renderReview(rows, selection)}
-        {rows.length === 0 ? <p role="status">All blocked changes are current.</p> : null}
       </div>
+      {rows.length === 0 ? <p role="status">All blocked changes are current.</p> : null}
       <AlertDialogFooter>
         {selectedIds.length > 0 && !selectedBlockedChangesDiscardable ? (
           <p role="status">
@@ -703,7 +704,7 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
         ) : null}
         <AlertDialogCancel onClick={runtime.closeBlockedReview}>Close</AlertDialogCancel>
         <Button
-          disabled={rows.length === 0 || !selectedBlockedChangesDiscardable}
+          disabled={!selectedBlockedChangesDiscardable}
           variant="destructive"
           onClick={() => {
             const [first, ...rest] = selectedIds;
@@ -733,14 +734,14 @@ const BrunoTableResetEditsButton = memo(function BrunoTableResetEditsButton({
   );
   const resetControlRef = useCallback(
     (element: HTMLButtonElement | null) =>
-      element === null ? undefined : runtime.registerResetControl(element),
+      element === null ? undefined : runtime.registerEditOwnedControl(element),
     [runtime],
   );
   return (
     <Button
       aria-label="Reset edits"
       data-bruno-cell-edit-cancel=""
-      data-bruno-cell-edit-reset=""
+      data-bruno-cell-edit-owned-control=""
       ref={resetControlRef}
       variant="outline"
       disabled={!canReset}
@@ -804,14 +805,14 @@ const BrunoTableResetReviewContent = memo(function BrunoTableResetReviewContent(
   );
   const resetSurfaceRef = useCallback(
     (element: HTMLDivElement | null) =>
-      element === null ? undefined : runtime.registerResetControl(element),
+      element === null ? undefined : runtime.registerEditOwnedControl(element),
     [runtime],
   );
   const pendingLabel = `${String(pendingCount)} pending changed ${pendingCount === 1 ? "cell" : "cells"}`;
   const historyLabel = `${String(historyCount)} Batch history ${historyCount === 1 ? "command" : "commands"}`;
   return (
     <AlertDialogContent
-      data-bruno-cell-edit-reset=""
+      data-bruno-cell-edit-owned-control=""
       ref={resetSurfaceRef}
       className="max-w-4xl sm:max-w-4xl"
       style={{

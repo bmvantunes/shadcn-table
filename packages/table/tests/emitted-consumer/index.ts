@@ -34,6 +34,8 @@ import {
   type BrunoTableColumnValue,
   type BrunoTableColumns,
   type BrunoTableDecodeResult,
+  type BrunoTableEditRowPatch,
+  type BrunoTableEditRowProjectorInput,
   type BrunoTableFilterableColumnId,
   type BrunoTableGridFilterCommandCapability,
   type BrunoTableFilterExpressions,
@@ -922,6 +924,53 @@ void BrunoTableClient({
 });
 
 type Columns = typeof columns;
+
+const emittedRowAwareEditableColumns = [
+  {
+    columnId: "COL_ID_EMITTED_ROW_AWARE_SYMBOL",
+    field: "symbol",
+    headerName: "Projected symbol",
+    valueType: "text",
+    isEditable: true,
+    valueFormatter: ({ row, value }) => `${row.hiddenLabel}:${value}`,
+  },
+] as const satisfies BrunoTableColumns<Order>;
+
+type EmittedRowAwareEditPatch = BrunoTableEditRowPatch<
+  Order,
+  typeof emittedRowAwareEditableColumns
+>;
+const emittedExactEditPatch: EmittedRowAwareEditPatch = { symbol: "AMD" };
+void emittedExactEditPatch;
+const emittedInvalidEditPatch: EmittedRowAwareEditPatch = {
+  // @ts-expect-error Published patches contain only potentially editable fields.
+  hiddenLabel: "server-only",
+};
+void emittedInvalidEditPatch;
+
+const emittedRowAwareClientProps = {
+  tableId: "emitted-row-aware-editable-client",
+  columns: emittedRowAwareEditableColumns,
+  initialOrderBy: [{ columnId: "COL_ID_EMITTED_ROW_AWARE_SYMBOL", direction: "asc" }],
+  getRowId: (row: Order) => row.id,
+  clientSource: { rows: [] as readonly Order[], totalRows: 0, version: 0, status: "ready" },
+  editable: true,
+  getRowVersion: (row: Order) => row.revision,
+  onSaveEdits: () => Promise.resolve(),
+} as const;
+
+// @ts-expect-error Published direct calls require the trusted projection seam.
+void BrunoTableClient(emittedRowAwareClientProps);
+void BrunoTableClient({
+  ...emittedRowAwareClientProps,
+  projectEditRow: ({
+    row,
+    patch,
+  }: BrunoTableEditRowProjectorInput<Order, typeof emittedRowAwareEditableColumns>) => ({
+    ...row,
+    ...patch,
+  }),
+});
 
 type EmittedViewportBaseRow = Expect<
   Equal<LiveQueryViewportBaseRow<typeof source.viewport>, Order>

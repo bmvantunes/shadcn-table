@@ -9,26 +9,34 @@ import {
 
 const disposers: Array<() => void> = [];
 
+type EditMemoryTestRow = Readonly<{
+  readonly id: string;
+  readonly value: string;
+  readonly revision: bigint;
+}>;
+
+const valueColumns = compileColumns([
+  {
+    columnId: "COL_ID_VALUE",
+    field: "value",
+    headerName: "Value",
+    valueType: "text",
+    isEditable: true,
+  },
+]);
+
 afterEach(() => {
   for (const dispose of disposers.splice(0).reverse()) dispose();
 });
 
 describe("BrunoTable Edit Memory", () => {
   it("keeps Conflict Review closed in the workflow while another cell editor is active", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     const rows = new Map<string, Row>([
       ["row-1", Object.freeze({ id: "row-1", value: "base-1", revision: 1n })],
       ["row-2", Object.freeze({ id: "row-2", value: "base-2", revision: 1n })],
     ]);
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: (rowId) => rows.get(rowId),
@@ -67,7 +75,7 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("publishes conflict resolution availability across source gaps and Batch save locks", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let authoritative = true;
     const base = Object.freeze({ id: "row-1", value: "base", revision: 1n });
     const server = Object.freeze({ id: "row-1", value: "server", revision: 2n });
@@ -76,15 +84,7 @@ describe("BrunoTable Edit Memory", () => {
       [server.id, server],
       [second.id, second],
     ]);
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: (rowId) => rows.get(rowId),
@@ -168,19 +168,11 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("publishes bulk conflict availability without a mounted per-row subscriber", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let authoritative = true;
     const base = Object.freeze({ id: "row-1", value: "base", revision: 1n });
     const server = Object.freeze({ id: "row-1", value: "server", revision: 2n });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => server,
@@ -237,16 +229,8 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("keeps every conflict availability projection referentially stable", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    type Row = EditMemoryTestRow;
+    const columns = valueColumns;
     const assertStable = (
       memory: BrunoTableEditMemoryRuntime,
       id: string,
@@ -412,17 +396,9 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("finalizes an all-Server Batch review without discarding its undo history", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => row,
@@ -473,17 +449,9 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("keeps retained Server choices out of Reset Review until Undo restores the draft", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => row,
@@ -532,17 +500,9 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("accepts a fresh conflict choice after retained evidence is invalidated", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => row,
@@ -587,17 +547,9 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("keeps conflict-resolution transition ownership in the workflow actor", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => row,
@@ -631,8 +583,8 @@ describe("BrunoTable Edit Memory", () => {
     expect(memory.openConflictReview()).toBe(true);
     const id = cellEdit.getDraftReviewSnapshot()[0]!.id;
     const actorOwnedDuringPublication: boolean[] = [];
-    const unsubscribe = cellEdit.subscribeDraftReview(() => {
-      if (cellEdit.getDraftReviewSnapshot()[0]?.conflict !== undefined) return;
+    const unsubscribe = cellEdit.subscribeDraftReviewClassification(() => {
+      if (cellEdit.getDraftReviewClassificationSnapshot().conflictIds.has(id)) return;
       const actor = (
         memory as unknown as {
           readonly actor: {
@@ -665,17 +617,9 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("reopens a retained Mine resolution when only the Row Version extractor changes", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => row,
@@ -717,20 +661,12 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("keeps an Immediate Conflict Review locked across disjoint review-origin saves", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     const rows = new Map<string, Row>([
       ["row-1", Object.freeze({ id: "row-1", value: "base-1", revision: 1n })],
       ["row-2", Object.freeze({ id: "row-2", value: "base-2", revision: 1n })],
     ]);
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const memory = new BrunoTableEditMemoryRuntime();
     let saveReady = false;
     const cellEdit = new BrunoTableCellEditRuntime({
@@ -837,21 +773,13 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("does not let unrelated save work inherit a rejected Conflict Review admission", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let currentRow: Row = Object.freeze({
       id: "row-1",
       value: "server",
       revision: 1n,
     });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => currentRow,
@@ -909,21 +837,13 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("retains a Mine acknowledgement while its authoritative row is absent", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let row: Row | undefined = Object.freeze({
       id: "row-1",
       value: "base",
       revision: 1n,
     });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => row,
@@ -979,17 +899,9 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("closes an Immediate Server review while its row is absent and reopens on return", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let row: Row | undefined = Object.freeze({ id: "row-1", value: "base", revision: 1n });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => row,
@@ -1034,20 +946,12 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("reconciles only the authoritative subset when an Immediate Server review closes", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     const rows = new Map<string, Row>([
       ["row-1", Object.freeze({ id: "row-1", value: "base-1", revision: 1n })],
       ["row-2", Object.freeze({ id: "row-2", value: "base-2", revision: 1n })],
     ]);
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: (rowId) => rows.get(rowId),
@@ -1115,21 +1019,9 @@ describe("BrunoTable Edit Memory", () => {
   it.each(["mine", "server"] as const)(
     "reconciles an undone %s resolution after the source returns to the safe base",
     (resolution) => {
-      type Row = Readonly<{
-        readonly id: string;
-        readonly value: string;
-        readonly revision: bigint;
-      }>;
+      type Row = EditMemoryTestRow;
       let row: Row = Object.freeze({ id: "row-1", value: "base", revision: 1n });
-      const columns = compileColumns([
-        {
-          columnId: "COL_ID_VALUE",
-          field: "value",
-          headerName: "Value",
-          valueType: "text",
-          isEditable: true,
-        },
-      ]);
+      const columns = valueColumns;
       const cellEdit = new BrunoTableCellEditRuntime({
         columns,
         getRow: () => row,
@@ -1271,18 +1163,10 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("bounds per-conflict stores while one open review cycles through new identities", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     const rows = new Map<string, Row>();
     let authoritative = true;
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: (rowId) => rows.get(rowId),
@@ -1618,17 +1502,9 @@ describe("BrunoTable Edit Memory", () => {
   });
 
   it("publishes only compact changed footer projections and keeps Save command-owned", () => {
-    type Row = Readonly<{ readonly id: string; readonly value: string; readonly revision: bigint }>;
+    type Row = EditMemoryTestRow;
     let row: Row = Object.freeze({ id: "row-1", value: "server", revision: 1n });
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_VALUE",
-        field: "value",
-        headerName: "Value",
-        valueType: "text",
-        isEditable: true,
-      },
-    ]);
+    const columns = valueColumns;
     const cellEdit = new BrunoTableCellEditRuntime({
       columns,
       getRow: () => row,

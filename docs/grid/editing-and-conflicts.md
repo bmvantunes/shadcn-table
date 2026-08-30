@@ -9,20 +9,48 @@ type BrunoTableReadOnlyCapability<TColumns> = BrunoTableGroupingCapability<TColu
   editable?: false;
   getRowVersion?: never;
   onSaveEdits?: never;
+  projectEditRow?: never;
 };
+
+type BrunoTableEditRowPatch<TRow, TColumns> = Readonly<
+  Partial<Pick<TRow, PotentiallyEditableField<TRow, TColumns>>>
+>;
+
+type BrunoTableEditRowProjectorInput<TRow, TColumns> = Readonly<{
+  row: TRow;
+  patch: BrunoTableEditRowPatch<TRow, TColumns>;
+}>;
+
+type BrunoTableEditRowProjectionCapability<TRow, TColumns> =
+  ExactColumnsRequireProjectedRow<TColumns> extends true
+    ? {
+        projectEditRow: (input: BrunoTableEditRowProjectorInput<TRow, TColumns>) => TRow;
+      }
+    : {
+        projectEditRow?: (input: BrunoTableEditRowProjectorInput<TRow, TColumns>) => TRow;
+      };
 
 type BrunoTableEditableCapability<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
   TRowVersion,
-> = BrunoTableNoGroupingCapability & {
-  editable: true;
-  getRowVersion: (row: TRow) => TRowVersion;
-  onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
-};
+> = BrunoTableNoGroupingCapability &
+  BrunoTableEditRowProjectionCapability<TRow, TColumns> & {
+    editable: true;
+    getRowVersion: (row: TRow) => TRowVersion;
+    onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, TRowVersion>;
+  };
 ```
 
-`editable: true` enables the Editable Table capability and makes both `getRowVersion` and `onSaveEdits` mandatory. The function's exact return type, including `bigint`, becomes the Row Version type for every draft base, safely rebased Save Change Set, conflict, and Accepted Overlay. False or omitted editing makes both props invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
+`editable: true` enables the Editable Table capability and makes both `getRowVersion` and `onSaveEdits` mandatory. The exact return type of `getRowVersion`, including `bigint`, becomes the Row Version type for every draft base, safely rebased Save Change Set, conflict, and Accepted Overlay. False or omitted editing makes those props and `projectEditRow` invalid. Column `isEditable` declarations identify potentially editable columns and still decide whether a particular row/cell can enter a Cell Edit Session; table-level editing does not override them.
+
+An exact finite Column tuple also makes `projectEditRow` mandatory when a potentially editable Field Column declares `valueFormatter`, callback `cellClassName`, or `cellRenderer`, because those presentation callbacks may read the complete Row. Widened Columns keep the projector optional in the TypeScript interface because the tuple can no longer prove the requirement, but Client construction rejects missing configuration when normalized Columns reveal that the seam is needed. Value-only edit review does not require this seam.
+
+`projectEditRow({ row, patch })` is the consumer-owned adapter at the edit-review Row projection seam. BrunoTable passes the current source Row plus an exact sparse patch whose keys are limited to potentially editable fields and whose values remain native, including `bigint` and a present `undefined`. The adapter returns an authentic `TRow` suitable for the consumer's row-aware formatter, class callback, and renderer. Plain records may merge the patch; class or prototyped Rows should use a domain constructor or method that preserves their invariants. The projected Row is presentation evidence only: it never becomes canonical source data, a Row Version, a draft base, or Save Change Set evidence, and it must preserve the source Row Identity.
+
+BrunoTable may reuse its cached projected Row when the source Row reference, opaque Row Version, projector configuration, and exact patch are unchanged. A consumer adapter may likewise return the same memoized immutable Row for those identical inputs, including when a review closes and later reopens. A changed source Row or patch invokes the adapter again and requires a fresh immutable Row replacement so every row-aware presentation can observe the new evidence.
+
+Missing required `projectEditRow` configuration is an explicit construction error. Before a Row has published one valid projection, a projector throw, null or non-object result, source-Row result for a non-empty patch, `getRowId` throw, changed Row Identity, or reused historical result is also an explicit configuration error. Once that Row has published a valid projection, any of those failure classes during a later changed-input call instead withdraws the projected Row and renders row-aware Yours as `Unavailable`. Exact Mine, Base, and Server evidence remains intact, the review workflow remains coherent, and BrunoTable never retains a possibly mutated object or substitutes Server evidence for Yours. An unavailable or unreadable current source Row likewise makes row-aware Yours unavailable without fabricating a replacement. See [ADR 0032](../adr/0032-project-edit-review-rows-through-a-consumer-seam.md).
 
 Editing and grouping are mutually exclusive Table Instance capabilities. The editable branch rejects `groupRowsColumn`, installs no grouping or aggregation feature, exposes no Group By UI or command, and discards restored `groupBy`, `groupOrderBy`, and Rows width during preference sanitization. Shared columns may retain `groupBy` and `aggFunc` declarations for a separate read-only Client or Server Table; those declarations are dormant here.
 

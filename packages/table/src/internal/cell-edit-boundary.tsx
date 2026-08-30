@@ -177,7 +177,7 @@ export const BrunoTableCellEditBoundary: NamedExoticComponent<BrunoTableCellEdit
         if (
           event.target instanceof Node &&
           (editor.contains(event.target) ||
-            runtime.ownsResetControl(event.target) ||
+            runtime.ownsEditOwnedControl(event.target) ||
             (event.target instanceof Element &&
               event.target
                 .closest("[data-bruno-cell-edit-cancel]")

@@ -15,6 +15,8 @@ import type {
   BrunoTableClientProps,
   BrunoTableColumns,
   BrunoTableEditableClientProps,
+  BrunoTableEditRowPatch,
+  BrunoTableEditRowProjector,
   BrunoTableJsonValue,
   BrunoTableReadOnlyClientProps,
   BrunoTableSortBy,
@@ -54,7 +56,9 @@ import { BrunoTableCellRangeRuntime } from "./internal/cell-range-clipboard";
 import {
   BrunoTableCellEditRuntime,
   type BrunoTableCellEditDraftReviewSourceRow,
+  type BrunoTableCellEditRowProjector,
 } from "./internal/cell-edit";
+import { brunoTableCellPresentationUsesRawRow } from "./internal/cell-presentation";
 import {
   BrunoTableConflictReviewResolution,
   BrunoTableEditModeControl,
@@ -72,6 +76,18 @@ function adaptBrunoTableRowVersionExtractor<TRow>(
   extractor: ((row: TRow) => unknown) | undefined,
 ): ((row: object) => unknown) | undefined {
   return extractor === undefined ? undefined : (row) => extractor(row as TRow);
+}
+
+function adaptBrunoTableEditRowProjector<TRow, TColumns extends BrunoTableColumns<TRow>>(
+  projector: BrunoTableEditRowProjector<TRow, TColumns> | undefined,
+): BrunoTableCellEditRowProjector | undefined {
+  return projector === undefined
+    ? undefined
+    : ({ row, patch }) =>
+        projector({
+          row: row as TRow,
+          patch: patch as BrunoTableEditRowPatch<TRow, TColumns>,
+        });
 }
 
 export {
@@ -132,7 +148,9 @@ function BrunoTableClientInstance<
 }>): ReactNode {
   const compiledColumns = useMemo(() => compileColumns(props.columns), [props.columns]);
   const editable = props.editable === true;
+  const getRowId = props.getRowId;
   const onSaveEdits = props.onSaveEdits;
+  const projectEditRow = props.projectEditRow;
   if (editable && typeof props.getRowVersion !== "function") {
     throw new TypeError("BrunoTable editable Client Tables require getRowVersion.");
   }
@@ -150,6 +168,29 @@ function BrunoTableClientInstance<
       "BrunoTable editable Client Tables require at least one potentially editable column.",
     );
   }
+  if (
+    editable &&
+    typeof projectEditRow !== "function" &&
+    compiledColumns.some(
+      (column) =>
+        column.kind === "field" &&
+        column.isEditable !== undefined &&
+        column.isEditable !== false &&
+        brunoTableCellPresentationUsesRawRow(column),
+    )
+  ) {
+    throw new TypeError(
+      "BrunoTable editable Client Tables with row-aware presentation require projectEditRow.",
+    );
+  }
+  const editRowProjector = useMemo(
+    () => adaptBrunoTableEditRowProjector(projectEditRow),
+    [projectEditRow],
+  );
+  const projectedRowId = useMemo(
+    () => (editRowProjector === undefined ? undefined : (row: object) => getRowId(row as TRow)),
+    [editRowProjector, getRowId],
+  );
   const normalizedGroupRowsColumn = useMemo(
     () => compileBrunoTableGroupRowsColumn(editable ? undefined : props.groupRowsColumn),
     [editable, props.groupRowsColumn],
@@ -238,6 +279,9 @@ function BrunoTableClientInstance<
           ...(props.getRowVersion === undefined
             ? {}
             : { getRowVersion: adaptBrunoTableRowVersionExtractor(props.getRowVersion)! }),
+          ...(editRowProjector === undefined || projectedRowId === undefined
+            ? {}
+            : { projectEditRow: editRowProjector, getRowId: projectedRowId }),
           isSourceAuthoritative: rowPipelineAdapter.hasAuthoritativeEditSource,
           ...(editMemory === undefined
             ? {}
@@ -260,8 +304,9 @@ function BrunoTableClientInstance<
     ),
     [],
   );
-  const renderConflictReview = useCallback(
-    (
+  const renderConflictReview = useMemo(() => {
+    if (editMemory === undefined) return undefined;
+    return (
       reviewRows: readonly BrunoTableCellEditDraftReviewSourceRow[],
       selection: BrunoTableRowSelectionRuntime,
       resolve: (id: string, resolution: "mine" | "server") => void,
@@ -269,19 +314,18 @@ function BrunoTableClientInstance<
       <BrunoTableConflictReviewTable
         rows={reviewRows}
         selection={selection}
-        runtime={editMemory!}
+        runtime={editMemory}
         resolve={resolve}
       />
-    ),
-    [editMemory],
-  );
-  const renderBlockedReview = useCallback(
-    (
+    );
+  }, [editMemory]);
+  const renderBlockedReview = useMemo(() => {
+    if (editMemory === undefined) return undefined;
+    return (
       reviewRows: readonly BrunoTableCellEditDraftReviewSourceRow[],
       selection: BrunoTableRowSelectionRuntime,
-    ) => <BrunoTableBlockedReviewTable rows={reviewRows} selection={selection} />,
-    [],
-  );
+    ) => <BrunoTableBlockedReviewTable rows={reviewRows} selection={selection} />;
+  }, [editMemory]);
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
   const [projectionStore] = useState(
@@ -294,6 +338,9 @@ function BrunoTableClientInstance<
   useLayoutEffect(() => {
     cellEdit?.setRowVersionExtractor(adaptBrunoTableRowVersionExtractor(props.getRowVersion));
   }, [cellEdit, props.getRowVersion]);
+  useLayoutEffect(() => {
+    cellEdit?.setEditRowProjector(editRowProjector, projectedRowId);
+  }, [cellEdit, editRowProjector, projectedRowId]);
   useLayoutEffect(() => projectionStore.activate(), [projectionStore]);
   useLayoutEffect(() => {
     editMemory?.activate();
@@ -461,8 +508,8 @@ function BrunoTableClientInstance<
           cellEdit={cellEdit}
           editMemory={editMemory}
           renderResetReview={renderResetReview}
-          renderConflictReview={renderConflictReview}
-          renderBlockedReview={renderBlockedReview}
+          {...(renderConflictReview === undefined ? {} : { renderConflictReview })}
+          {...(renderBlockedReview === undefined ? {} : { renderBlockedReview })}
           renderColumnFilter={renderBrunoTableClientColumnFilter}
           gridOwnedControls={gridOwnedControls}
         />
@@ -471,14 +518,14 @@ function BrunoTableClientInstance<
   );
 }
 
-type BrunoTableResetReviewDisplayRow = BrunoTableCellEditDraftReviewSourceRow;
+type BrunoTableEditReviewDisplayRow = BrunoTableCellEditDraftReviewSourceRow;
 
-const BrunoTableResetReviewStatus = memo(function BrunoTableResetReviewStatus({
+const BrunoTableEditReviewStatus = memo(function BrunoTableEditReviewStatus({
   row,
   tableId,
   columnId,
 }: Readonly<{
-  readonly row: BrunoTableResetReviewDisplayRow;
+  readonly row: BrunoTableEditReviewDisplayRow;
   readonly tableId?: string;
   readonly columnId?: string;
 }>): ReactNode {
@@ -552,16 +599,16 @@ function createBrunoTableResetReviewColumns(tableId: string) {
       valueType: "text",
       enableSorting: false,
       enableFilter: false,
-      cellRenderer: ({ row }: { readonly row: BrunoTableResetReviewDisplayRow }) => (
-        <BrunoTableResetReviewStatus row={row} tableId={tableId} columnId="COL_ID_STATUS" />
+      cellRenderer: ({ row }: { readonly row: BrunoTableEditReviewDisplayRow }) => (
+        <BrunoTableEditReviewStatus row={row} tableId={tableId} columnId="COL_ID_STATUS" />
       ),
     },
-  ] satisfies BrunoTableColumns<BrunoTableResetReviewDisplayRow>;
+  ] satisfies BrunoTableColumns<BrunoTableEditReviewDisplayRow>;
 }
 const BRUNO_TABLE_RESET_REVIEW_INITIAL_ORDER_BY = [
   { columnId: "COL_ID_ROW", direction: "asc" },
 ] as const satisfies BrunoTableSortBy<ReturnType<typeof createBrunoTableResetReviewColumns>>;
-const getBrunoTableResetReviewRowId = (row: BrunoTableResetReviewDisplayRow): string => row.id;
+const getBrunoTableEditReviewRowId = (row: BrunoTableEditReviewDisplayRow): string => row.id;
 
 function BrunoTableResetReviewTable({
   reviewRows,
@@ -590,7 +637,7 @@ function BrunoTableResetReviewTable({
           version: rows.length,
           status: "ready",
         },
-        getRowId: getBrunoTableResetReviewRowId,
+        getRowId: getBrunoTableEditReviewRowId,
       }}
     />
   );
@@ -689,7 +736,7 @@ function BrunoTableConflictReviewTable({
           version: rows.reduce((version, row) => version + row.getSnapshot().reviewVersion, 0),
           status: "ready",
         },
-        getRowId: getBrunoTableResetReviewRowId,
+        getRowId: getBrunoTableEditReviewRowId,
         rowSelection: true,
       }}
     />
@@ -746,7 +793,7 @@ function BrunoTableBlockedReviewTable({
           enableSorting: false,
           enableFilter: false,
           cellRenderer: ({ row }: { readonly row: BrunoTableCellEditDraftReviewSourceRow }) => (
-            <BrunoTableResetReviewStatus row={row} tableId={tableId} columnId="COL_ID_REASON" />
+            <BrunoTableEditReviewStatus row={row} tableId={tableId} columnId="COL_ID_REASON" />
           ),
         },
       ] satisfies BrunoTableColumns<BrunoTableCellEditDraftReviewSourceRow>,
@@ -770,7 +817,7 @@ function BrunoTableBlockedReviewTable({
           version: rows.reduce((version, row) => version + row.getSnapshot().reviewVersion, 0),
           status: "ready",
         },
-        getRowId: getBrunoTableResetReviewRowId,
+        getRowId: getBrunoTableEditReviewRowId,
         rowSelection: true,
       }}
     />
