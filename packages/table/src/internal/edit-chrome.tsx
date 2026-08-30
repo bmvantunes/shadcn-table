@@ -31,6 +31,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit";
 import type { BrunoTableGridCommand } from "./column-management";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
+import { recordBrunoTableReviewCellSubscription } from "./grid-subscription-instrumentation";
 import { BrunoTableRowSelectionRuntime } from "./row-selection";
 
 type SaveFailureToasterOwner = object;
@@ -335,6 +336,21 @@ export type BrunoTableBlockedReviewRenderer = (
   selection: BrunoTableRowSelectionRuntime,
 ) => ReactNode;
 
+const getSelectedConflictResolutionReason = (
+  runtime: BrunoTableEditMemoryRuntime,
+  ids: readonly string[],
+  resolution: "mine" | "server",
+  availabilityVersion: number,
+): string | undefined => {
+  void availabilityVersion;
+  return ids
+    .map((id) => {
+      const availability = runtime.getConflictResolutionAvailabilitySnapshot(id);
+      return resolution === "mine" ? availability.mineReason : availability.serverReason;
+    })
+    .find((reason) => reason !== undefined);
+};
+
 const BrunoTableConflictReview = memo(function BrunoTableConflictReview({
   runtime,
   renderReview,
@@ -398,6 +414,11 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
     selection.getHeaderSnapshot,
     selection.getHeaderSnapshot,
   );
+  const availabilityVersion = useSyncExternalStore(
+    runtime.subscribeConflictResolutionAvailabilityVersion,
+    runtime.getConflictResolutionAvailabilityVersionSnapshot,
+    runtime.getConflictResolutionAvailabilityVersionSnapshot,
+  );
   const resolveOne = useCallback(
     (id: string, resolution: "mine" | "server") => runtime.resolveConflictRows([id], resolution),
     [runtime],
@@ -405,14 +426,24 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
   const activeConflictIds = new Set(
     rows.flatMap((row) => (row.getSnapshot().conflict === undefined ? [] : [row.id])),
   );
-  const selectedActiveConflictCount =
+  const selectedActiveConflictIds =
     selectionHeader.selectedCount === 0
-      ? 0
-      : selection.getSelectedRowIds().filter((id) => activeConflictIds.has(id)).length;
+      ? []
+      : selection.getSelectedRowIds().filter((id) => activeConflictIds.has(id));
+  const selectedMineReason = getSelectedConflictResolutionReason(
+    runtime,
+    selectedActiveConflictIds,
+    "mine",
+    availabilityVersion,
+  );
+  const selectedServerReason = getSelectedConflictResolutionReason(
+    runtime,
+    selectedActiveConflictIds,
+    "server",
+    availabilityVersion,
+  );
   const resolveSelected = (resolution: "mine" | "server") => {
-    const [first, ...rest] = selection
-      .getSelectedRowIds()
-      .filter((id) => activeConflictIds.has(id));
+    const [first, ...rest] = selectedActiveConflictIds;
     if (first !== undefined && runtime.resolveConflictRows([first, ...rest], resolution)) {
       selection.clear();
     }
@@ -454,14 +485,18 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
           Cancel
         </AlertDialogCancel>
         <Button
-          disabled={selectedActiveConflictCount === 0 || snapshot.saving}
+          aria-label={`Apply Mine to Selected${selectedMineReason === undefined ? "" : `. ${selectedMineReason}`}`}
+          disabled={selectedActiveConflictIds.length === 0 || selectedMineReason !== undefined}
+          title={selectedMineReason}
           variant="outline"
           onClick={() => resolveSelected("mine")}
         >
           Apply Mine to Selected
         </Button>
         <Button
-          disabled={selectedActiveConflictCount === 0 || snapshot.saving}
+          aria-label={`Apply Server to Selected${selectedServerReason === undefined ? "" : `. ${selectedServerReason}`}`}
+          disabled={selectedActiveConflictIds.length === 0 || selectedServerReason !== undefined}
+          title={selectedServerReason}
           variant="outline"
           onClick={() => resolveSelected("server")}
         >
@@ -487,6 +522,8 @@ type BrunoTableConflictReviewResolutionProps = Readonly<{
   readonly row: BrunoTableCellEditDraftReviewSourceRow;
   readonly runtime: BrunoTableEditMemoryRuntime;
   readonly resolve: (id: string, resolution: "mine" | "server") => void;
+  readonly tableId?: string;
+  readonly columnId?: string;
 }>;
 
 export const BrunoTableConflictReviewResolution: NamedExoticComponent<BrunoTableConflictReviewResolutionProps> =
@@ -494,25 +531,52 @@ export const BrunoTableConflictReviewResolution: NamedExoticComponent<BrunoTable
     row,
     runtime,
     resolve,
+    tableId,
+    columnId,
   }: BrunoTableConflictReviewResolutionProps): ReactElement {
-    const snapshot = useSyncExternalStore(row.subscribe, row.getSnapshot, row.getSnapshot);
     const subscribe = useCallback(
-      (listener: () => void) => runtime.subscribeConflictResolution(row.id, listener),
-      [row.id, runtime],
+      (listener: () => void) => {
+        if (__BRUNO_TABLE_TEST_DIAGNOSTICS__ && tableId !== undefined && columnId !== undefined) {
+          recordBrunoTableReviewCellSubscription({
+            tableId,
+            rowId: row.id,
+            columnId,
+            source: "review-resolution",
+            phase: "subscribe",
+          });
+        }
+        const unsubscribe = runtime.subscribeConflictResolutionControl(row.id, listener);
+        return () => {
+          unsubscribe();
+          if (__BRUNO_TABLE_TEST_DIAGNOSTICS__ && tableId !== undefined && columnId !== undefined) {
+            recordBrunoTableReviewCellSubscription({
+              tableId,
+              rowId: row.id,
+              columnId,
+              source: "review-resolution",
+              phase: "unsubscribe",
+            });
+          }
+        };
+      },
+      [columnId, row.id, runtime, tableId],
     );
     const getSnapshot = useCallback(
-      () => runtime.getConflictResolutionSnapshot(row.id),
+      () => runtime.getConflictResolutionControlSnapshot(row.id),
       [row.id, runtime],
     );
-    const resolution = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)?.resolution;
-    const active = snapshot.conflict !== undefined && resolution === undefined;
+    const control = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const { active, resolution } = control;
+    const mineLabel = `Keep Mine for row ${row.rowId}, column ${row.columnLabel}`;
+    const serverLabel = `Keep Server for row ${row.rowId}, column ${row.columnLabel}`;
     return (
       <div aria-label="Conflict resolution" className="flex items-center gap-1" role="group">
         <Button
-          aria-label={`Keep Mine for row ${snapshot.rowId}, column ${snapshot.columnLabel}`}
+          aria-label={`${mineLabel}${control.mineReason === undefined ? "" : `. ${control.mineReason}`}`}
           aria-pressed={resolution === "mine"}
-          disabled={!active}
+          disabled={!active || !control.mineAvailable}
           size="sm"
+          title={control.mineReason}
           variant={resolution === "mine" ? "default" : "outline"}
           onClick={() => resolve(row.id, "mine")}
           onPointerDown={(event) => event.stopPropagation()}
@@ -520,10 +584,11 @@ export const BrunoTableConflictReviewResolution: NamedExoticComponent<BrunoTable
           Mine
         </Button>
         <Button
-          aria-label={`Keep Server for row ${snapshot.rowId}, column ${snapshot.columnLabel}`}
+          aria-label={`${serverLabel}${control.serverReason === undefined ? "" : `. ${control.serverReason}`}`}
           aria-pressed={resolution === "server"}
-          disabled={!active}
+          disabled={!active || !control.serverAvailable}
           size="sm"
+          title={control.serverReason}
           variant={resolution === "server" ? "default" : "outline"}
           onClick={() => resolve(row.id, "server")}
           onPointerDown={(event) => event.stopPropagation()}
@@ -630,7 +695,11 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
       </div>
       <AlertDialogFooter>
         {selectedIds.length > 0 && !selectedBlockedChangesDiscardable ? (
-          <p role="status">Finish or cancel the active edit before discarding it.</p>
+          <p role="status">
+            {saveWorkActive
+              ? "Wait for the current save to finish before discarding these changes."
+              : "Finish or cancel the active edit before discarding it."}
+          </p>
         ) : null}
         <AlertDialogCancel onClick={runtime.closeBlockedReview}>Close</AlertDialogCancel>
         <Button

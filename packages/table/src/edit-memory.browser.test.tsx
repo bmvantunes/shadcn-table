@@ -18,7 +18,10 @@ import { BrunoTableCellEditRuntime } from "./internal/cell-edit";
 import { BrunoTableToolbarStore, BrunoTableView } from "./internal/bruno-table-view";
 import { compileColumns } from "./internal/compile-columns";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
-import { BrunoTableEditSafetyFooter } from "./internal/edit-chrome";
+import {
+  BrunoTableConflictReviewResolution,
+  BrunoTableEditSafetyFooter,
+} from "./internal/edit-chrome";
 import { BrunoTableEditMemoryRuntime } from "./internal/edit-memory";
 import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
@@ -40,6 +43,70 @@ const columns = [
 ] satisfies BrunoTableColumns<Row>;
 
 const rows = [{ id: "ada", name: "Ada", revision: 1n }] as const;
+
+test("uses one tracked control subscription for each Conflict Review Resolution cell", async () => {
+  let row: Row = rows[0];
+  const cellEdit = new BrunoTableCellEditRuntime({
+    columns: compileColumns(columns),
+    getRow: () => row,
+    getRowVersion: (candidate) => (candidate as Row).revision,
+  });
+  const editMemory = new BrunoTableEditMemoryRuntime();
+  cellEdit.activate();
+  editMemory.activate();
+  const disconnect = editMemory.connectCellEdit(cellEdit);
+  const getControlStoreCount = (): number =>
+    (
+      editMemory as unknown as {
+        readonly conflictResolutionControlStores: ReadonlyMap<string, unknown>;
+      }
+    ).conflictResolutionControlStores.size;
+
+  try {
+    expect(editMemory.requestMode("batch")).toBe(true);
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_NAME",
+          field: "name",
+          baseRow: row,
+          expectedVersion: row.revision,
+          base: row.name,
+          mine: "Augusta",
+          conflict: { server: "Server", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    row = Object.freeze({ ...row, name: "Server", revision: 2n });
+    cellEdit.reconcileSourceRows(new Set([row.id]));
+    expect(editMemory.openConflictReview()).toBe(true);
+    const reviewRow = editMemory.getConflictReviewRowsSnapshot()[0];
+    expect(reviewRow).toBeDefined();
+    expect(getControlStoreCount()).toBe(0);
+
+    const resolution = await render(
+      <BrunoTableConflictReviewResolution
+        row={reviewRow!}
+        runtime={editMemory}
+        resolve={(id, choice) => {
+          editMemory.resolveConflictRows([id], choice);
+        }}
+      />,
+    );
+    await vi.waitFor(() => expect(getControlStoreCount()).toBe(1), { interval: 1 });
+    await expect
+      .element(resolution.getByRole("group", { name: "Conflict resolution" }))
+      .toBeVisible();
+
+    await resolution.unmount();
+    expect(getControlStoreCount()).toBe(0);
+  } finally {
+    disconnect();
+    editMemory.dispose();
+    cellEdit.dispose();
+  }
+});
 
 test("keeps legacy edit safety chrome without exposing unavailable review commands", async () => {
   let row: Row = rows[0];
@@ -1100,6 +1167,271 @@ test("resolves an Immediate conflict with Mine and starts one safely rebased sav
   await expect.element(review.getByRole("button", { name: "Saving…" })).toBeDisabled();
   resolveSave();
   await expect.element(review).not.toBeInTheDocument();
+});
+
+test.each([
+  {
+    label: "throws synchronously",
+    tableId: "TABLE_ID_IMMEDIATE_CONFLICT_SYNC_THROW",
+    message: "Compare-and-set rejected synchronously.",
+    fail: (): PromiseLike<void> => {
+      throw new Error("Compare-and-set rejected synchronously.");
+    },
+  },
+  {
+    label: "throws while reading then",
+    tableId: "TABLE_ID_IMMEDIATE_CONFLICT_HOSTILE_THEN",
+    message: "Hostile then accessor.",
+    fail: (): PromiseLike<void> =>
+      new Proxy(Object.create(null) as object, {
+        get: (_target, property) => {
+          if (property === "then") throw new Error("Hostile then accessor.");
+          return undefined;
+        },
+      }) as PromiseLike<void>,
+  },
+  {
+    label: "returns a non-Promise result",
+    tableId: "TABLE_ID_IMMEDIATE_CONFLICT_NON_PROMISE",
+    message: "BrunoTable onSaveEdits must return a PromiseLike<void>.",
+    fail: () => 42 as never,
+  },
+])(
+  "keeps an Immediate Conflict Review retryable when onSaveEdits $label",
+  async ({ fail, message, tableId }) => {
+    let saveAttempt = 0;
+    const onSaveEdits = vi.fn(() => {
+      saveAttempt += 1;
+      return saveAttempt === 1 ? fail() : Promise.resolve();
+    });
+    const renderTable = (
+      sourceRows: readonly Row[],
+      version: number,
+      status: "loading" | "ready",
+    ) => (
+      <BrunoTableClient
+        tableId={tableId}
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+        clientSource={{ rows: sourceRows, totalRows: 1, version, status }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={onSaveEdits}
+      />
+    );
+    const screen = await render(renderTable(rows, 1, "ready"));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+    await screen.rerender(renderTable(rows, 2, "loading"));
+    await userEvent.keyboard("{Enter}");
+
+    const serverRows = [{ id: "ada", name: "Server", revision: 2n }] as const;
+    await screen.rerender(renderTable(serverRows, 3, "ready"));
+    const editor = screen.getByRole("textbox", { name: "Edit Name" });
+    editor.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+    const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+    const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+    reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+    await userEvent.click(
+      review.getByRole("button", { name: "Keep Mine for row ada, column Name" }),
+    );
+
+    expect(onSaveEdits).toHaveBeenCalledOnce();
+    await expect.element(review).toBeVisible();
+    await expect.element(reviewGrid).toHaveTextContent("Yours");
+    await expect.element(reviewGrid).toHaveTextContent("Augusta");
+    await expect
+      .element(review.getByRole("button", { name: "Keep Mine for row ada, column Name" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await expect.element(review.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
+    await expect.element(review.getByRole("button", { name: "Saving…" })).not.toBeInTheDocument();
+
+    const alert = screen.getByRole("alert");
+    await expect.element(alert).toHaveTextContent("A save operation failed.");
+    await userEvent.click(review.getByRole("button", { name: "Cancel" }));
+    await expect.element(review).not.toBeInTheDocument();
+    await userEvent.click(
+      screen
+        .getByRole("region", { name: "Notifications" })
+        .getByRole("button", { name: "Operation details" }),
+    );
+    const details = screen.getByRole("alertdialog", { name: "Save operation details" });
+    await expect.element(details).toHaveTextContent(`Operation 1: ${message}`);
+    await userEvent.click(details.getByRole("button", { name: "Close details" }));
+
+    const retainedMine = grid.getByRole("gridcell", { name: "Augusta", exact: true });
+    await userEvent.click(retainedMine);
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta Retry");
+    await userEvent.keyboard("{Enter}");
+
+    expect(onSaveEdits).toHaveBeenCalledTimes(2);
+    await expect
+      .element(grid.getByRole("gridcell", { name: "Augusta Retry", exact: true }))
+      .toHaveAttribute("data-bruno-save-success");
+    await expect.element(alert).toBeVisible();
+  },
+);
+
+test("disables Conflict Review choices across a non-authoritative source gap", async () => {
+  const serverRows = [{ id: "ada", name: "Server", revision: 2n }] as const;
+  const renderTable = (
+    sourceRows: readonly Row[],
+    version: number,
+    status: "loading" | "ready",
+  ) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_REVIEW_SOURCE_GAP"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: 1, version, status }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(renderTable(rows, 1, "ready"));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONFLICT_REVIEW_SOURCE_GAP",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable(serverRows, 2, "ready"));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  await userEvent.click(review.getByRole("checkbox", { name: "Select row 1" }));
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  await expect
+    .element(review.getByRole("button", { name: /^Keep Mine for row ada, column Name/ }))
+    .toBeEnabled();
+  await expect
+    .element(review.getByRole("button", { name: /^Apply Mine to Selected/ }))
+    .toBeEnabled();
+
+  await screen.rerender(renderTable(serverRows, 3, "loading"));
+
+  await expect.element(review).toBeVisible();
+  const sourceGapSelection = review.getByRole("checkbox", { name: "Select row 1" });
+  await expect.element(sourceGapSelection).toBeChecked();
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  await expect
+    .element(
+      review.getByRole("button", {
+        name: /Keep Mine for row ada, column Name.*current source is ready/,
+      }),
+    )
+    .toBeDisabled();
+  await expect
+    .element(
+      review.getByRole("button", {
+        name: /Keep Server for row ada, column Name.*current source is ready/,
+      }),
+    )
+    .toBeDisabled();
+  const sourceGapBulkMine = review.getByRole("button", { name: /^Apply Mine to Selected/ });
+  await expect.element(sourceGapBulkMine).toBeDisabled();
+  expect(sourceGapBulkMine.element().getAttribute("aria-label")).toContain(
+    "current source is ready",
+  );
+
+  await screen.rerender(renderTable(serverRows, 4, "ready"));
+  await expect
+    .element(review.getByRole("button", { name: /^Keep Mine for row ada, column Name/ }))
+    .toBeEnabled();
+  await expect
+    .element(review.getByRole("button", { name: /^Apply Mine to Selected/ }))
+    .toBeEnabled();
+});
+
+test("keeps an Immediate review open while one disjoint conflict save is pending", async () => {
+  let resolveSave!: () => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      }),
+  );
+  const initialRows = [
+    { id: "ada", name: "Ada", revision: 1n },
+    { id: "grace", name: "Grace", revision: 1n },
+  ] as const;
+  const firstServerRows = [
+    { id: "ada", name: "A Server Ada", revision: 2n },
+    initialRows[1],
+  ] as const;
+  const finalServerRows = [
+    firstServerRows[0],
+    { id: "grace", name: "Server Grace", revision: 2n },
+  ] as const;
+  const renderTable = (
+    sourceRows: readonly Row[],
+    version: number,
+    status: "loading" | "ready",
+  ) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_IMMEDIATE_REVIEW_DISJOINT_SAVE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: 2, version, status }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(initialRows, 1, "ready"));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_IMMEDIATE_REVIEW_DISJOINT_SAVE",
+  });
+  grid.element().focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await screen.rerender(renderTable([], 2, "loading"));
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable(firstServerRows, 3, "ready"));
+  screen.getByRole("textbox", { name: "Edit Name" }).element().focus();
+  await userEvent.keyboard("{Enter}");
+
+  grid.element().focus();
+  await userEvent.keyboard("{ArrowDown}{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Amazing Grace");
+  await screen.rerender(renderTable([], 4, "loading"));
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable(finalServerRows, 5, "ready"));
+  screen.getByRole("textbox", { name: "Edit Name" }).element().focus();
+  await userEvent.keyboard("{Enter}");
+
+  await userEvent.click(screen.getByRole("button", { name: "2 conflicts" }));
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  await userEvent.click(review.getByRole("button", { name: "Keep Mine for row ada, column Name" }));
+
+  const cancel = review.getByRole("button", { name: "Cancel" });
+  await expect.element(cancel).toBeDisabled();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(review).toBeVisible();
+  await expect
+    .element(review.getByRole("button", { name: "Keep Server for row grace, column Name" }))
+    .toBeEnabled();
+
+  resolveSave();
+  await expect.element(review).toBeVisible();
+  await expect.element(cancel).toBeEnabled();
+  await expect
+    .element(review.getByRole("button", { name: "Keep Server for row grace, column Name" }))
+    .toBeEnabled();
 });
 
 test("resolves an Immediate conflict with Server without starting a save", async () => {
@@ -3285,9 +3617,9 @@ test("Reset preserves the owning table's sorting and Row Selection state", async
     .toHaveAttribute("aria-sort", "descending");
 });
 
-test("Reset Review preserves authentic source rows for compiled presentation", async () => {
+test("Reset Review preserves authentic Server presentation and contains synthetic Yours", async () => {
   class PrototypeRow {
-    readonly #prefix = "Rendered";
+    public readonly prefix = "Rendered";
 
     public constructor(
       public readonly id: string,
@@ -3296,11 +3628,11 @@ test("Reset Review preserves authentic source rows for compiled presentation", a
     ) {}
 
     public render(value: string): string {
-      return `${this.#prefix} ${value}`;
+      return `${this.prefix} ${value}`;
     }
 
     public className(value: string): string {
-      return `${this.#prefix.toLowerCase()}-${value}`;
+      return `${this.prefix.toLowerCase()}-${value}`;
     }
   }
   const formattedColumns = [
@@ -3344,12 +3676,11 @@ test("Reset Review preserves authentic source rows for compiled presentation", a
   await userEvent.keyboard("{Enter}");
   await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
 
-  const review = screen.getByRole("alertdialog", { name: "Reset Review" }).getByRole("grid");
+  const review = screen
+    .getByRole("alertdialog", { name: "Reset Review" })
+    .getByRole("grid", { name: "Reset Review changes" });
   await expect
     .element(review.getByRole("gridcell", { name: "Rendered Ada", exact: true }))
-    .toBeVisible();
-  await expect
-    .element(review.getByRole("gridcell", { name: "Rendered Augusta", exact: true }))
     .toBeVisible();
   const serverValue = review
     .getByRole("gridcell", { name: "Rendered Ada", exact: true })
@@ -3359,14 +3690,13 @@ test("Reset Review preserves authentic source rows for compiled presentation", a
   expect(serverValue?.className).toContain("rendered-Ada");
   expect(serverValue?.className).toContain("text-end");
   expect(getComputedStyle(serverValue!).textAlign).toBe("end");
-  const mineValue = review
-    .getByRole("gridcell", { name: "Rendered Augusta", exact: true })
-    .element()
-    .closest<HTMLElement>("[role=gridcell]");
-  expect(mineValue?.className).toContain("rendered-Augusta");
+  review.element().scrollLeft = review.element().scrollWidth;
+  await expect
+    .element(review.getByRole("gridcell", { name: "Unavailable", exact: true }))
+    .toBeVisible();
 });
 
-test("Reset Review applies a row-aware source value formatter to Server and Yours", async () => {
+test("Reset Review contains row-aware Yours while preserving authentic Server formatting", async () => {
   const formatterColumns = [
     {
       columnId: "COL_ID_NAME",
@@ -3404,7 +3734,7 @@ test("Reset Review applies a row-aware source value formatter to Server and Your
     .element(review.getByRole("gridcell", { name: "Formatted Ada for ada", exact: true }))
     .toBeVisible();
   await expect
-    .element(review.getByRole("gridcell", { name: "Formatted Augusta for ada", exact: true }))
+    .element(review.getByRole("gridcell", { name: "Unavailable", exact: true }))
     .toBeVisible();
 });
 
@@ -3494,12 +3824,13 @@ test("Reset Review contains unavailable Server values before typed presentation 
   await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
 
   const review = screen.getByRole("alertdialog", { name: "Reset Review" }).getByRole("grid");
-  await expect
-    .element(review.getByRole("gridcell", { name: "Unavailable", exact: true }))
-    .toBeVisible();
+  await expect.element(review).toBeVisible();
+  await expect.element(review.getByRole("gridcell", { name: "row", exact: true })).toBeVisible();
+  review.element().scrollLeft = review.element().scrollWidth;
+  expect(review.getByRole("gridcell", { name: "Unavailable", exact: true }).all()).toHaveLength(2);
   await expect
     .element(review.getByRole("gridcell", { name: "Formatted mine", exact: true }))
-    .toBeVisible();
+    .not.toBeInTheDocument();
   expect(valueFormatter.mock.calls.some(([context]) => context.value === undefined)).toBe(false);
   expect(cellClassName.mock.calls.some(([context]) => context.value === undefined)).toBe(false);
 });
@@ -4939,8 +5270,16 @@ test("refuses conflict resolution atomically when current Row Version extraction
   failVersionExtraction = true;
   await screen.rerender(renderTable(serverRows, 3));
 
-  const mine = review.getByRole("button", { name: "Keep Mine for row ada, column Name" });
-  await userEvent.click(mine);
+  const mine = review.getByRole("button", {
+    name: /Keep Mine for row ada, column Name.*latest source evidence is ready/,
+  });
+  await expect.element(mine).toBeDisabled();
+  await expect
+    .element(mine)
+    .toHaveAttribute(
+      "title",
+      "Conflict choices are unavailable until the latest source evidence is ready.",
+    );
   await expect.element(mine).toHaveAttribute("aria-pressed", "false");
   await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
 });
@@ -5235,7 +5574,7 @@ test("refreshes an open Conflict Review when conflict membership swaps at the sa
     .not.toBeInTheDocument();
 });
 
-test("renders Yours with every sibling draft in the projected row", async () => {
+test("contains row-aware Yours instead of fabricating a sibling-draft projection", async () => {
   type PresentationRow = Readonly<{
     readonly id: string;
     readonly name: string;
@@ -5294,13 +5633,16 @@ test("renders Yours with every sibling draft in the projected row", async () => 
     .getByRole("grid", { name: "Conflict Review changes" });
   reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
   await expect
-    .element(reviewGrid.getByRole("gridcell", { name: "Local context: Augusta", exact: true }))
+    .element(reviewGrid.getByRole("gridcell", { name: "Unavailable", exact: true }))
     .toBeVisible();
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Local context: Augusta", exact: true }))
+    .not.toBeInTheDocument();
 });
 
-test("Conflict Review reuses authentic source presentation for Base, Server Now, and Yours", async () => {
+test("Conflict Review preserves authentic Base and Server presentation and contains Yours", async () => {
   class PrototypeConflictRow {
-    readonly #prefix = "Rendered";
+    public readonly prefix = "Rendered";
 
     public constructor(
       public readonly id: string,
@@ -5309,7 +5651,7 @@ test("Conflict Review reuses authentic source presentation for Base, Server Now,
     ) {}
 
     public render(value: string): string {
-      return `${this.#prefix} ${value}`;
+      return `${this.prefix} ${value}`;
     }
 
     public className(value: string): string {
@@ -5377,7 +5719,17 @@ test("Conflict Review reuses authentic source presentation for Base, Server Now,
       }
     }
   }
-  for (const label of ["Rendered Ada", "Rendered Server", "Rendered Augusta"] as const) {
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  await expect
+    .element(reviewGrid.getByRole("gridcell", { name: "Unavailable", exact: true }))
+    .toBeVisible();
+  for (const cell of reviewGrid.getByRole("gridcell").all()) {
+    const element = cell.element();
+    if (element instanceof HTMLElement && element.textContent?.startsWith("Rendered ")) {
+      rendered.set(element.textContent, element);
+    }
+  }
+  for (const label of ["Rendered Ada", "Rendered Server"] as const) {
     const cell = rendered.get(label);
     expect(cell, label).toBeDefined();
     expect(cell?.className).toContain(`conflict-${label.replace("Rendered ", "")}`);
@@ -5650,6 +6002,12 @@ test("refreshes selected blocked discardability when a Batch save lock releases"
   await userEvent.click(review.getByRole("checkbox", { name: "Select row 1" }));
   const discard = review.getByRole("button", { name: "Discard Selected Changes" });
   await expect.element(discard).toBeDisabled();
+  await expect
+    .element(review.getByRole("status"))
+    .toHaveTextContent("Wait for the current save to finish before discarding these changes.");
+  await expect
+    .element(review.getByRole("status"))
+    .not.toHaveTextContent("Finish or cancel the active edit");
 
   rejectSave(new Error("The save lost its compare-and-set race."));
   await expect.element(review.getByRole("checkbox", { name: "Select row 1" })).toBeChecked();

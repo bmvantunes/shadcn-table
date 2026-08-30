@@ -1018,7 +1018,95 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(getRow).toHaveBeenCalledTimes(2);
   });
 
-  it("retains the source row when an enumerable getter prevents review projection", () => {
+  it("does not inspect or reconstruct rows while materializing same-row Yours evidence", () => {
+    const sourceColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_SECONDARY",
+        field: "secondary",
+        headerName: "Secondary",
+        valueType: "text",
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_TERTIARY",
+        field: "tertiary",
+        headerName: "Tertiary",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const target = Object.freeze({
+      id: "row-1",
+      primary: "Primary server",
+      secondary: "Secondary server",
+      tertiary: "Tertiary server",
+      revision: 2n,
+    });
+    let inspectionCount = 0;
+    const source = new Proxy(target, {
+      getOwnPropertyDescriptor(target, property) {
+        inspectionCount += 1;
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+      ownKeys(target) {
+        inspectionCount += 1;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const runtime = new BrunoTableCellEditRuntime({ columns: sourceColumns, getRow: () => source });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Primary mine",
+        },
+        {
+          rowId: source.id,
+          columnId: "COL_ID_SECONDARY",
+          field: "secondary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.secondary,
+          mine: "Secondary mine",
+        },
+        {
+          rowId: source.id,
+          columnId: "COL_ID_TERTIARY",
+          field: "tertiary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.tertiary,
+          mine: "Tertiary mine",
+        },
+      ]),
+    ).toBe(true);
+    inspectionCount = 0;
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(3);
+    expect(
+      runtime
+        .getDraftReviewSnapshot()
+        .every((review) => !review.projectedRowAvailable && review.projectedRow === undefined),
+    ).toBe(true);
+    expect(inspectionCount).toBe(0);
+    unsubscribe();
+  });
+
+  it("marks projection unavailable without invoking an enumerable own getter", () => {
     const source = Object.defineProperty({ ...row }, "explosive", {
       enumerable: true,
       get: () => {
@@ -1041,9 +1129,526 @@ describe("BrunoTable Cell Edit Session", () => {
     ).toBe(true);
 
     const unsubscribe = runtime.subscribeDraftReview(vi.fn());
-    const projected = runtime.getDraftReviewSnapshot()[0]?.projectedRow as Row | undefined;
-    expect(Object.is(projected, source)).toBe(false);
-    expect(projected?.score).toBe(7);
+    const review = runtime.getDraftReviewSnapshot()[0];
+    expect(review).toMatchObject({ projectedRowAvailable: false });
+    expect(review?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("does not claim a synthesized data-class row is authentic without a trusted projector", () => {
+    class ProjectedRow {
+      public readonly id = row.id;
+      public readonly quantity = row.quantity;
+      public readonly score!: number;
+
+      public constructor() {
+        Object.defineProperty(this, "score", {
+          configurable: false,
+          enumerable: false,
+          value: row.score,
+          writable: false,
+        });
+      }
+
+      public renderScore(): string {
+        return `Score ${this.score}`;
+      }
+    }
+    const source = new ProjectedRow();
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => source });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: source,
+          expectedVersion: source.quantity,
+          base: source.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const review = runtime.getDraftReviewSnapshot()[0];
+    expect(review).toMatchObject({ projectedRowAvailable: false });
+    expect(review?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("marks Yours projection unavailable instead of substituting Server state for private-field rows", () => {
+    class PrivateProjectedRow {
+      readonly #context: string;
+
+      public constructor(
+        public readonly id: string,
+        public readonly primary: string,
+        context: string,
+        public readonly revision: bigint,
+      ) {
+        this.#context = context;
+      }
+
+      public get context(): string {
+        return this.#context;
+      }
+
+      public renderPrimary(value: string): string {
+        return `${this.#context}: ${value}`;
+      }
+    }
+    const privateColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_CONTEXT",
+        field: "context",
+        headerName: "Context",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const source = new PrivateProjectedRow("row-1", "Server primary", "Server context", 2n);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: privateColumns,
+      getRow: () => source,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Mine primary",
+        },
+        {
+          rowId: source.id,
+          columnId: "COL_ID_CONTEXT",
+          field: "context",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.context,
+          mine: "Mine context",
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const primary = runtime
+      .getDraftReviewSnapshot()
+      .find((candidate) => candidate.columnId === "COL_ID_PRIMARY");
+    expect(primary).toMatchObject({ projectedRowAvailable: false });
+    expect(primary?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("marks Yours projection unavailable for rows whose accessors depend on WeakMap identity", () => {
+    const contexts = new WeakMap<object, string>();
+    class WeakMapProjectedRow {
+      public constructor(
+        public readonly id: string,
+        public readonly primary: string,
+        context: string,
+        public readonly revision: bigint,
+      ) {
+        contexts.set(this, context);
+      }
+
+      public get context(): string {
+        return contexts.get(this) ?? "Missing context";
+      }
+
+      public renderPrimary(value: string): string {
+        return `${this.context}: ${value}`;
+      }
+    }
+    const weakMapColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+      {
+        columnId: "COL_ID_CONTEXT",
+        field: "context",
+        headerName: "Context",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const source = new WeakMapProjectedRow("row-1", "Server primary", "Server context", 2n);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: weakMapColumns,
+      getRow: () => source,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Mine primary",
+        },
+        {
+          rowId: source.id,
+          columnId: "COL_ID_CONTEXT",
+          field: "context",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.context,
+          mine: "Mine context",
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const primary = runtime
+      .getDraftReviewSnapshot()
+      .find((candidate) => candidate.columnId === "COL_ID_PRIMARY");
+    expect(primary).toMatchObject({ projectedRowAvailable: false });
+    expect(primary?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("marks Yours projection unavailable when an own accessor depends on WeakMap identity", () => {
+    type OwnAccessorProjectedRow = Readonly<{
+      readonly id: string;
+      readonly primary: string;
+      readonly context: string;
+      readonly revision: bigint;
+    }>;
+    const contexts = new WeakMap<object, string>();
+    const source = Object.defineProperty(
+      {
+        id: "row-1",
+        primary: "Server primary",
+        revision: 2n,
+      },
+      "context",
+      {
+        configurable: true,
+        enumerable: true,
+        get(this: object) {
+          return contexts.get(this) ?? "Missing context";
+        },
+      },
+    ) as OwnAccessorProjectedRow;
+    contexts.set(source, "Server context");
+    const ownAccessorColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: ownAccessorColumns,
+      getRow: () => source,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Mine primary",
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const primary = runtime.getDraftReviewSnapshot()[0];
+    expect(primary).toMatchObject({ projectedRowAvailable: false });
+    expect(primary?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("does not infer row-aware presentation safety from a class method's source", () => {
+    class HashProjectedRow {
+      public constructor(
+        public readonly id: string,
+        public readonly primary: string,
+        private readonly contextValue: string,
+        public readonly revision: bigint,
+      ) {}
+
+      public get context(): string {
+        return this.contextValue;
+      }
+
+      public renderPrimary(value: string): string {
+        return `# ${this.context}: ${value}`;
+      }
+    }
+    const source = new HashProjectedRow("row-1", "Server primary", "Server context", 2n);
+    const hashColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({ columns: hashColumns, getRow: () => source });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Mine primary",
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const primary = runtime.getDraftReviewSnapshot()[0];
+    expect(primary).toMatchObject({ projectedRowAvailable: false });
+    expect(primary?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("does not infer row-aware presentation safety from built-in method names", () => {
+    class StringPresentationProjectedRow {
+      public constructor(
+        public readonly id: string,
+        public readonly primary: string,
+        public readonly prefix: string,
+        public readonly revision: bigint,
+      ) {}
+
+      public presentPrimary(value: string): string {
+        return `${this.prefix.toLowerCase()}: ${value.replaceAll(" ", "-")}`;
+      }
+    }
+    const source = new StringPresentationProjectedRow("row-1", "Server primary", "SAFE PREFIX", 2n);
+    const stringPresentationColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: stringPresentationColumns,
+      getRow: () => source,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Mine primary",
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const primary = runtime.getDraftReviewSnapshot()[0];
+    expect(primary).toMatchObject({ projectedRowAvailable: false });
+    expect(primary?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("does not trust a safe built-in method name on a non-string row property", () => {
+    const contexts = new WeakMap<object, string>();
+    const prefix = {
+      toLowerCase(): string {
+        return contexts.get(this) ?? "Missing context";
+      },
+    };
+    contexts.set(prefix, "Server context");
+    class ShadowedStringMethodProjectedRow {
+      public constructor(
+        public readonly id: string,
+        public readonly primary: string,
+        public readonly prefix: { readonly toLowerCase: () => string },
+        public readonly revision: bigint,
+      ) {}
+
+      public presentPrimary(value: string): string {
+        return `${this.prefix.toLowerCase()}: ${value}`;
+      }
+    }
+    const source = new ShadowedStringMethodProjectedRow("row-1", "Server primary", prefix, 2n);
+    const shadowedStringMethodColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: shadowedStringMethodColumns,
+      getRow: () => source,
+    });
+
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Mine primary",
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const primary = runtime.getDraftReviewSnapshot()[0];
+    expect(primary).toMatchObject({ projectedRowAvailable: false });
+    expect(primary?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("marks Yours projection unavailable when identity-backed access is helper-indirected", () => {
+    const contexts = new WeakMap<object, string>();
+    const readContext = (candidate: object): string | undefined => contexts.get(candidate);
+    const writeContext = (candidate: object, context: string): void => {
+      contexts.set(candidate, context);
+    };
+    class IndirectWeakMapProjectedRow {
+      public constructor(
+        public readonly id: string,
+        public readonly primary: string,
+        context: string,
+        public readonly revision: bigint,
+      ) {
+        writeContext(this, context);
+      }
+
+      public get context(): string {
+        return readContext(this) ?? "Missing context";
+      }
+
+      public renderPrimary(value: string): string {
+        return `${this.context}: ${value}`;
+      }
+    }
+    const source = new IndirectWeakMapProjectedRow("row-1", "Server primary", "Server context", 2n);
+    const indirectColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: indirectColumns,
+      getRow: () => source,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Mine primary",
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const primary = runtime.getDraftReviewSnapshot()[0];
+    expect(primary).toMatchObject({ projectedRowAvailable: false });
+    expect(primary?.projectedRow).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("marks Yours projection unavailable when the row owns its identity registry", () => {
+    const contexts = new WeakMap<object, string>();
+    class RowOwnedRegistryProjectedRow {
+      public readonly contexts = contexts;
+
+      public constructor(
+        public readonly id: string,
+        public readonly primary: string,
+        context: string,
+        public readonly revision: bigint,
+      ) {
+        contexts.set(this, context);
+      }
+
+      public get context(): string {
+        return this.contexts.get(this) ?? "Missing context";
+      }
+    }
+    const source = new RowOwnedRegistryProjectedRow(
+      "row-1",
+      "Server primary",
+      "Server context",
+      2n,
+    );
+    const rowOwnedRegistryColumns = compileColumns([
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName: "Primary",
+        valueType: "text",
+        isEditable: true,
+      },
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: rowOwnedRegistryColumns,
+      getRow: () => source,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_PRIMARY",
+          field: "primary",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.primary,
+          mine: "Mine primary",
+        },
+      ]),
+    ).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(vi.fn());
+    const primary = runtime.getDraftReviewSnapshot()[0];
+    expect(primary).toMatchObject({ projectedRowAvailable: false });
+    expect(primary?.projectedRow).toBeUndefined();
     unsubscribe();
   });
 
@@ -5562,7 +6167,7 @@ describe("BrunoTable Cell Edit Session", () => {
     unsubscribe();
   });
 
-  it("accepts only submitted Batch identities, preserves unrelated drafts, and clears Batch history", () => {
+  it("accepts only submitted Batch identities and preserves unrelated draft history", () => {
     const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
     runtime.setBatchHistoryEnabled(true);
     expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
@@ -5593,12 +6198,95 @@ describe("BrunoTable Cell Edit Session", () => {
 
     expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBeUndefined();
     expect(runtime.getDraftSnapshot(row.id, "COL_ID_QUANTITY")).toBe(9_007_199_254_740_994n);
-    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 0 });
-    expect(runtime.undoBatchDraft()).toBe(false);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot(row.id, "COL_ID_QUANTITY")).toBeUndefined();
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot(row.id, "COL_ID_QUANTITY")).toBe(9_007_199_254_740_994n);
     expect(runtime.getDraftReviewSnapshot()).toHaveLength(1);
     expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({ columnId: "COL_ID_QUANTITY" });
     expect(runtime.getRetainedDraftDependencyCellCount()).toBe(1);
     unsubscribeReview();
+  });
+
+  it("preserves history for a Server-resolved conflict reopened while another Batch cell saves", () => {
+    const second = Object.freeze({
+      id: "row-2",
+      quantity: row.quantity + 1n,
+      score: 3,
+    });
+    const rowsById = new Map<string, Row>([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rowsById.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.start(second.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("8")).toBe(true);
+
+    const firstServerB = Object.freeze({
+      ...second,
+      quantity: second.quantity + 1n,
+      score: 5,
+    });
+    rowsById.set(second.id, firstServerB);
+    runtime.reconcileSourceRows(new Set([second.id]));
+    const conflictB = runtime
+      .getDraftReviewSnapshot()
+      .find((candidate) => candidate.rowId === second.id)!;
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: conflictB.id,
+          resolution: "server",
+          reviewedServer: conflictB.conflict!.server,
+          reviewedServerVersion: conflictB.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(true);
+
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toMatchObject([
+      {
+        rowId: row.id,
+        changes: [{ columnId: "COL_ID_SCORE", after: 7 }],
+      },
+    ]);
+    expect(runtime.beginSaveOperation("batch-a", changeSet!, true)).toBe(true);
+
+    const secondServerB = Object.freeze({
+      ...firstServerB,
+      quantity: firstServerB.quantity + 1n,
+      score: 6,
+    });
+    rowsById.set(second.id, secondServerB);
+    runtime.reconcileSourceRows(new Set([second.id]));
+    const retainedCandidates = [...runtime.getRetainedResolutionPublicationSnapshot()];
+    expect(retainedCandidates).toEqual([conflictB.id]);
+    expect(runtime.reopenResolvedConflicts(retainedCandidates)).toBe(true);
+    expect(
+      runtime.getDraftReviewSnapshot().find((candidate) => candidate.rowId === second.id),
+    ).toMatchObject({
+      rowId: second.id,
+      mine: 8,
+      conflict: { server: 6, serverVersion: secondServerB.quantity },
+    });
+
+    runtime.acceptSave("batch-a", changeSet!, true);
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 1,
+      conflictCount: 1,
+      undoCount: 1,
+    });
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot(second.id, "COL_ID_SCORE")).toBeUndefined();
   });
 
   it("reconciles a rejected Batch draft immediately after releasing its save lock", () => {
@@ -6482,6 +7170,41 @@ describe("BrunoTable Cell Edit Session", () => {
 
     expect(getRow.mock.calls.map(([rowId]) => rowId)).toEqual([row.id]);
     expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 0, draftCount: 2 });
+  });
+
+  it("refreshes unresolved conflict evidence when the Row Version extractor changes", () => {
+    let current = row;
+    let version = 1n;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: () => version,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+
+    current = Object.freeze({ ...row, score: 6 });
+    version = 2n;
+    runtime.reconcileSourceRows(new Set([row.id]));
+    const before = runtime.getDraftReviewSnapshot()[0]!;
+    expect(before.conflict).toMatchObject({ server: 6, serverVersion: 2n });
+
+    runtime.setRowVersionExtractor(() => 3n);
+
+    const after = runtime.getDraftReviewSnapshot()[0]!;
+    expect(after.conflict).toMatchObject({ server: 6, serverVersion: 3n });
+    expect(runtime.canResolveDraftConflict(after.id)).toBe(true);
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: after.id,
+          resolution: "mine",
+          reviewedServer: after.conflict!.server,
+          reviewedServerVersion: after.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(true);
   });
 
   it("drops a Row Version-blocked row index when its final evidence converges", () => {

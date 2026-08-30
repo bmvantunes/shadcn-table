@@ -15,6 +15,8 @@ type Listener = () => void;
 
 export type BrunoTableEditMode = "immediate" | "batch";
 
+type BrunoTableSaveInitiator = "edit" | "footer" | "conflict-review";
+
 export type BrunoTableEditModeSnapshot = Readonly<{
   readonly mode: BrunoTableEditMode;
   readonly canChange: boolean;
@@ -44,6 +46,27 @@ export type BrunoTableConflictReviewSnapshot = BrunoTableSparseEditReviewSnapsho
     readonly resolutionCount: number;
     readonly saving: boolean;
   }>;
+
+export type BrunoTableConflictResolutionAvailabilitySnapshot = Readonly<{
+  readonly mineAvailable: boolean;
+  readonly serverAvailable: boolean;
+  readonly mineReason?: string;
+  readonly serverReason?: string;
+}>;
+
+export type BrunoTableConflictResolutionControlSnapshot = Readonly<{
+  readonly active: boolean;
+  readonly resolution: "mine" | "server" | undefined;
+  readonly mineAvailable: boolean;
+  readonly serverAvailable: boolean;
+  readonly mineReason?: string;
+  readonly serverReason?: string;
+}>;
+
+type BrunoTableTrackedConflictStore<T> = {
+  readonly store: Store<T>;
+  subscriberCount: number;
+};
 
 export type BrunoTableEditSafetyStatusSnapshot = Readonly<{
   readonly pendingCount: number;
@@ -103,7 +126,10 @@ type EditWorkflowContext = Readonly<{
     string,
     BrunoTableConflictReviewResolutionSnapshot
   >;
-  readonly conflictReviewSaving: boolean;
+  readonly conflictResolutionInProgressIds: ReadonlySet<string>;
+  readonly conflictReviewSaveRequested: boolean;
+  readonly conflictReviewSaveOperationIds: ReadonlySet<string>;
+  readonly conflictReviewSaveRejected: boolean;
   readonly saveFailureDismissalVersion: number;
 }>;
 
@@ -126,8 +152,23 @@ type EditWorkflowEvent =
       readonly type: "RECORD_CONFLICT_RESOLUTIONS";
       readonly resolutions: readonly BrunoTableConflictReviewResolutionSnapshot[];
     }>
+  | Readonly<{ readonly type: "BEGIN_CONFLICT_RESOLUTION"; readonly ids: readonly string[] }>
+  | Readonly<{ readonly type: "END_CONFLICT_RESOLUTION"; readonly ids: readonly string[] }>
   | Readonly<{ readonly type: "INVALIDATE_CONFLICT_RESOLUTIONS"; readonly ids: readonly string[] }>
-  | Readonly<{ readonly type: "SET_CONFLICT_REVIEW_SAVING"; readonly active: boolean }>
+  | Readonly<{ readonly type: "REQUEST_CONFLICT_REVIEW_SAVE" }>
+  | Readonly<{ readonly type: "CANCEL_CONFLICT_REVIEW_SAVE_REQUEST" }>
+  | Readonly<{
+      readonly type: "SAVE_OPERATION_ADMITTED";
+      readonly operationId: string;
+      readonly initiatedFrom: BrunoTableSaveInitiator;
+    }>
+  | Readonly<{
+      readonly type: "SAVE_OPERATION_ADMISSION_REJECTED";
+      readonly operationId: string;
+      readonly initiatedFrom: BrunoTableSaveInitiator;
+    }>
+  | Readonly<{ readonly type: "SAVE_OPERATION_RESOLVED"; readonly operationId: string }>
+  | Readonly<{ readonly type: "SAVE_OPERATION_REJECTED"; readonly operationId: string }>
   | Readonly<{ readonly type: "DISMISS_SAVE_FAILURES" }>;
 
 const INITIAL_MODE_SNAPSHOT: BrunoTableEditModeSnapshot = Object.freeze({
@@ -150,6 +191,70 @@ const CLOSED_CONFLICT_REVIEW: BrunoTableConflictReviewSnapshot = Object.freeze({
   resolutionCount: 0,
   saving: false,
 });
+const AVAILABLE_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
+  Object.freeze({ mineAvailable: true, serverAvailable: true });
+const ACTIVE_EDITOR_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
+  Object.freeze({
+    mineAvailable: false,
+    serverAvailable: false,
+    mineReason: "Finish or cancel the active edit before resolving this conflict.",
+    serverReason: "Finish or cancel the active edit before resolving this conflict.",
+  });
+const SAVE_WORK_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
+  Object.freeze({
+    mineAvailable: false,
+    serverAvailable: false,
+    mineReason: "Wait for the current save to finish before resolving this conflict.",
+    serverReason: "Wait for the current save to finish before resolving this conflict.",
+  });
+const SOURCE_GAP_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
+  Object.freeze({
+    mineAvailable: false,
+    serverAvailable: false,
+    mineReason: "Conflict choices are unavailable until the current source is ready.",
+    serverReason: "Conflict choices are unavailable until the current source is ready.",
+  });
+const STALE_EVIDENCE_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
+  Object.freeze({
+    mineAvailable: false,
+    serverAvailable: false,
+    mineReason: "Conflict choices are unavailable until the latest source evidence is ready.",
+    serverReason: "Conflict choices are unavailable until the latest source evidence is ready.",
+  });
+const IMMEDIATE_SOURCE_GAP_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
+  Object.freeze({
+    mineAvailable: false,
+    serverAvailable: true,
+    mineReason: "Keep Mine is unavailable until the current source is ready.",
+  });
+const IMMEDIATE_CAPACITY_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
+  Object.freeze({
+    mineAvailable: false,
+    serverAvailable: true,
+    mineReason: "Keep Mine is unavailable until another save can start.",
+  });
+const CONFLICT_RESOLUTION_CONTROL_SNAPSHOTS = new WeakMap<
+  BrunoTableConflictResolutionAvailabilitySnapshot,
+  Map<string, BrunoTableConflictResolutionControlSnapshot>
+>();
+
+function getConflictResolutionControlSnapshot(
+  active: boolean,
+  resolution: "mine" | "server" | undefined,
+  availability: BrunoTableConflictResolutionAvailabilitySnapshot,
+): BrunoTableConflictResolutionControlSnapshot {
+  let snapshots = CONFLICT_RESOLUTION_CONTROL_SNAPSHOTS.get(availability);
+  if (snapshots === undefined) {
+    snapshots = new Map<string, BrunoTableConflictResolutionControlSnapshot>();
+    CONFLICT_RESOLUTION_CONTROL_SNAPSHOTS.set(availability, snapshots);
+  }
+  const key = `${active ? "active" : "inactive"}:${resolution ?? "unresolved"}`;
+  const existing = snapshots.get(key);
+  if (existing !== undefined) return existing;
+  const created = Object.freeze({ active, resolution, ...availability });
+  snapshots.set(key, created);
+  return created;
+}
 const CLEAN_EDIT_SAFETY_STATUS: BrunoTableEditSafetyStatusSnapshot = Object.freeze({
   pendingCount: 0,
   blockedCount: 0,
@@ -230,7 +335,10 @@ const brunoTableEditWorkflowMachine = createMachine({
     conflictReviewOpen: false,
     blockedReviewOpen: false,
     conflictReviewResolutions: new Map<string, BrunoTableConflictReviewResolutionSnapshot>(),
-    conflictReviewSaving: false,
+    conflictResolutionInProgressIds: new Set<string>(),
+    conflictReviewSaveRequested: false,
+    conflictReviewSaveOperationIds: new Set<string>(),
+    conflictReviewSaveRejected: false,
     saveFailureDismissalVersion: 0,
   },
   states: {
@@ -271,19 +379,26 @@ const brunoTableEditWorkflowMachine = createMachine({
           actions: assign({ resetReviewOpen: false }),
         },
         OPEN_CONFLICT_REVIEW: {
-          guard: ({ context }) => context.activity.conflictCount > 0,
+          guard: ({ context }) =>
+            context.activity.conflictCount > 0 &&
+            !context.activity.activeEditor &&
+            context.conflictReviewSaveOperationIds.size === 0,
           actions: assign({
             resetReviewOpen: false,
             conflictReviewOpen: true,
             blockedReviewOpen: false,
-            conflictReviewSaving: false,
+            conflictReviewSaveRequested: false,
+            conflictReviewSaveRejected: false,
           }),
         },
         CLOSE_CONFLICT_REVIEW: {
-          guard: ({ context }) => !context.conflictReviewSaving,
+          guard: ({ context }) =>
+            !context.conflictReviewSaveRequested &&
+            context.conflictReviewSaveOperationIds.size === 0,
           actions: assign({
             conflictReviewOpen: false,
-            conflictReviewSaving: false,
+            conflictReviewSaveRequested: false,
+            conflictReviewSaveRejected: false,
           }),
         },
         OPEN_BLOCKED_REVIEW: {
@@ -308,6 +423,31 @@ const brunoTableEditWorkflowMachine = createMachine({
             },
           }),
         },
+        BEGIN_CONFLICT_RESOLUTION: {
+          guard: ({ context, event }) =>
+            context.conflictReviewOpen &&
+            event.ids.length > 0 &&
+            event.ids.every((id) => !context.conflictResolutionInProgressIds.has(id)),
+          actions: assign({
+            conflictResolutionInProgressIds: ({ context, event }) => {
+              const inProgressIds = new Set(context.conflictResolutionInProgressIds);
+              for (const id of event.ids) inProgressIds.add(id);
+              return inProgressIds;
+            },
+          }),
+        },
+        END_CONFLICT_RESOLUTION: {
+          actions: assign({
+            conflictResolutionInProgressIds: ({ context, event }) => {
+              if (!event.ids.some((id) => context.conflictResolutionInProgressIds.has(id))) {
+                return context.conflictResolutionInProgressIds;
+              }
+              const inProgressIds = new Set(context.conflictResolutionInProgressIds);
+              for (const id of event.ids) inProgressIds.delete(id);
+              return inProgressIds;
+            },
+          }),
+        },
         INVALIDATE_CONFLICT_RESOLUTIONS: {
           actions: assign({
             conflictReviewResolutions: ({ context, event }) => {
@@ -317,10 +457,101 @@ const brunoTableEditWorkflowMachine = createMachine({
             },
           }),
         },
-        SET_CONFLICT_REVIEW_SAVING: {
+        REQUEST_CONFLICT_REVIEW_SAVE: {
+          guard: ({ context }) =>
+            context.conflictReviewOpen && !context.conflictReviewSaveRequested,
+          actions: assign({
+            conflictReviewSaveRequested: true,
+            conflictReviewSaveRejected: ({ context }) =>
+              context.conflictReviewSaveOperationIds.size === 0
+                ? false
+                : context.conflictReviewSaveRejected,
+          }),
+        },
+        CANCEL_CONFLICT_REVIEW_SAVE_REQUEST: {
+          actions: assign({ conflictReviewSaveRequested: false }),
+        },
+        SAVE_OPERATION_ADMITTED: {
           guard: ({ context, event }) =>
-            !event.active || (context.conflictReviewOpen && context.activity.conflictCount === 0),
-          actions: assign({ conflictReviewSaving: ({ event }) => event.active }),
+            event.initiatedFrom !== "conflict-review" ||
+            (context.conflictReviewOpen && context.conflictReviewSaveRequested),
+          actions: assign({
+            conflictReviewSaveRequested: ({ context, event }) =>
+              event.initiatedFrom === "conflict-review"
+                ? false
+                : context.conflictReviewSaveRequested,
+            conflictReviewSaveOperationIds: ({ context, event }) => {
+              if (event.initiatedFrom !== "conflict-review") {
+                return context.conflictReviewSaveOperationIds;
+              }
+              const operationIds = new Set(context.conflictReviewSaveOperationIds);
+              operationIds.add(event.operationId);
+              return operationIds;
+            },
+          }),
+        },
+        SAVE_OPERATION_ADMISSION_REJECTED: {
+          actions: assign({
+            conflictReviewSaveRequested: ({ context, event }) =>
+              event.initiatedFrom === "conflict-review"
+                ? false
+                : context.conflictReviewSaveRequested,
+            conflictReviewSaveOperationIds: ({ context, event }) => {
+              if (!context.conflictReviewSaveOperationIds.has(event.operationId)) {
+                return context.conflictReviewSaveOperationIds;
+              }
+              const operationIds = new Set(context.conflictReviewSaveOperationIds);
+              operationIds.delete(event.operationId);
+              return operationIds;
+            },
+          }),
+        },
+        SAVE_OPERATION_RESOLVED: {
+          actions: assign({
+            conflictReviewSaveOperationIds: ({ context, event }) => {
+              if (!context.conflictReviewSaveOperationIds.has(event.operationId)) {
+                return context.conflictReviewSaveOperationIds;
+              }
+              const operationIds = new Set(context.conflictReviewSaveOperationIds);
+              operationIds.delete(event.operationId);
+              return operationIds;
+            },
+            conflictReviewResolutions: ({ context, event }) =>
+              context.conflictReviewSaveOperationIds.has(event.operationId) &&
+              context.conflictReviewSaveOperationIds.size === 1 &&
+              !context.conflictReviewSaveRejected
+                ? new Map<string, BrunoTableConflictReviewResolutionSnapshot>()
+                : context.conflictReviewResolutions,
+            conflictReviewOpen: ({ context, event }) =>
+              context.conflictReviewSaveOperationIds.has(event.operationId) &&
+              context.conflictReviewSaveOperationIds.size === 1 &&
+              !context.conflictReviewSaveRejected &&
+              context.activity.conflictCount === 0
+                ? false
+                : context.conflictReviewOpen,
+            conflictReviewSaveRejected: ({ context, event }) =>
+              context.conflictReviewSaveOperationIds.has(event.operationId) &&
+              context.conflictReviewSaveOperationIds.size === 1 &&
+              !context.conflictReviewSaveRejected
+                ? false
+                : context.conflictReviewSaveRejected,
+          }),
+        },
+        SAVE_OPERATION_REJECTED: {
+          actions: assign({
+            conflictReviewSaveOperationIds: ({ context, event }) => {
+              if (!context.conflictReviewSaveOperationIds.has(event.operationId)) {
+                return context.conflictReviewSaveOperationIds;
+              }
+              const operationIds = new Set(context.conflictReviewSaveOperationIds);
+              operationIds.delete(event.operationId);
+              return operationIds;
+            },
+            conflictReviewSaveRejected: ({ context, event }) =>
+              context.conflictReviewSaveOperationIds.has(event.operationId)
+                ? true
+                : context.conflictReviewSaveRejected,
+          }),
         },
         DISMISS_SAVE_FAILURES: {
           actions: assign({
@@ -391,10 +622,11 @@ export class BrunoTableEditMemoryRuntime {
   private readonly conflictReviewRowsStore = new Store<
     readonly BrunoTableCellEditDraftReviewSourceRow[]
   >(Object.freeze([]));
-  private readonly conflictResolutionStores = new Map<
+  private readonly conflictResolutionControlStores = new Map<
     string,
-    Store<BrunoTableConflictReviewResolutionSnapshot | undefined>
+    BrunoTableTrackedConflictStore<BrunoTableConflictResolutionControlSnapshot>
   >();
+  private readonly conflictResolutionAvailabilityVersionStore = new Store(0);
   private readonly blockedReviewStore = new Store<BrunoTableSparseEditReviewSnapshot>(
     CLOSED_SPARSE_EDIT_REVIEW,
   );
@@ -402,9 +634,12 @@ export class BrunoTableEditMemoryRuntime {
     readonly BrunoTableCellEditDraftReviewSourceRow[]
   >(Object.freeze([]));
   private cellEdit: BrunoTableCellEditRuntime | undefined;
-  private saveCommand: (() => void) | undefined;
+  private saveCommand: ((initiatedFrom: "footer" | "conflict-review") => boolean) | undefined;
   private immediateSaveCommand:
-    | ((changes: BrunoTableCellEditChangeGesture) => BrunoTableCellEditImmediateSaveResult)
+    | ((
+        changes: BrunoTableCellEditChangeGesture,
+        initiatedFrom: "edit" | "conflict-review",
+      ) => BrunoTableCellEditImmediateSaveResult)
     | undefined;
   private conflictReviewCommand: (() => void) | undefined;
   private gridFocusCommand: (() => void) | undefined;
@@ -422,14 +657,10 @@ export class BrunoTableEditMemoryRuntime {
   private cellEditActivity: BrunoTableCellEditActivitySnapshot = CLEAN_CELL_EDIT_ACTIVITY;
   private saveOperationCapacityAvailable = true;
   private savePreflightAvailable = true;
-  private conflictReviewSaveRequested = false;
-  private readonly conflictReviewSaveOperationIds = new Set<string>();
-  private conflictReviewSaveRejected = false;
   private readonly conflictReviewSourcesById = new Map<
     string,
     BrunoTableCellEditDraftReviewSourceRow
   >();
-  private readonly conflictResolutionInProgressIds = new Set<string>();
 
   public readonly activate = (): void => {
     if (this.actorActive) return;
@@ -450,9 +681,6 @@ export class BrunoTableEditMemoryRuntime {
     this.activeRetainedSaveOperationCount = 0;
     this.saveOperationCapacityAvailable = true;
     this.savePreflightAvailable = true;
-    this.conflictReviewSaveRequested = false;
-    this.conflictReviewSaveOperationIds.clear();
-    this.conflictReviewSaveRejected = false;
     this.saveCommand = undefined;
     this.immediateSaveCommand = undefined;
     this.conflictReviewCommand = undefined;
@@ -491,7 +719,6 @@ export class BrunoTableEditMemoryRuntime {
     this.resetReviewRowsStore.setState(() => Object.freeze([]));
     this.conflictReviewRowsStore.setState(() => Object.freeze([]));
     this.conflictReviewSourcesById.clear();
-    this.conflictResolutionInProgressIds.clear();
     this.clearConflictResolutionStores();
     this.blockedReviewRowsStore.setState(() => Object.freeze([]));
   };
@@ -720,7 +947,9 @@ export class BrunoTableEditMemoryRuntime {
     return () => subscription.unsubscribe();
   };
 
-  public readonly registerSaveCommand = (command: () => void): (() => void) => {
+  public readonly registerSaveCommand = (
+    command: (initiatedFrom: "footer" | "conflict-review") => boolean,
+  ): (() => void) => {
     this.saveCommand = command;
     this.publishCanSave(
       this.modeStore.get().mode,
@@ -739,11 +968,18 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly registerImmediateSaveCommand = (
-    command: (changes: BrunoTableCellEditChangeGesture) => BrunoTableCellEditImmediateSaveResult,
+    command: (
+      changes: BrunoTableCellEditChangeGesture,
+      initiatedFrom: "edit" | "conflict-review",
+    ) => BrunoTableCellEditImmediateSaveResult,
   ): (() => void) => {
     this.immediateSaveCommand = command;
+    this.syncConflictResolutionStores();
     return () => {
-      if (this.immediateSaveCommand === command) this.immediateSaveCommand = undefined;
+      if (this.immediateSaveCommand === command) {
+        this.immediateSaveCommand = undefined;
+        this.syncConflictResolutionStores();
+      }
     };
   };
 
@@ -751,7 +987,18 @@ export class BrunoTableEditMemoryRuntime {
     changes: BrunoTableCellEditChangeGesture,
   ): BrunoTableCellEditImmediateSaveResult => {
     if (!this.canRequestImmediateSave()) return "rejected";
-    return this.immediateSaveCommand?.(changes) ?? "rejected";
+    const initiatedFrom = this.actor.getSnapshot().context.conflictReviewSaveRequested
+      ? "conflict-review"
+      : "edit";
+    const result = this.immediateSaveCommand?.(changes, initiatedFrom) ?? "rejected";
+    if (initiatedFrom === "conflict-review") {
+      const requestPending = this.actor.getSnapshot().context.conflictReviewSaveRequested;
+      if (result !== "admitted" || requestPending) {
+        this.actor.send({ type: "CANCEL_CONFLICT_REVIEW_SAVE_REQUEST" });
+        return result === "admitted" ? "rejected" : result;
+      }
+    }
+    return result;
   };
 
   private readonly canRequestImmediateSave = (): boolean =>
@@ -768,6 +1015,7 @@ export class BrunoTableEditMemoryRuntime {
       this.cellEditActivity.draftCount,
       this.cellEditActivity.blockedCount,
     );
+    this.syncConflictResolutionStores();
   };
 
   public readonly setSavePreflightAvailable = (available: boolean): void => {
@@ -778,6 +1026,7 @@ export class BrunoTableEditMemoryRuntime {
       this.cellEditActivity.draftCount,
       this.cellEditActivity.blockedCount,
     );
+    this.syncConflictResolutionStores();
   };
 
   public readonly registerConflictReviewCommand = (command: () => void): (() => void) => {
@@ -806,22 +1055,17 @@ export class BrunoTableEditMemoryRuntime {
       return true;
     }
     if (this.saveCommand === undefined) return false;
-    this.saveCommand();
-    return true;
+    return this.saveCommand("footer");
   };
 
   public readonly beginSaveWork = (
     operationId?: string,
     kind: "batch" | "immediate" = "immediate",
+    initiatedFrom: BrunoTableSaveInitiator = "edit",
   ): (() => void) => {
     this.activeSaveWorkCount += 1;
-    if (operationId !== undefined && this.conflictReviewSaveRequested) {
-      this.conflictReviewSaveRequested = false;
-      if (this.conflictReviewSaveOperationIds.size === 0) {
-        this.conflictReviewSaveRejected = false;
-      }
-      this.conflictReviewSaveOperationIds.add(operationId);
-      this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: true });
+    if (operationId !== undefined) {
+      this.actor.send({ type: "SAVE_OPERATION_ADMITTED", operationId, initiatedFrom });
     }
     if (operationId !== undefined) {
       this.saveWorkByOperation.set(
@@ -845,13 +1089,11 @@ export class BrunoTableEditMemoryRuntime {
     };
   };
 
-  public readonly rejectSaveWorkAdmission = (operationId: string): void => {
-    if (!this.conflictReviewSaveOperationIds.delete(operationId)) return;
-    this.conflictReviewSaveRequested = true;
-    this.actor.send({
-      type: "SET_CONFLICT_REVIEW_SAVING",
-      active: this.conflictReviewSaveOperationIds.size > 0,
-    });
+  public readonly rejectSaveWorkAdmission = (
+    operationId: string,
+    initiatedFrom: BrunoTableSaveInitiator = "edit",
+  ): void => {
+    this.actor.send({ type: "SAVE_OPERATION_ADMISSION_REJECTED", operationId, initiatedFrom });
   };
 
   public readonly beginRetainedSaveOperation = (): (() => void) => {
@@ -970,7 +1212,6 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly openConflictReview = (focusReturn?: EventTarget | null): boolean => {
-    if (!this.canOpenConflictReviewStore.get()) return false;
     this.captureReviewFocus(focusReturn);
     this.actor.send({ type: "OPEN_CONFLICT_REVIEW" });
     if (!this.actor.getSnapshot().context.conflictReviewOpen) {
@@ -991,10 +1232,16 @@ export class BrunoTableEditMemoryRuntime {
       const serverResolutionIds = [...context.conflictReviewResolutions].flatMap(
         ([id, resolution]) => (resolution.resolution === "server" ? [id] : []),
       );
-      if (serverResolutionIds.length > 0) {
-        for (const id of serverResolutionIds) this.conflictResolutionInProgressIds.add(id);
-        const reconciledIds = runtime.reconcileResolvedConflictIds(serverResolutionIds);
-        for (const id of serverResolutionIds) this.conflictResolutionInProgressIds.delete(id);
+      if (
+        serverResolutionIds.length > 0 &&
+        this.beginConflictResolutionTransition(serverResolutionIds)
+      ) {
+        let reconciledIds: ReadonlySet<string>;
+        try {
+          reconciledIds = runtime.reconcileResolvedConflictIds(serverResolutionIds);
+        } finally {
+          this.endConflictResolutionTransition(serverResolutionIds);
+        }
         if (reconciledIds.size > 0) {
           this.actor.send({
             type: "INVALIDATE_CONFLICT_RESOLUTIONS",
@@ -1004,6 +1251,12 @@ export class BrunoTableEditMemoryRuntime {
       }
     }
     this.actor.send({ type: "CLOSE_CONFLICT_REVIEW" });
+    if (!this.actor.getSnapshot().context.conflictReviewOpen) {
+      this.finishConflictReviewClose();
+    }
+  };
+
+  private readonly finishConflictReviewClose = (): void => {
     this.conflictReviewSourcesById.clear();
     this.conflictReviewRowsStore.setState(() => Object.freeze([]));
     this.clearConflictResolutionStores();
@@ -1014,10 +1267,45 @@ export class BrunoTableEditMemoryRuntime {
   public readonly getConflictResolutionSnapshot = (
     id: string,
   ): BrunoTableConflictReviewResolutionSnapshot | undefined =>
-    this.getConflictResolutionStore(id).get();
+    this.getProjectedConflictResolution(id);
 
-  public readonly subscribeConflictResolution = (id: string, listener: Listener): (() => void) => {
-    const subscription = this.getConflictResolutionStore(id).subscribe(listener);
+  public readonly getConflictResolutionAvailabilitySnapshot = (
+    id: string,
+  ): BrunoTableConflictResolutionAvailabilitySnapshot =>
+    this.getProjectedConflictResolutionAvailability(id);
+
+  public readonly getConflictResolutionControlSnapshot = (
+    id: string,
+  ): BrunoTableConflictResolutionControlSnapshot =>
+    this.conflictResolutionControlStores.get(id)?.store.get() ??
+    this.getProjectedConflictResolutionControl(id);
+
+  public readonly subscribeConflictResolutionControl = (
+    id: string,
+    listener: Listener,
+  ): (() => void) => {
+    const entry = this.getConflictResolutionControlStore(id);
+    entry.subscriberCount += 1;
+    const subscription = entry.store.subscribe(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      subscription.unsubscribe();
+      entry.subscriberCount = Math.max(0, entry.subscriberCount - 1);
+      if (entry.subscriberCount === 0 && this.conflictResolutionControlStores.get(id) === entry) {
+        this.conflictResolutionControlStores.delete(id);
+      }
+    };
+  };
+
+  public readonly getConflictResolutionAvailabilityVersionSnapshot = (): number =>
+    this.conflictResolutionAvailabilityVersionStore.get();
+
+  public readonly subscribeConflictResolutionAvailabilityVersion = (
+    listener: Listener,
+  ): (() => void) => {
+    const subscription = this.conflictResolutionAvailabilityVersionStore.subscribe(listener);
     return () => subscription.unsubscribe();
   };
 
@@ -1046,36 +1334,58 @@ export class BrunoTableEditMemoryRuntime {
       this.modeStore.get().mode === "immediate" && resolution === "mine";
     if (immediateSaveExpected && !this.canRequestImmediateSave()) return false;
     if (immediateSaveExpected) {
-      this.conflictReviewSaveRequested = true;
+      this.actor.send({ type: "REQUEST_CONFLICT_REVIEW_SAVE" });
     }
-    for (const id of ids) this.conflictResolutionInProgressIds.add(id);
-    if (
-      first === undefined ||
-      !this.cellEdit.resolveDraftConflicts(
-        Object.freeze([first, ...rest]) as readonly [
-          BrunoTableCellEditConflictResolution,
-          ...BrunoTableCellEditConflictResolution[],
-        ],
-      )
-    ) {
-      if (immediateSaveExpected) {
-        this.conflictReviewSaveRequested = false;
-        this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
-      }
-      for (const id of ids) this.conflictResolutionInProgressIds.delete(id);
-      this.publishSparseReviewRows();
+    if (!this.beginConflictResolutionTransition(ids)) {
+      if (immediateSaveExpected) this.actor.send({ type: "CANCEL_CONFLICT_REVIEW_SAVE_REQUEST" });
       return false;
     }
-    this.actor.send({ type: "RECORD_CONFLICT_RESOLUTIONS", resolutions: records });
-    if (immediateSaveExpected && this.conflictReviewSaveRequested) {
-      this.conflictReviewSaveRequested = false;
-      this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
-    } else if (immediateSaveExpected && this.conflictReviewSaveOperationIds.size > 0) {
-      this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: true });
+    try {
+      const runtime = this.cellEdit;
+      if (
+        first === undefined ||
+        runtime === undefined ||
+        !runtime.resolveDraftConflicts(
+          Object.freeze([first, ...rest]) as readonly [
+            BrunoTableCellEditConflictResolution,
+            ...BrunoTableCellEditConflictResolution[],
+          ],
+        )
+      ) {
+        if (immediateSaveExpected) {
+          this.actor.send({ type: "CANCEL_CONFLICT_REVIEW_SAVE_REQUEST" });
+        }
+        return false;
+      }
+      const evidenceRemainsCurrent = records.every((record) =>
+        runtime.isDraftConflictEvidenceCurrent(
+          record.id,
+          record.resolution,
+          record.reviewedServer,
+          record.reviewedServerVersion,
+        ),
+      );
+      if (!evidenceRemainsCurrent) {
+        runtime.reconcileResolvedConflictIds(ids);
+        if (immediateSaveExpected) {
+          this.actor.send({ type: "CANCEL_CONFLICT_REVIEW_SAVE_REQUEST" });
+        }
+        return false;
+      }
+      this.actor.send({ type: "RECORD_CONFLICT_RESOLUTIONS", resolutions: records });
+      if (immediateSaveExpected && this.actor.getSnapshot().context.conflictReviewSaveRequested) {
+        this.actor.send({ type: "CANCEL_CONFLICT_REVIEW_SAVE_REQUEST" });
+      }
+      return true;
+    } catch {
+      if (immediateSaveExpected) {
+        this.actor.send({ type: "CANCEL_CONFLICT_REVIEW_SAVE_REQUEST" });
+      }
+      return false;
+    } finally {
+      this.endConflictResolutionTransition(ids);
+      this.publishSparseReviewRows();
     }
-    for (const id of ids) this.conflictResolutionInProgressIds.delete(id);
-    this.publishSparseReviewRows();
-    return true;
   };
 
   public readonly saveConflictReview = (): boolean => {
@@ -1096,12 +1406,12 @@ export class BrunoTableEditMemoryRuntime {
       if (retainedServerResolutionIds.length > 0) {
         const runtime = this.cellEdit;
         if (runtime === undefined) return false;
-        for (const id of retainedServerResolutionIds) {
-          this.conflictResolutionInProgressIds.add(id);
-        }
-        const finalized = runtime.finalizeRetainedConflictResolutions(retainedServerResolutionIds);
-        for (const id of retainedServerResolutionIds) {
-          this.conflictResolutionInProgressIds.delete(id);
+        if (!this.beginConflictResolutionTransition(retainedServerResolutionIds)) return false;
+        let finalized: boolean;
+        try {
+          finalized = runtime.finalizeRetainedConflictResolutions(retainedServerResolutionIds);
+        } finally {
+          this.endConflictResolutionTransition(retainedServerResolutionIds);
         }
         if (!finalized) return false;
       }
@@ -1110,33 +1420,25 @@ export class BrunoTableEditMemoryRuntime {
       return true;
     }
     if (!this.canSaveStore.get()) return false;
-    this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: true });
-    this.conflictReviewSaveRequested = true;
-    this.saveCommand();
-    if (this.conflictReviewSaveRequested) {
-      this.conflictReviewSaveRequested = false;
-      this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
+    this.actor.send({ type: "REQUEST_CONFLICT_REVIEW_SAVE" });
+    const admitted = this.saveCommand("conflict-review");
+    if (!admitted || this.actor.getSnapshot().context.conflictReviewSaveRequested) {
+      this.actor.send({ type: "CANCEL_CONFLICT_REVIEW_SAVE_REQUEST" });
       return false;
     }
     return true;
   };
 
   public readonly resolveConflictReviewSave = (operationId: string): void => {
-    if (!this.conflictReviewSaveOperationIds.delete(operationId)) return;
-    if (this.conflictReviewSaveOperationIds.size > 0) return;
-    this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
-    if (this.conflictReviewSaveRejected) return;
-    this.clearRecordedConflictResolutions();
-    if (this.cellEditActivity.conflictCount === 0) this.closeConflictReview();
+    const wasOpen = this.actor.getSnapshot().context.conflictReviewOpen;
+    this.actor.send({ type: "SAVE_OPERATION_RESOLVED", operationId });
+    if (wasOpen && !this.actor.getSnapshot().context.conflictReviewOpen) {
+      this.finishConflictReviewClose();
+    }
   };
 
   public readonly rejectConflictReviewSave = (operationId: string): void => {
-    if (!this.conflictReviewSaveOperationIds.delete(operationId)) return;
-    this.conflictReviewSaveRejected = true;
-    this.actor.send({
-      type: "SET_CONFLICT_REVIEW_SAVING",
-      active: this.conflictReviewSaveOperationIds.size > 0,
-    });
+    this.actor.send({ type: "SAVE_OPERATION_REJECTED", operationId });
   };
 
   public readonly getBlockedReviewSnapshot = (): BrunoTableSparseEditReviewSnapshot =>
@@ -1192,16 +1494,6 @@ export class BrunoTableEditMemoryRuntime {
     this.modeStore.get().mode === "batch" &&
     this.cellEdit?.redoBatchDraft() === true;
 
-  private readonly getConflictResolutionStore = (
-    id: string,
-  ): Store<BrunoTableConflictReviewResolutionSnapshot | undefined> => {
-    const existing = this.conflictResolutionStores.get(id);
-    if (existing !== undefined) return existing;
-    const created = new Store(this.getProjectedConflictResolution(id));
-    this.conflictResolutionStores.set(id, created);
-    return created;
-  };
-
   private readonly getProjectedConflictResolution = (
     id: string,
   ): BrunoTableConflictReviewResolutionSnapshot | undefined => {
@@ -1216,11 +1508,73 @@ export class BrunoTableEditMemoryRuntime {
       : resolution;
   };
 
+  private readonly beginConflictResolutionTransition = (ids: readonly string[]): boolean => {
+    const previous = this.actor.getSnapshot().context.conflictResolutionInProgressIds;
+    this.actor.send({ type: "BEGIN_CONFLICT_RESOLUTION", ids });
+    const inProgressIds = this.actor.getSnapshot().context.conflictResolutionInProgressIds;
+    return inProgressIds !== previous && ids.every((id) => inProgressIds.has(id));
+  };
+
+  private readonly endConflictResolutionTransition = (ids: readonly string[]): void => {
+    this.actor.send({ type: "END_CONFLICT_RESOLUTION", ids });
+  };
+
   private readonly clearConflictResolutionStores = (): void => {
-    for (const store of this.conflictResolutionStores.values()) {
-      if (store.get() !== undefined) store.setState(() => undefined);
+    this.conflictResolutionControlStores.clear();
+    this.conflictResolutionAvailabilityVersionStore.setState((version) => version + 1);
+  };
+
+  private readonly getConflictResolutionControlStore = (
+    id: string,
+  ): BrunoTableTrackedConflictStore<BrunoTableConflictResolutionControlSnapshot> => {
+    const existing = this.conflictResolutionControlStores.get(id);
+    if (existing !== undefined) return existing;
+    const created: BrunoTableTrackedConflictStore<BrunoTableConflictResolutionControlSnapshot> = {
+      store: new Store(this.getProjectedConflictResolutionControl(id)),
+      subscriberCount: 0,
+    };
+    this.conflictResolutionControlStores.set(id, created);
+    return created;
+  };
+
+  private readonly getProjectedConflictResolutionControl = (
+    id: string,
+  ): BrunoTableConflictResolutionControlSnapshot => {
+    const current = this.conflictResolutionControlStores.get(id)?.store.get();
+    if (
+      current !== undefined &&
+      this.actor.getSnapshot().context.conflictResolutionInProgressIds.has(id)
+    ) {
+      return current;
     }
-    this.conflictResolutionStores.clear();
+    const resolution = this.getProjectedConflictResolution(id)?.resolution;
+    const active =
+      resolution === undefined &&
+      this.conflictReviewSourcesById.get(id)?.getSnapshot().conflict !== undefined;
+    return getConflictResolutionControlSnapshot(
+      active,
+      resolution,
+      this.getProjectedConflictResolutionAvailability(id),
+    );
+  };
+
+  private readonly getProjectedConflictResolutionAvailability = (
+    id: string,
+  ): BrunoTableConflictResolutionAvailabilitySnapshot => {
+    const context = this.actor.getSnapshot().context;
+    if (this.cellEdit?.canResolveDraftConflict(id) !== true) {
+      if (context.activity.activeEditor) return ACTIVE_EDITOR_CONFLICT_RESOLUTION;
+      if (context.saveWorkActive) return SAVE_WORK_CONFLICT_RESOLUTION;
+      return this.savePreflightAvailable
+        ? STALE_EVIDENCE_CONFLICT_RESOLUTION
+        : SOURCE_GAP_CONFLICT_RESOLUTION;
+    }
+    if (this.modeStore.get().mode === "immediate" && !this.canRequestImmediateSave()) {
+      return this.savePreflightAvailable
+        ? IMMEDIATE_CAPACITY_CONFLICT_RESOLUTION
+        : IMMEDIATE_SOURCE_GAP_CONFLICT_RESOLUTION;
+    }
+    return AVAILABLE_CONFLICT_RESOLUTION;
   };
 
   private readonly clearRecordedConflictResolutions = (): void => {
@@ -1269,7 +1623,8 @@ export class BrunoTableEditMemoryRuntime {
         open: context.conflictReviewOpen,
         count: context.activity.conflictCount,
         resolutionCount: context.conflictReviewResolutions.size,
-        saving: context.conflictReviewSaving,
+        saving:
+          context.conflictReviewSaveRequested || context.conflictReviewSaveOperationIds.size > 0,
       });
       if (
         previousConflictReview.open !== nextConflictReview.open ||
@@ -1400,7 +1755,7 @@ export class BrunoTableEditMemoryRuntime {
     const runtime = this.cellEdit;
     const reconcile = (): void => {
       if (this.resetReviewStore.get().open) {
-        this.resetReviewRowsStore.setState(() => runtime.getDraftReviewSourceSnapshot());
+        this.resetReviewRowsStore.setState(() => runtime.getResetDraftReviewSourceSnapshot());
       }
       this.publishSparseReviewRows();
     };
@@ -1427,7 +1782,7 @@ export class BrunoTableEditMemoryRuntime {
         if (
           !activeConflictIds.has(id) &&
           !context.conflictReviewResolutions.has(id) &&
-          !this.conflictResolutionInProgressIds.has(id)
+          !context.conflictResolutionInProgressIds.has(id)
         ) {
           this.conflictReviewSourcesById.delete(id);
         }
@@ -1450,7 +1805,7 @@ export class BrunoTableEditMemoryRuntime {
     if (runtime === undefined) return;
     let context = this.actor.getSnapshot().context;
     const invalidResolutionIds = [...candidateIds].flatMap((id) => {
-      if (this.conflictResolutionInProgressIds.has(id)) return [];
+      if (context.conflictResolutionInProgressIds.has(id)) return [];
       const resolution = context.conflictReviewResolutions.get(id);
       return resolution !== undefined &&
         runtime.isDraftConflictEvidenceCurrent(
@@ -1497,9 +1852,17 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   private readonly syncConflictResolutionStores = (): void => {
-    for (const [id, store] of this.conflictResolutionStores) {
-      const resolution = this.getProjectedConflictResolution(id);
-      if (store.get() !== resolution) store.setState(() => resolution);
+    let controlChanged = false;
+    for (const [id, { store }] of this.conflictResolutionControlStores) {
+      const next = this.getProjectedConflictResolutionControl(id);
+      if (store.get() === next) continue;
+      store.setState(() => next);
+      controlChanged = true;
+    }
+    const bulkAvailabilityMayHaveChanged =
+      this.conflictReviewStore.get().open && this.cellEditActivity.conflictCount > 0;
+    if (controlChanged || bulkAvailabilityMayHaveChanged) {
+      this.conflictResolutionAvailabilityVersionStore.setState((version) => version + 1);
     }
   };
 
