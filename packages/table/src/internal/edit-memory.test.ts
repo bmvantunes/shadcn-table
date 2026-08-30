@@ -698,6 +698,16 @@ describe("BrunoTable Edit Memory", () => {
       () => memory.dispose(),
       () => cellEdit.dispose(),
     );
+    type GestureDraft = Readonly<{
+      readonly rowId: string;
+      readonly columnId: string;
+      readonly field: string;
+      readonly baseRow: Row;
+      readonly expectedVersion: bigint;
+      readonly base: string;
+      readonly mine: string;
+      readonly conflict: Readonly<{ readonly server: string; readonly serverVersion: bigint }>;
+    }>;
     expect(
       cellEdit.applyAcceptedDraftGesture(
         [...rows.values()].map((row) => ({
@@ -709,28 +719,7 @@ describe("BrunoTable Edit Memory", () => {
           base: row.value,
           mine: `mine-${row.id}`,
           conflict: { server: `server-${row.id}`, serverVersion: 2n },
-        })) as [
-          {
-            rowId: string;
-            columnId: string;
-            field: string;
-            baseRow: Row;
-            expectedVersion: bigint;
-            base: string;
-            mine: string;
-            conflict: { server: string; serverVersion: bigint };
-          },
-          ...Array<{
-            rowId: string;
-            columnId: string;
-            field: string;
-            baseRow: Row;
-            expectedVersion: bigint;
-            base: string;
-            mine: string;
-            conflict: { server: string; serverVersion: bigint };
-          }>,
-        ],
+        })) as [GestureDraft, ...GestureDraft[]],
       ),
     ).toBe(true);
     for (const [rowId, current] of rows) {
@@ -770,6 +759,230 @@ describe("BrunoTable Edit Memory", () => {
       resolutionCount: 0,
       saving: false,
     });
+  });
+
+  it("retains unrelated Immediate resolutions while unresolved conflicts keep review open", () => {
+    type Row = EditMemoryTestRow;
+    const rows = new Map<string, Row>([
+      ["row-a", Object.freeze({ id: "row-a", value: "base-a", revision: 1n })],
+      ["row-b", Object.freeze({ id: "row-b", value: "base-b", revision: 1n })],
+      ["row-c", Object.freeze({ id: "row-c", value: "base-c", revision: 1n })],
+    ]);
+    const memory = new BrunoTableEditMemoryRuntime();
+    let saveReady = false;
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns: valueColumns,
+      getRow: (rowId) => rows.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).revision,
+      onCommitGesture: (changes) => (saveReady ? memory.requestImmediateSave(changes) : undefined),
+    });
+    cellEdit.activate();
+    memory.activate();
+    let operationSequence = 0;
+    const releaseSaves: Array<() => void> = [];
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      memory.registerImmediateSaveCommand((_changes, initiatedFrom) => {
+        operationSequence += 1;
+        releaseSaves.push(
+          memory.beginSaveWork(
+            `immediate-review-${String(operationSequence)}`,
+            "immediate",
+            initiatedFrom,
+          ),
+        );
+        return "admitted";
+      }),
+      () => {
+        for (const releaseSave of releaseSaves) releaseSave();
+      },
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    const [rowA, rowB, rowC] = [...rows.values()];
+    if (rowA === undefined || rowB === undefined || rowC === undefined) {
+      throw new Error("Expected three conflict rows.");
+    }
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: rowA.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rowA,
+          expectedVersion: rowA.revision,
+          base: rowA.value,
+          mine: "mine-a",
+          conflict: { server: "server-a", serverVersion: 2n },
+        },
+        {
+          rowId: rowB.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rowB,
+          expectedVersion: rowB.revision,
+          base: rowB.value,
+          mine: "mine-b",
+          conflict: { server: "server-b", serverVersion: 2n },
+        },
+        {
+          rowId: rowC.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rowC,
+          expectedVersion: rowC.revision,
+          base: rowC.value,
+          mine: "mine-c",
+          conflict: { server: "server-c", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    for (const [rowId, current] of rows) {
+      rows.set(rowId, Object.freeze({ ...current, value: `server-${rowId.at(-1)}`, revision: 2n }));
+    }
+    cellEdit.reconcileSourceRows(new Set(rows.keys()));
+    expect(memory.openConflictReview()).toBe(true);
+    const reviewRows = cellEdit.getDraftReviewSnapshot();
+    const rowAConflict = reviewRows.find((entry) => entry.rowId === rowA.id);
+    const rowBConflict = reviewRows.find((entry) => entry.rowId === rowB.id);
+    expect(rowAConflict).toBeDefined();
+    expect(rowBConflict).toBeDefined();
+    saveReady = true;
+
+    expect(memory.resolveConflictRows([rowBConflict!.id], "server")).toBe(true);
+    expect(memory.resolveConflictRows([rowAConflict!.id], "mine")).toBe(true);
+    expect(memory.getConflictReviewSnapshot()).toMatchObject({
+      open: true,
+      count: 1,
+      resolutionCount: 2,
+      saving: true,
+    });
+
+    memory.resolveConflictReviewSave("immediate-review-1");
+
+    expect(memory.getConflictReviewSnapshot()).toMatchObject({
+      open: true,
+      count: 1,
+      resolutionCount: 2,
+      saving: false,
+    });
+    expect(memory.getConflictResolutionSnapshot(rowBConflict!.id)).toMatchObject({
+      resolution: "server",
+    });
+  });
+
+  it("finalizes retained Server evidence when a mixed Immediate review succeeds", () => {
+    type Row = EditMemoryTestRow;
+    const rows = new Map<string, Row>([
+      ["row-a", Object.freeze({ id: "row-a", value: "base-a", revision: 1n })],
+      ["row-b", Object.freeze({ id: "row-b", value: "base-b", revision: 1n })],
+    ]);
+    const memory = new BrunoTableEditMemoryRuntime();
+    let saveReady = false;
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns: valueColumns,
+      getRow: (rowId) => rows.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).revision,
+      onCommitGesture: (changes) => (saveReady ? memory.requestImmediateSave(changes) : undefined),
+    });
+    cellEdit.activate();
+    memory.activate();
+    let releaseSave = (): void => undefined;
+    let submittedChangeSet: Parameters<BrunoTableCellEditRuntime["acceptSave"]>[1] | undefined;
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      memory.registerImmediateSaveCommand((changes, initiatedFrom) => {
+        releaseSave = memory.beginSaveWork("immediate-review-1", "immediate", initiatedFrom);
+        const change = changes[0];
+        if (change === undefined) return "rejected";
+        const currentRow = rows.get(change.rowId);
+        if (currentRow === undefined) return "rejected";
+        const nextChangeSet = Object.freeze([
+          Object.freeze({
+            rowId: change.rowId,
+            baseRow: currentRow,
+            expectedVersion: currentRow.revision,
+            changes: Object.freeze([
+              Object.freeze({
+                columnId: change.columnId,
+                field: change.field,
+                before: change.before,
+                after: change.after,
+              }),
+            ] as const),
+          }),
+        ] as const);
+        submittedChangeSet = nextChangeSet;
+        if (!cellEdit.beginSaveOperation("immediate-review-1", nextChangeSet, false)) {
+          return "rejected";
+        }
+        return "admitted";
+      }),
+      () => releaseSave(),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    const [rowA, rowB] = [...rows.values()];
+    if (rowA === undefined || rowB === undefined) throw new Error("Expected two conflict rows.");
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: rowA.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rowA,
+          expectedVersion: rowA.revision,
+          base: rowA.value,
+          mine: "mine-a",
+          conflict: { server: "server-a", serverVersion: 2n },
+        },
+        {
+          rowId: rowB.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rowB,
+          expectedVersion: rowB.revision,
+          base: rowB.value,
+          mine: "mine-b",
+          conflict: { server: "server-b", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    for (const [rowId, current] of rows) {
+      rows.set(rowId, Object.freeze({ ...current, value: `server-${rowId.at(-1)}`, revision: 2n }));
+    }
+    cellEdit.reconcileSourceRows(new Set(rows.keys()));
+    expect(memory.openConflictReview()).toBe(true);
+    const reviewRows = cellEdit.getDraftReviewSnapshot();
+    const rowAConflict = reviewRows.find((entry) => entry.rowId === rowA.id);
+    const rowBConflict = reviewRows.find((entry) => entry.rowId === rowB.id);
+    expect(rowAConflict).toBeDefined();
+    expect(rowBConflict).toBeDefined();
+    saveReady = true;
+
+    expect(memory.resolveConflictRows([rowBConflict!.id], "server")).toBe(true);
+    expect(memory.resolveConflictRows([rowAConflict!.id], "mine")).toBe(true);
+    expect(cellEdit.hasRetainedConflictResolution(rowBConflict!.id)).toBe(true);
+    expect(memory.getConflictReviewSnapshot()).toMatchObject({
+      open: true,
+      count: 0,
+      resolutionCount: 2,
+      saving: true,
+    });
+
+    if (submittedChangeSet === undefined) throw new Error("Expected one submitted Mine change.");
+    cellEdit.acceptSave("immediate-review-1", submittedChangeSet, false);
+    memory.resolveConflictReviewSave("immediate-review-1");
+
+    expect(memory.getConflictReviewSnapshot()).toMatchObject({
+      open: false,
+      resolutionCount: 0,
+      saving: false,
+    });
+    expect(cellEdit.hasRetainedConflictResolution(rowBConflict!.id)).toBe(false);
+    expect(cellEdit.getRetainedDraftDependencyCellCount()).toBe(0);
+    cellEdit.reconcileSourceRows(undefined);
+    expect(cellEdit.getActivitySnapshot()).toMatchObject({ draftCount: 0, conflictCount: 0 });
   });
 
   it("does not let unrelated save work inherit a rejected Conflict Review admission", () => {
@@ -1114,6 +1327,29 @@ describe("BrunoTable Edit Memory", () => {
           readonly conflictResolutionControlStores: ReadonlyMap<string, unknown>;
         }
       ).conflictResolutionControlStores.size;
+    let frameSequence = 0;
+    class ReviewFocusTarget {
+      public readonly closest = vi.fn(() => null);
+      public readonly dataset: DOMStringMap = {};
+      public readonly focus = vi.fn();
+      public readonly isConnected = true;
+      public ownerDocument!: Document;
+    }
+    const cancelReviewFrame = vi.fn();
+    const requestReviewFrame = vi.fn(() => (frameSequence += 1));
+    const reviewWindow = {
+      HTMLElement: ReviewFocusTarget,
+      cancelAnimationFrame: cancelReviewFrame,
+      requestAnimationFrame: requestReviewFrame,
+    } as unknown as Window;
+    const reviewDocument = {
+      activeElement: null,
+      defaultView: reviewWindow,
+    } as unknown as Document;
+    const conflictFocus = new ReviewFocusTarget();
+    conflictFocus.ownerDocument = reviewDocument;
+    const blockedFocus = new ReviewFocusTarget();
+    blockedFocus.ownerDocument = reviewDocument;
     cellEdit.activate();
     memory.activate();
     const disconnect = memory.connectCellEdit(cellEdit);
@@ -1142,7 +1378,7 @@ describe("BrunoTable Edit Memory", () => {
     expect(cellEdit.getActivitySnapshot()).toMatchObject({ conflictCount: 1, blockedCount: 1 });
 
     expect(getDraftReviewSubscriberCount()).toBe(0);
-    expect(memory.openConflictReview()).toBe(true);
+    expect(memory.openConflictReview(conflictFocus as unknown as EventTarget)).toBe(true);
     expect(getDraftReviewSubscriberCount()).toBe(1);
     const conflictId = cellEdit.getDraftReviewSnapshot()[0]?.id;
     expect(conflictId).toBeDefined();
@@ -1155,8 +1391,10 @@ describe("BrunoTable Edit Memory", () => {
     expect(getDraftReviewSubscriberCount()).toBe(0);
     expect(getConflictResolutionStoreCount()).toBe(0);
     unsubscribeResolution();
+    expect(requestReviewFrame).toHaveBeenCalledOnce();
 
-    expect(memory.openBlockedReview()).toBe(true);
+    expect(memory.openBlockedReview(blockedFocus as unknown as EventTarget)).toBe(true);
+    expect(cancelReviewFrame).toHaveBeenCalledWith(1);
     expect(getDraftReviewSubscriberCount()).toBe(1);
     memory.closeBlockedReview();
     expect(getDraftReviewSubscriberCount()).toBe(0);

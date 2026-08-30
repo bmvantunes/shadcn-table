@@ -174,11 +174,13 @@ export class BrunoTableSaveOperationRuntime {
     this.operations.set(operationId, operation);
     this.publishCapacityAvailability();
     const promise = (() => {
+      const handler = this.handler;
+      if (handler === undefined) {
+        return Promise.reject(new Error("BrunoTable save operation is unavailable."));
+      }
       let result: unknown;
       try {
-        result =
-          this.handler?.(changeSet) ??
-          Promise.reject(new Error("BrunoTable save operation is unavailable."));
+        result = handler(changeSet);
       } catch (error) {
         return Promise.reject(error);
       }
@@ -274,11 +276,7 @@ export class BrunoTableSaveOperationRuntime {
     batch(() => {
       operation.actor.send({ type: "REJECT" });
       if (operation.actor.getSnapshot().value !== "rejected") return;
-      this.cellEdit.rejectSave(
-        operation.operationId,
-        changeSet,
-        operation.kind === "immediate" && operation.initiatedFrom !== "conflict-review",
-      );
+      this.cellEdit.rejectSave(operation.operationId, changeSet, operation.kind === "immediate");
       operation.changeSet = undefined;
       this.editMemory.recordSaveFailure(operation.operationId, reason, changeSet);
       this.cellEdit.completeSaveOperation(operation.operationId);

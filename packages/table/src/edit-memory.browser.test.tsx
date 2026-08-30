@@ -1203,7 +1203,7 @@ test.each([
     fail: () => 42 as never,
   },
 ])(
-  "keeps an Immediate Conflict Review retryable when onSaveEdits $label",
+  "restores an Immediate Conflict Review after onSaveEdits $label",
   async ({ fail, message, tableId }) => {
     let saveAttempt = 0;
     const onSaveEdits = vi.fn(() => {
@@ -1249,11 +1249,13 @@ test.each([
 
     expect(onSaveEdits).toHaveBeenCalledOnce();
     await expect.element(review).toBeVisible();
-    await expect.element(reviewGrid).toHaveTextContent("Yours");
-    await expect.element(reviewGrid).toHaveTextContent("Augusta");
+    await expect
+      .element(review.getByRole("status"))
+      .toHaveTextContent("All conflicts are current.");
+    await expect.element(reviewGrid).not.toBeInTheDocument();
     await expect
       .element(review.getByRole("button", { name: "Keep Mine for row ada, column Name" }))
-      .toHaveAttribute("aria-pressed", "true");
+      .not.toBeInTheDocument();
     await expect.element(review.getByRole("button", { name: "Cancel" })).toBeEnabled();
     await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
     await expect.element(review.getByRole("button", { name: "Saving…" })).not.toBeInTheDocument();
@@ -1271,8 +1273,8 @@ test.each([
     await expect.element(details).toHaveTextContent(`Operation 1: ${message}`);
     await userEvent.click(details.getByRole("button", { name: "Close details" }));
 
-    const retainedMine = grid.getByRole("gridcell", { name: "Augusta", exact: true });
-    await userEvent.click(retainedMine);
+    const restoredServer = grid.getByRole("gridcell", { name: "Server", exact: true });
+    await userEvent.click(restoredServer);
     await userEvent.keyboard("{Enter}");
     await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta Retry");
     await userEvent.keyboard("{Enter}");

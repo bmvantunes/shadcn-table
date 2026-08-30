@@ -375,7 +375,7 @@ Every Save activation performs a fresh preflight against the latest live canonic
 
 The Save Workflow records its initiating surface internally without adding it to the Save Change Set:
 
-- A Save started inside Conflict Review keeps that modal mounted throughout the attempt. Promise resolution closes it; rejection leaves it open with all drafts, resolutions, live Server-now values, and diagnostics intact.
+- A Save started inside Conflict Review keeps that modal mounted throughout the attempt. Promise resolution closes it. Rejection leaves the modal open with live Server-now values and diagnostics: Batch preserves its unconverged drafts and resolutions, while Immediate restores every operation-owned cell to the latest live canonical server value and may therefore show the stable all-current state.
 - A Save started from the Edit Safety Footer with no conflicts keeps Conflict Review closed if the attempt fails. The next explicit Footer Save runs the complete live preflight again and opens Conflict Review only when conflicts exist at that later moment.
 
 The persistent toast explains the failure but never becomes a second Save surface. This keeps every attempt on one state-machine path and prevents a stale notification action from bypassing current conflict and validation checks.

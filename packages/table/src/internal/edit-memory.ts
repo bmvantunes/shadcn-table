@@ -167,7 +167,11 @@ type EditWorkflowEvent =
       readonly operationId: string;
       readonly initiatedFrom: BrunoTableSaveInitiator;
     }>
-  | Readonly<{ readonly type: "SAVE_OPERATION_RESOLVED"; readonly operationId: string }>
+  | Readonly<{
+      readonly type: "SAVE_OPERATION_RESOLVED";
+      readonly operationId: string;
+      readonly closeReview: boolean;
+    }>
   | Readonly<{ readonly type: "SAVE_OPERATION_REJECTED"; readonly operationId: string }>
   | Readonly<{ readonly type: "DISMISS_SAVE_FAILURES" }>;
 
@@ -517,18 +521,11 @@ const brunoTableEditWorkflowMachine = createMachine({
               return operationIds;
             },
             conflictReviewResolutions: ({ context, event }) =>
-              context.conflictReviewSaveOperationIds.has(event.operationId) &&
-              context.conflictReviewSaveOperationIds.size === 1 &&
-              !context.conflictReviewSaveRejected
+              event.closeReview
                 ? new Map<string, BrunoTableConflictReviewResolutionSnapshot>()
                 : context.conflictReviewResolutions,
             conflictReviewOpen: ({ context, event }) =>
-              context.conflictReviewSaveOperationIds.has(event.operationId) &&
-              context.conflictReviewSaveOperationIds.size === 1 &&
-              !context.conflictReviewSaveRejected &&
-              context.activity.conflictCount === 0
-                ? false
-                : context.conflictReviewOpen,
+              event.closeReview ? false : context.conflictReviewOpen,
             conflictReviewSaveRejected: ({ context, event }) =>
               context.conflictReviewSaveOperationIds.has(event.operationId) &&
               context.conflictReviewSaveOperationIds.size === 1 &&
@@ -1433,8 +1430,34 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   public readonly resolveConflictReviewSave = (operationId: string): void => {
-    const wasOpen = this.actor.getSnapshot().context.conflictReviewOpen;
-    this.actor.send({ type: "SAVE_OPERATION_RESOLVED", operationId });
+    const context = this.actor.getSnapshot().context;
+    const wasOpen = context.conflictReviewOpen;
+    let closeReview =
+      context.conflictReviewSaveOperationIds.has(operationId) &&
+      context.conflictReviewSaveOperationIds.size === 1 &&
+      !context.conflictReviewSaveRejected &&
+      context.activity.conflictCount === 0;
+    if (closeReview) {
+      const retainedServerResolutionIds = [...context.conflictReviewResolutions.values()].flatMap(
+        (resolution) => (resolution.resolution === "server" ? [resolution.id] : []),
+      );
+      if (retainedServerResolutionIds.length > 0) {
+        const runtime = this.cellEdit;
+        closeReview =
+          runtime !== undefined &&
+          this.beginConflictResolutionTransition(retainedServerResolutionIds);
+        if (closeReview && runtime !== undefined) {
+          try {
+            closeReview = runtime.finalizeRetainedConflictResolutions(retainedServerResolutionIds);
+            if (!closeReview) runtime.reconcileResolvedConflictIds(retainedServerResolutionIds);
+          } finally {
+            this.endConflictResolutionTransition(retainedServerResolutionIds);
+          }
+          this.publishSparseReviewRows();
+        }
+      }
+    }
+    this.actor.send({ type: "SAVE_OPERATION_RESOLVED", operationId, closeReview });
     if (wasOpen && !this.actor.getSnapshot().context.conflictReviewOpen) {
       this.finishConflictReviewClose();
     }
@@ -1895,6 +1918,11 @@ export class BrunoTableEditMemoryRuntime {
   };
 
   private readonly captureReviewFocus = (preferred?: EventTarget | null): void => {
+    if (this.reviewFocusFrame !== undefined) {
+      this.reviewFocusFrameWindow?.cancelAnimationFrame(this.reviewFocusFrame);
+      this.reviewFocusFrame = undefined;
+      this.reviewFocusFrameWindow = undefined;
+    }
     const preferredDocument = (preferred as Node | null | undefined)?.ownerDocument;
     const ownerDocument =
       preferredDocument ??

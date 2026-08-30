@@ -45,7 +45,8 @@ type SaveFailureToasterEntry = Readonly<{
 
 const saveFailureToastersByDocument = new WeakMap<Document, SaveFailureToasterEntry>();
 const pendingSaveFailureToasterDisposals = new Map<Document, SaveFailureToasterEntry>();
-const REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY = "--bruno-table-review-viewport-max-height";
+export const BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY =
+  "--bruno-table-review-viewport-max-height";
 const saveFailureToasterDisposalQueue = new Debouncer(
   () => {
     const pending = [...pendingSaveFailureToasterDisposals];
@@ -67,7 +68,10 @@ function useReviewViewportRef(): (element: HTMLDivElement | null) => (() => void
   return useCallback((element: HTMLDivElement | null) => {
     if (element === null) return undefined;
     const updateMaxHeight = (): void => {
-      element.style.setProperty(REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY, `${element.clientHeight}px`);
+      element.style.setProperty(
+        BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY,
+        `${element.clientHeight}px`,
+      );
     };
     updateMaxHeight();
     const ResizeObserverConstructor = element.ownerDocument.defaultView?.ResizeObserver;

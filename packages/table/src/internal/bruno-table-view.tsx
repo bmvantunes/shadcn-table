@@ -198,6 +198,7 @@ import {
 import { BrunoTableCellEditBoundary } from "./cell-edit-boundary";
 import { BrunoTableCellEditGeometryController } from "./cell-edit-geometry";
 import {
+  BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY,
   BrunoTableEditSafetyFooter,
   type BrunoTableBlockedReviewRenderer,
   type BrunoTableConflictReviewRenderer,
@@ -3119,7 +3120,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           }
         }}
         style={{
-          maxHeight: `min(var(--bruno-table-review-viewport-max-height, ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px), ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px)`,
+          maxHeight: `min(var(${BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY}, ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px), ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px)`,
           overflow: "auto",
           position: "relative",
         }}
@@ -6446,7 +6447,7 @@ const LoadingRows = memo(function LoadingRows({
               role="grid"
               tabIndex={0}
               style={{
-                maxHeight: `min(var(--bruno-table-review-viewport-max-height, ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px), ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px)`,
+                maxHeight: `min(var(${BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY}, ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px), ${BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT}px)`,
                 overflow: "auto",
                 position: "relative",
               }}

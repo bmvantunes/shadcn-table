@@ -4135,7 +4135,7 @@ const projectionRegressionScenarios: readonly ProjectionRegressionScenario[] = [
   (() => {
     const contexts = new WeakMap<object, string>();
     class OwnWeakMapAccessorRow implements ProjectionRegressionRow {
-      public readonly context!: string;
+      declare public readonly context: string;
 
       public constructor(
         public readonly primary: string,

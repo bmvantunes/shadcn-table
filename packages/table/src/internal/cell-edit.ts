@@ -177,11 +177,31 @@ type DraftReviewProjectedRow = Readonly<{
 }>;
 
 type DraftReviewProjectedRowCacheEntry = Readonly<{
+  readonly historicalProjectedRows: WeakSet<object>;
   readonly patch: BrunoTableCellEditRowPatch;
   readonly projectorEpoch: number;
   readonly projectedRow: object;
   readonly sourceRevision: unknown;
   readonly sourceRow: object;
+}>;
+
+type DraftReviewProjectionMutation =
+  | Readonly<{
+      readonly kind: "accept";
+      readonly rowId: string;
+      readonly entry: DraftReviewProjectedRowCacheEntry;
+      readonly projectedRow: object;
+    }>
+  | Readonly<{ readonly kind: "withdraw"; readonly rowId: string }>;
+
+type DraftReviewProjectionResult = Readonly<{
+  readonly projection: DraftReviewProjectedRow;
+  readonly mutation?: DraftReviewProjectionMutation;
+}>;
+
+type DraftReviewProjectedRowsPlan = Readonly<{
+  readonly rows: ReadonlyMap<string, DraftReviewProjectedRow>;
+  readonly commit: () => void;
 }>;
 
 function sameEditRowPatch(
@@ -1725,7 +1745,10 @@ export class BrunoTableCellEditRuntime {
   ): void => {
     this.getRowVersion = getRowVersion;
     if (!this.isSourceAuthoritative()) return;
-    const rowsToReconcile = new Set(this.rowVersionBlockedRowIds);
+    const rowsToReconcile = new Set([
+      ...this.rowVersionBlockedRowIds,
+      ...this.draftReviewProjectedRowsByRowId.keys(),
+    ]);
     const drafts = this.draftStore.get();
     for (const key of this.conflictDraftKeys) {
       const draft = drafts.get(key);
@@ -2389,19 +2412,24 @@ export class BrunoTableCellEditRuntime {
     this.draftReviewSubscriberCount === 0
       ? (() => {
           const drafts = this.draftStore.get();
-          const projectedRows = this.createDraftReviewProjectedRows(drafts, new Set(drafts.keys()));
-          return Object.freeze(
+          const projectedRowsPlan = this.createDraftReviewProjectedRows(
+            drafts,
+            new Set(drafts.keys()),
+          );
+          const rows = Object.freeze(
             [...drafts].flatMap(([id, draft]) => {
               const row = this.createDraftReviewRow(
                 id,
                 draft,
-                projectedRows.get(draft.rowId)?.serverCandidate,
+                projectedRowsPlan.rows.get(draft.rowId)?.serverCandidate,
                 undefined,
-                projectedRows.get(draft.rowId),
+                projectedRowsPlan.rows.get(draft.rowId),
               );
               return row === undefined ? [] : [row];
             }),
           );
+          projectedRowsPlan.commit();
+          return rows;
         })()
       : Object.freeze(this.draftReviewStore.get().map((row) => row.getSnapshot()));
 
@@ -4647,7 +4675,8 @@ export class BrunoTableCellEditRuntime {
             }
             return expandedKeys;
           })();
-    const projectedRows = this.createDraftReviewProjectedRows(drafts, keys, serverRows);
+    const projectedRowsPlan = this.createDraftReviewProjectedRows(drafts, keys, serverRows);
+    const projectedRows = projectedRowsPlan.rows;
     let membershipChanged = forceMembershipPublication && keys.size > 0;
     let classificationChanged = false;
     for (const id of keys) {
@@ -4730,20 +4759,22 @@ export class BrunoTableCellEditRuntime {
       classificationChanged =
         this.syncDraftReviewClassification(id, nextRow) || classificationChanged;
     }
-    this.releaseUnusedDraftReviewProjectedRows(drafts, projectionChangedRowIds);
     if (classificationChanged) this.publishDraftReviewClassification();
-    if (!membershipChanged) return;
-    const rows = Object.freeze(
-      [
-        ...drafts.keys(),
-        ...[...this.resolvedDraftReviewEntriesById.keys()].filter((id) => !drafts.has(id)),
-        ...(activeKey === undefined || drafts.has(activeKey) ? [] : [activeKey]),
-      ].flatMap((id) => {
-        const row = this.draftReviewRowsById.get(id);
-        return row === undefined ? [] : [row];
-      }),
-    );
-    this.draftReviewStore.setState(() => rows);
+    if (membershipChanged) {
+      const rows = Object.freeze(
+        [
+          ...drafts.keys(),
+          ...[...this.resolvedDraftReviewEntriesById.keys()].filter((id) => !drafts.has(id)),
+          ...(activeKey === undefined || drafts.has(activeKey) ? [] : [activeKey]),
+        ].flatMap((id) => {
+          const row = this.draftReviewRowsById.get(id);
+          return row === undefined ? [] : [row];
+        }),
+      );
+      this.draftReviewStore.setState(() => rows);
+    }
+    projectedRowsPlan.commit();
+    this.releaseUnusedDraftReviewProjectedRows(drafts, projectionChangedRowIds);
   };
 
   private readonly syncDraftReviewClassification = (
@@ -4752,12 +4783,20 @@ export class BrunoTableCellEditRuntime {
   ): boolean => {
     const conflict = row?.conflict !== undefined;
     const blocked = row?.blockedReason !== undefined;
-    const conflictChanged = conflict
-      ? !this.draftReviewConflictIds.has(id) && (this.draftReviewConflictIds.add(id), true)
-      : this.draftReviewConflictIds.delete(id);
-    const blockedChanged = blocked
-      ? !this.draftReviewBlockedIds.has(id) && (this.draftReviewBlockedIds.add(id), true)
-      : this.draftReviewBlockedIds.delete(id);
+    let conflictChanged: boolean;
+    if (conflict) {
+      conflictChanged = !this.draftReviewConflictIds.has(id);
+      if (conflictChanged) this.draftReviewConflictIds.add(id);
+    } else {
+      conflictChanged = this.draftReviewConflictIds.delete(id);
+    }
+    let blockedChanged: boolean;
+    if (blocked) {
+      blockedChanged = !this.draftReviewBlockedIds.has(id);
+      if (blockedChanged) this.draftReviewBlockedIds.add(id);
+    } else {
+      blockedChanged = this.draftReviewBlockedIds.delete(id);
+    }
     return conflictChanged || blockedChanged;
   };
 
@@ -4812,7 +4851,7 @@ export class BrunoTableCellEditRuntime {
     drafts: ReadonlyMap<string, DraftEntry>,
     requestedIds?: ReadonlySet<string>,
     serverRows?: ReadonlyMap<string, unknown>,
-  ): ReadonlyMap<string, DraftReviewProjectedRow> => {
+  ): DraftReviewProjectedRowsPlan => {
     const requestedRowIds = new Set<string>();
     const entriesByRowId = new Map<string, Array<Readonly<{ id: string; entry: DraftEntry }>>>();
     const addEntry = (id: string, entry: DraftEntry): void => {
@@ -4846,6 +4885,7 @@ export class BrunoTableCellEditRuntime {
       }
     }
     const projectedRows = new Map<string, DraftReviewProjectedRow>();
+    const mutations: DraftReviewProjectionMutation[] = [];
     for (const [rowId, entries] of entriesByRowId) {
       const authoritativeEntry = entries.find(({ id }) => serverRows?.has(id) === true);
       const serverCandidate =
@@ -4912,12 +4952,31 @@ export class BrunoTableCellEditRuntime {
         );
         continue;
       }
-      projectedRows.set(
+      const result = this.projectDraftReviewRow(
         rowId,
-        this.projectDraftReviewRow(rowId, sourceRow, Object.freeze(patch), serverCandidate),
+        sourceRow,
+        Object.freeze(patch),
+        serverCandidate,
       );
+      projectedRows.set(rowId, result.projection);
+      if (result.mutation !== undefined) mutations.push(result.mutation);
     }
-    return projectedRows;
+    return Object.freeze({
+      rows: projectedRows,
+      commit: () => {
+        for (const mutation of mutations) {
+          if (mutation.kind === "withdraw") {
+            this.draftReviewProjectedRowsByRowId.delete(mutation.rowId);
+            continue;
+          }
+          mutation.entry.historicalProjectedRows.add(mutation.projectedRow);
+          this.draftReviewProjectionHistoryByRowId.set(mutation.rowId, mutation.entry);
+          if (this.draftReviewSubscriberCount > 0) {
+            this.draftReviewProjectedRowsByRowId.set(mutation.rowId, mutation.entry);
+          }
+        }
+      },
+    });
   };
 
   private readonly projectDraftReviewRow = (
@@ -4925,17 +4984,19 @@ export class BrunoTableCellEditRuntime {
     sourceRow: object,
     patch: BrunoTableCellEditRowPatch,
     serverCandidate: unknown,
-  ): DraftReviewProjectedRow => {
+  ): DraftReviewProjectionResult => {
+    const withoutMutation = (projection: DraftReviewProjectedRow): DraftReviewProjectionResult =>
+      Object.freeze({ projection });
     const projector = this.projectEditRow;
     const getRowId = this.getProjectedRowId;
     if (projector === undefined || getRowId === undefined) {
-      return Object.freeze({ available: false, row: undefined, serverCandidate });
+      return withoutMutation(Object.freeze({ available: false, row: undefined, serverCandidate }));
     }
     let sourceRevision: unknown;
     try {
       sourceRevision = this.getRowVersion?.(sourceRow);
     } catch {
-      return Object.freeze({ available: false, row: undefined, serverCandidate });
+      return withoutMutation(Object.freeze({ available: false, row: undefined, serverCandidate }));
     }
     const cached = this.draftReviewProjectedRowsByRowId.get(rowId);
     if (
@@ -4948,7 +5009,9 @@ export class BrunoTableCellEditRuntime {
         patch,
       )
     ) {
-      return Object.freeze({ available: true, row: cached.projectedRow, serverCandidate });
+      return withoutMutation(
+        Object.freeze({ available: true, row: cached.projectedRow, serverCandidate }),
+      );
     }
     const previousProjection = this.draftReviewProjectionHistoryByRowId.get(rowId);
     const inputsMatchPrevious =
@@ -4960,12 +5023,14 @@ export class BrunoTableCellEditRuntime {
         this.editRowProjectorEpoch,
         patch,
       );
-    const rejectChangedProjection = (): DraftReviewProjectedRow | undefined => {
+    const rejectChangedProjection = (): DraftReviewProjectionResult | undefined => {
       if (previousProjection === undefined) {
         return undefined;
       }
-      this.draftReviewProjectedRowsByRowId.delete(rowId);
-      return Object.freeze({ available: false, row: undefined, serverCandidate });
+      return Object.freeze({
+        projection: Object.freeze({ available: false, row: undefined, serverCandidate }),
+        mutation: Object.freeze({ kind: "withdraw", rowId }),
+      });
     };
     let projected: unknown;
     try {
@@ -4989,11 +5054,12 @@ export class BrunoTableCellEditRuntime {
         `BrunoTable projectEditRow must return a distinct row for non-empty patch: ${rowId}.`,
       );
     }
-    // A changed source or patch must produce a fresh immutable Row reference. Reusing the
-    // previous result would leave row-aware presentation unable to observe sibling changes, so
-    // reject that result as unavailable while allowing the already-admitted edit transition to
-    // publish its coherent review state.
-    if (projected === previousProjection?.projectedRow && !inputsMatchPrevious) {
+    // A changed source or patch must produce a fresh immutable Row reference. Reusing any result
+    // from this row's retained review evidence could expose sibling data from an older source.
+    if (
+      previousProjection?.historicalProjectedRows.has(projected) === true &&
+      !inputsMatchPrevious
+    ) {
       const unavailable = rejectChangedProjection();
       if (unavailable !== undefined) return unavailable;
       throw new TypeError(
@@ -5015,18 +5081,20 @@ export class BrunoTableCellEditRuntime {
         `BrunoTable projectEditRow changed Row Identity from ${rowId} to ${projectedRowId}.`,
       );
     }
+    const historicalProjectedRows =
+      previousProjection?.historicalProjectedRows ?? new WeakSet<object>();
     const entry = Object.freeze({
+      historicalProjectedRows,
       patch,
       projectorEpoch: this.editRowProjectorEpoch,
       projectedRow: projected,
       sourceRevision,
       sourceRow,
     });
-    this.draftReviewProjectionHistoryByRowId.set(rowId, entry);
-    if (this.draftReviewSubscriberCount > 0) {
-      this.draftReviewProjectedRowsByRowId.set(rowId, entry);
-    }
-    return Object.freeze({ available: true, row: projected, serverCandidate });
+    return Object.freeze({
+      projection: Object.freeze({ available: true, row: projected, serverCandidate }),
+      mutation: Object.freeze({ kind: "accept", rowId, entry, projectedRow: projected }),
+    });
   };
 
   private readonly createDraftReviewRow = (

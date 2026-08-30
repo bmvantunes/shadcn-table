@@ -493,6 +493,12 @@ describe("BrunoTableSaveOperationRuntime", () => {
     await expect(runInvalidHandler(() => 42 as never)).resolves.toBe(
       "BrunoTable onSaveEdits must return a PromiseLike<void>.",
     );
+    await expect(runInvalidHandler(() => undefined as never)).resolves.toBe(
+      "BrunoTable onSaveEdits must return a PromiseLike<void>.",
+    );
+    await expect(runInvalidHandler(() => null as never)).resolves.toBe(
+      "BrunoTable onSaveEdits must return a PromiseLike<void>.",
+    );
     const hostile = new Proxy(Object.create(null) as object, {
       get: (_target, property) => {
         if (property === "then") throw new Error("Hostile then accessor.");
@@ -527,7 +533,7 @@ describe("BrunoTableSaveOperationRuntime", () => {
       handler: () => 42 as never,
     },
   ])(
-    "keeps an Immediate Conflict Review truthful when onSaveEdits $label",
+    "restores Immediate Conflict Review state when onSaveEdits $label",
     async ({ expectedMessage, handler }) => {
       let currentRow: Row = Object.freeze({ ...row, value: "base", revision: 1n });
       let editMemory!: BrunoTableEditMemoryRuntime;
@@ -591,7 +597,7 @@ describe("BrunoTableSaveOperationRuntime", () => {
           expect(editMemory.getConflictReviewSnapshot()).toMatchObject({
             open: true,
             count: 0,
-            resolutionCount: 1,
+            resolutionCount: 0,
             saving: false,
           });
           expect(editMemory.getSaveFailureSnapshot().count).toBe(1);
@@ -599,17 +605,82 @@ describe("BrunoTableSaveOperationRuntime", () => {
         { interval: 1 },
       );
 
-      expect(editMemory.getConflictResolutionSnapshot(conflictId!)).toMatchObject({
-        resolution: "mine",
-        reviewedServer: "server",
-        reviewedServerVersion: 2n,
+      expect(editMemory.getConflictResolutionSnapshot(conflictId!)).toBeUndefined();
+      expect(editMemory.getConflictReviewRowsSnapshot()).toHaveLength(0);
+      expect(cellEdit.getDraftSnapshot(currentRow.id, "COL_ID_VALUE")).toBeUndefined();
+      expect(cellEdit.getCellSnapshot(currentRow.id, "COL_ID_VALUE")).toMatchObject({
+        hasDraft: false,
+        saveFailed: true,
       });
-      expect(editMemory.getConflictReviewRowsSnapshot()).toHaveLength(1);
       expect(editMemory.saveConflictReview()).toBe(false);
       expect(editMemory.getSaveFailureSnapshot().operations[0]?.message).toBe(expectedMessage);
       expect(saveOperations.getRetainedOperationCount()).toBe(1);
     },
   );
+
+  it("restores latest server state when an admitted Immediate Conflict Review save rejects", async () => {
+    let currentRow: Row = Object.freeze({ ...row, value: "base", revision: 1n });
+    let editMemory!: BrunoTableEditMemoryRuntime;
+    let saveReady = false;
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => currentRow,
+      getRowVersion: (candidate) => (candidate as Row).revision,
+      onCommitGesture: (changes) =>
+        saveReady ? editMemory.requestImmediateSave(changes) : undefined,
+    });
+    editMemory = new BrunoTableEditMemoryRuntime();
+    const saveOperations = new BrunoTableSaveOperationRuntime(cellEdit, editMemory);
+    const handler = vi.fn(() => Promise.reject(new Error("Compare-and-set rejected.")));
+    cellEdit.activate();
+    editMemory.activate();
+    disposers.push(
+      () => cellEdit.dispose(),
+      () => editMemory.dispose(),
+      saveOperations.activate(),
+      editMemory.connectCellEdit(cellEdit),
+      saveOperations.setHandler(handler),
+    );
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: currentRow.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: currentRow,
+          expectedVersion: currentRow.revision,
+          base: currentRow.value,
+          mine: "mine",
+          conflict: { server: "server", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    currentRow = Object.freeze({ ...currentRow, value: "server", revision: 2n });
+    cellEdit.reconcileSourceRows(new Set([currentRow.id]));
+    expect(editMemory.openConflictReview()).toBe(true);
+    const conflictId = cellEdit.getDraftReviewSnapshot()[0]?.id;
+    expect(conflictId).toBeDefined();
+    saveReady = true;
+
+    expect(editMemory.resolveConflictRows([conflictId!], "mine")).toBe(true);
+
+    await vi.waitFor(
+      () => {
+        expect(editMemory.getSaveFailureSnapshot().count).toBe(1);
+      },
+      { interval: 1 },
+    );
+    expect(handler).toHaveBeenCalledOnce();
+    expect(cellEdit.getDraftSnapshot(currentRow.id, "COL_ID_VALUE")).toBeUndefined();
+    expect(cellEdit.getCellSnapshot(currentRow.id, "COL_ID_VALUE")).toMatchObject({
+      hasDraft: false,
+      saveFailed: true,
+    });
+    expect(cellEdit.getActivitySnapshot()).toMatchObject({
+      conflictCount: 0,
+      draftCount: 0,
+    });
+  });
 
   it("keeps rejected Cell Identities distinct when their delimiter encodings collide", async () => {
     type CollisionRow = Readonly<{
