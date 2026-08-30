@@ -12,9 +12,15 @@ import {
   BrunoTableToolbar,
 } from "./index";
 import { useBrunoTableClientFilterContext } from "./internal/client-filter-context";
+import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
+import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
+import { BrunoTableCellEditRuntime } from "./internal/cell-edit";
+import { BrunoTableToolbarStore, BrunoTableView } from "./internal/bruno-table-view";
+import { compileColumns } from "./internal/compile-columns";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { BrunoTableEditSafetyFooter } from "./internal/edit-chrome";
 import { BrunoTableEditMemoryRuntime } from "./internal/edit-memory";
+import { BrunoTableGridRuntime } from "./internal/grid-runtime";
 import type { BrunoTableColumns, BrunoTableValueType } from "./public-types";
 
 type Row = Readonly<{
@@ -34,6 +40,94 @@ const columns = [
 ] satisfies BrunoTableColumns<Row>;
 
 const rows = [{ id: "ada", name: "Ada", revision: 1n }] as const;
+
+test("keeps legacy edit safety chrome without exposing unavailable review commands", async () => {
+  let row: Row = rows[0];
+  const compiledColumns = compileColumns(columns);
+  const cellEdit = new BrunoTableCellEditRuntime({
+    columns: compiledColumns,
+    getRow: () => row,
+    getRowVersion: (candidate) => (candidate as Row).revision,
+  });
+  const editMemory = new BrunoTableEditMemoryRuntime();
+  cellEdit.activate();
+  editMemory.activate();
+  const disconnect = editMemory.connectCellEdit(cellEdit);
+
+  try {
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_NAME",
+          field: "name",
+          baseRow: row,
+          expectedVersion: row.revision,
+          base: "Ada",
+          mine: "Augusta",
+          conflict: { server: "Server", serverVersion: 2n },
+        },
+      ]),
+    ).toBe(true);
+    row = { ...row, name: "Server", revision: 2n };
+    cellEdit.reconcileSourceRows(new Set([row.id]));
+
+    const footerScreen = await render(
+      <BrunoTableEditSafetyFooter
+        dispatchGridCommand={() => false}
+        runtime={editMemory}
+        renderReview={() => null}
+      />,
+    );
+    const footer = footerScreen.getByRole("region", { name: "Edit safety" });
+    await expect.element(footer).toHaveTextContent("1 conflict");
+    await expect
+      .element(footerScreen.getByRole("button", { name: "1 conflict" }))
+      .not.toBeInTheDocument();
+    expect(editMemory.getConflictReviewSnapshot().open).toBe(false);
+    await footerScreen.unmount();
+  } finally {
+    disconnect();
+    editMemory.dispose();
+    cellEdit.dispose();
+  }
+
+  const adapter = new BrunoTableClientRowPipelineAdapter(
+    { rows, totalRows: rows.length, version: 1, status: "ready" },
+    (candidate: Row) => candidate.id,
+    compiledColumns,
+    undefined,
+    [{ columnId: "COL_ID_NAME", direction: "asc" }],
+  );
+  const gridRuntime = new BrunoTableGridRuntime(
+    adapter.getPublication(),
+    compiledColumns,
+    adapter.getQueryConfiguration(compiledColumns),
+    "TABLE_ID_LEGACY_EDIT_SAFETY",
+  );
+  const legacyMemory = new BrunoTableEditMemoryRuntime();
+  legacyMemory.activate();
+  try {
+    const viewScreen = await render(
+      <BrunoTableView
+        runtime={gridRuntime.getView()}
+        tableId="TABLE_ID_LEGACY_EDIT_SAFETY"
+        compiledColumns={compiledColumns}
+        toolbar={new BrunoTableToolbarStore(undefined)}
+        rowPipeline={BrunoTableClientRowPipeline}
+        rowPipelineAdapter={adapter}
+        editMemory={legacyMemory}
+        renderResetReview={() => null}
+      />,
+    );
+    await expect.element(viewScreen.getByRole("region", { name: "Edit safety" })).toBeVisible();
+    await expect.element(viewScreen.getByRole("button", { name: "Reset edits" })).toBeVisible();
+    await expect.element(viewScreen.getByRole("button", { name: "Save" })).toBeVisible();
+    await viewScreen.unmount();
+  } finally {
+    legacyMemory.dispose();
+  }
+});
 
 function ResetCommandProbe({
   onResult,
@@ -4287,8 +4381,18 @@ test("reviews every conflict explicitly and safely rebases Mine before Batch Sav
   await userEvent.click(mineChoice);
   await expect.element(mineChoice).toHaveAttribute("aria-pressed", "true");
   await expect.element(review.getByRole("button", { name: "Save" })).toBeEnabled();
+  const sameVersionRows = [{ id: "ada", name: "Same Version Server", revision: 2n }] as const;
+  await screen.rerender(renderTable(sameVersionRows, 3));
+  reopenedGrid.element().scrollLeft = reopenedGrid.element().scrollWidth;
+  await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
+  const sameVersionMineChoice = review.getByRole("button", {
+    name: "Keep Mine for row ada, column Name",
+  });
+  await expect.element(sameVersionMineChoice).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(sameVersionMineChoice);
+  await expect.element(review.getByRole("button", { name: "Save" })).toBeEnabled();
   const newestRows = [{ id: "ada", name: "Newer Server", revision: 3n }] as const;
-  await screen.rerender(renderTable(newestRows, 3));
+  await screen.rerender(renderTable(newestRows, 4));
   reopenedGrid.element().scrollLeft = reopenedGrid.element().scrollWidth;
   await expect.element(review.getByRole("button", { name: "Save" })).toBeDisabled();
   const refreshedMineChoice = review.getByRole("button", {

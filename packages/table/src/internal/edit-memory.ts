@@ -1294,7 +1294,8 @@ export class BrunoTableEditMemoryRuntime {
 
   private readonly publishSparseReviewRows = (): void => {
     if (this.cellEdit === undefined || this.unsubscribeDraftReview === undefined) return;
-    const rows = this.cellEdit.getDraftReviewSourceSnapshot();
+    const runtime = this.cellEdit;
+    const rows = runtime.getDraftReviewSourceSnapshot();
     if (this.conflictReviewStore.get().open) {
       const activeConflictIds = new Set<string>();
       for (const row of rows) {
@@ -1308,7 +1309,11 @@ export class BrunoTableEditMemoryRuntime {
         ([id, resolution]) => {
           const conflict = this.conflictReviewSourcesById.get(id)?.getSnapshot().conflict;
           return conflict !== undefined &&
-            !Object.is(conflict.serverVersion, resolution.reviewedServerVersion)
+            !runtime.isDraftConflictEvidenceCurrent(
+              id,
+              resolution.reviewedServer,
+              resolution.reviewedServerVersion,
+            )
             ? [id]
             : [];
         },

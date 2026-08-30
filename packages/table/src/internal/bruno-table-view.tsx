@@ -625,10 +625,7 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
           rowSelection={rowSelection}
           cellRange={cellRange}
         />
-        {editMemory === undefined ||
-        renderResetReview === undefined ||
-        renderConflictReview === undefined ||
-        renderBlockedReview === undefined ? null : (
+        {editMemory === undefined || renderResetReview === undefined ? null : (
           <BrunoTableEditSafetyFooter
             dispatchGridCommand={runtime.dispatchGridCommand}
             runtime={editMemory}

@@ -2160,6 +2160,23 @@ export class BrunoTableCellEditRuntime {
   public readonly getDraftReviewSourceSnapshot =
     (): readonly BrunoTableCellEditDraftReviewSourceRow[] => this.draftReviewStore.get();
 
+  public readonly isDraftConflictEvidenceCurrent = (
+    id: string,
+    reviewedServer: unknown,
+    reviewedServerVersion: unknown,
+  ): boolean => {
+    const draft = this.draftStore.get().get(id);
+    if (draft === undefined) return true;
+    const conflict = draft.conflict;
+    if (conflict === undefined) return true;
+    const column = this.fieldColumnsById.get(draft.columnId);
+    return (
+      column !== undefined &&
+      Object.is(conflict.serverVersion, reviewedServerVersion) &&
+      safeEquivalentEditValue(column, conflict.server, reviewedServer) === true
+    );
+  };
+
   public readonly subscribeDraftReview = (listener: Listener): (() => void) => {
     this.draftReviewSubscriberCount += 1;
     if (this.draftReviewSubscriberCount === 1) this.publishDraftReview(this.draftStore.get());

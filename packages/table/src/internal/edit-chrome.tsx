@@ -141,8 +141,10 @@ export const BrunoTableEditModeControl: NamedExoticComponent<BrunoTableEditModeC
 );
 
 const BrunoTableConflictCountStatus = memo(function BrunoTableConflictCountStatus({
+  interactive,
   runtime,
 }: {
+  readonly interactive: boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
 }): ReactElement {
   const count = useSyncExternalStore(
@@ -151,24 +153,31 @@ const BrunoTableConflictCountStatus = memo(function BrunoTableConflictCountStatu
     runtime.getConflictCountSnapshot,
   );
   if (count === 0) return <></>;
+  const label = `${String(count)} ${count === 1 ? "conflict" : "conflicts"}`;
   return (
     <>
-      <Button
-        data-bruno-table-review-focus="conflict"
-        size="sm"
-        variant="ghost"
-        onClick={(event) => runtime.openConflictReview(event.currentTarget)}
-      >
-        {String(count)} {count === 1 ? "conflict" : "conflicts"}
-      </Button>
+      {interactive ? (
+        <Button
+          data-bruno-table-review-focus="conflict"
+          size="sm"
+          variant="ghost"
+          onClick={(event) => runtime.openConflictReview(event.currentTarget)}
+        >
+          {label}
+        </Button>
+      ) : (
+        <span>{label}</span>
+      )}
       <span aria-hidden="true"> · </span>
     </>
   );
 });
 
 const BrunoTableBlockedCountStatus = memo(function BrunoTableBlockedCountStatus({
+  interactive,
   runtime,
 }: {
+  readonly interactive: boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
 }): ReactElement {
   const count = useSyncExternalStore(
@@ -177,16 +186,21 @@ const BrunoTableBlockedCountStatus = memo(function BrunoTableBlockedCountStatus(
     runtime.getBlockedCountSnapshot,
   );
   if (count === 0) return <></>;
+  const label = `${String(count)} blocked ${count === 1 ? "change" : "changes"}`;
   return (
     <>
-      <Button
-        data-bruno-table-review-focus="blocked"
-        size="sm"
-        variant="ghost"
-        onClick={(event) => runtime.openBlockedReview(event.currentTarget)}
-      >
-        {String(count)} blocked {count === 1 ? "change" : "changes"}
-      </Button>
+      {interactive ? (
+        <Button
+          data-bruno-table-review-focus="blocked"
+          size="sm"
+          variant="ghost"
+          onClick={(event) => runtime.openBlockedReview(event.currentTarget)}
+        >
+          {label}
+        </Button>
+      ) : (
+        <span>{label}</span>
+      )}
       <span aria-hidden="true"> · </span>
     </>
   );
@@ -255,14 +269,18 @@ const BrunoTableEditSummaryStatus = memo(function BrunoTableEditSummaryStatus({
 });
 
 const BrunoTablePendingEditStatus = memo(function BrunoTablePendingEditStatus({
+  hasBlockedReview,
+  hasConflictReview,
   runtime,
 }: {
+  readonly hasBlockedReview: boolean;
+  readonly hasConflictReview: boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
 }): ReactElement {
   return (
     <div aria-live="polite" className="flex items-center gap-2">
-      <BrunoTableConflictCountStatus runtime={runtime} />
-      <BrunoTableBlockedCountStatus runtime={runtime} />
+      <BrunoTableConflictCountStatus interactive={hasConflictReview} runtime={runtime} />
+      <BrunoTableBlockedCountStatus interactive={hasBlockedReview} runtime={runtime} />
       <BrunoTableSaveWorkStatus runtime={runtime} />
       <BrunoTableEditSummaryStatus runtime={runtime} />
     </div>
@@ -837,8 +855,8 @@ type BrunoTableEditSafetyFooterProps = Readonly<{
   readonly dispatchGridCommand: (command: BrunoTableGridCommand) => boolean;
   readonly runtime: BrunoTableEditMemoryRuntime;
   readonly renderReview: (rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode;
-  readonly renderConflictReview: BrunoTableConflictReviewRenderer;
-  readonly renderBlockedReview: BrunoTableBlockedReviewRenderer;
+  readonly renderConflictReview?: BrunoTableConflictReviewRenderer | undefined;
+  readonly renderBlockedReview?: BrunoTableBlockedReviewRenderer | undefined;
 }>;
 
 export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafetyFooterProps> =
@@ -856,14 +874,22 @@ export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafe
         role="region"
       >
         <BrunoTableSaveFailure runtime={runtime} />
-        <BrunoTablePendingEditStatus runtime={runtime} />
+        <BrunoTablePendingEditStatus
+          hasBlockedReview={renderBlockedReview !== undefined}
+          hasConflictReview={renderConflictReview !== undefined}
+          runtime={runtime}
+        />
         <div className="flex items-center gap-2">
           <BrunoTableResetEditsButton dispatchGridCommand={dispatchGridCommand} runtime={runtime} />
           <BrunoTableSaveEditsButton runtime={runtime} />
         </div>
         <BrunoTableResetReview runtime={runtime} renderReview={renderReview} />
-        <BrunoTableConflictReview runtime={runtime} renderReview={renderConflictReview} />
-        <BrunoTableBlockedReview runtime={runtime} renderReview={renderBlockedReview} />
+        {renderConflictReview === undefined ? null : (
+          <BrunoTableConflictReview runtime={runtime} renderReview={renderConflictReview} />
+        )}
+        {renderBlockedReview === undefined ? null : (
+          <BrunoTableBlockedReview runtime={runtime} renderReview={renderBlockedReview} />
+        )}
       </footer>
     );
   });
