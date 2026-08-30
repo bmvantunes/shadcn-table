@@ -9,6 +9,7 @@ import {
   BrunoTableCellEditRuntime as BrunoTableCellEditRuntimeBase,
   isBrunoTableCellEditDraftReviewSourceRow,
   type BrunoTableCellEditChangeGesture,
+  type BrunoTableCellEditConflictResolution,
   type BrunoTableCellEditDraftSnapshot,
   type BrunoTableCellEditSaveChangeSet,
 } from "./cell-edit";
@@ -128,6 +129,34 @@ describe("BrunoTable Cell Edit Session", () => {
         mine: 8,
       },
     ]);
+  });
+
+  it("publishes the blocking reason for a dirty active candidate whose row disappears", () => {
+    let current: Row | undefined = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    runtime.updateActiveCandidate("7", false);
+    current = undefined;
+    runtime.reconcileActiveRow(new Set([row.id]));
+    runtime.reconcileSourceRows(new Set([row.id]));
+    const unsubscribe = runtime.subscribeDraftReview(() => undefined);
+
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      activeCandidatePending: true,
+      blockedCount: 1,
+    });
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      {
+        rowId: row.id,
+        candidateText: "7",
+        blockedReason: "This row was removed from the server. Changes cannot be saved.",
+      },
+    ]);
+    unsubscribe();
   });
 
   it("keeps the immutable admission Base and Row Version across live source replacement", () => {
@@ -4501,10 +4530,28 @@ describe("BrunoTable Cell Edit Session", () => {
       getRowVersion: (candidate) => (candidate as Row).quantity,
     });
     runtime.setBatchHistoryEnabled(true);
-    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
-    expect(runtime.commit("7")).toBe(true);
-    expect(runtime.start(second.id, "COL_ID_SCORE")).toBe(true);
-    expect(runtime.commit("8")).toBe(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: row.quantity,
+          base: row.score,
+          mine: 7,
+        },
+        {
+          rowId: second.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: second,
+          expectedVersion: second.quantity,
+          base: second.score,
+          mine: 8,
+        },
+      ]),
+    ).toBe(true);
     const changeSet = runtime.createBatchSaveChangeSet();
     expect(changeSet).toBeDefined();
     runtime.rejectSave("operation-selected-resolution", changeSet!, false);
@@ -4534,6 +4581,151 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.undoBatchDraft()).toBe(true);
     expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 2, conflictCount: 2 });
     expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 0 });
+  });
+
+  it("reopens multiple invalidated resolutions in one observable transaction", () => {
+    const second = Object.freeze({ ...row, id: "row-2", quantity: row.quantity + 1n });
+    const rowsById = new Map<string, Row>([
+      [row.id, row],
+      [second.id, second],
+    ]);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => rowsById.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: row.quantity,
+          base: row.score,
+          mine: 7,
+        },
+        {
+          rowId: second.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: second,
+          expectedVersion: second.quantity,
+          base: second.score,
+          mine: 8,
+        },
+      ]),
+    ).toBe(true);
+    rowsById.set(row.id, Object.freeze({ ...row, score: 5, quantity: row.quantity + 2n }));
+    rowsById.set(second.id, Object.freeze({ ...second, score: 6, quantity: second.quantity + 2n }));
+    runtime.reconcileSourceRows(new Set([row.id, second.id]));
+    const conflicts = runtime.getDraftReviewSnapshot();
+    expect(conflicts).toHaveLength(2);
+    expect(
+      runtime.resolveDraftConflicts(
+        conflicts.map((conflict) => ({
+          id: conflict.id,
+          resolution: "mine" as const,
+          reviewedServer: conflict.conflict!.server,
+          reviewedServerVersion: conflict.conflict!.serverVersion,
+        })) as [BrunoTableCellEditConflictResolution, ...BrunoTableCellEditConflictResolution[]],
+      ),
+    ).toBe(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: rowsById.get(row.id)!,
+          expectedVersion: row.quantity + 2n,
+          base: 5,
+          mine: 9,
+        },
+      ]),
+    ).toBe(true);
+    const reviewPublished = vi.fn();
+    const activityPublished = vi.fn();
+    const traversalPublished = vi.fn();
+    const unsubscribeReview = runtime.subscribeDraftReview(reviewPublished);
+    const unsubscribeActivity = runtime.subscribeActivity(activityPublished);
+    const unsubscribeTraversal = runtime.subscribeTraversalInvalidation(traversalPublished);
+    rowsById.set(row.id, Object.freeze({ ...row, score: 11, quantity: row.quantity + 3n }));
+    rowsById.set(
+      second.id,
+      Object.freeze({ ...second, score: 10, quantity: second.quantity + 3n }),
+    );
+
+    expect(runtime.reopenResolvedConflicts(conflicts.map((conflict) => conflict.id))).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 2,
+      conflictCount: 2,
+      undoCount: 2,
+    });
+    expect(reviewPublished).toHaveBeenCalledOnce();
+    expect(activityPublished).toHaveBeenCalledOnce();
+    expect(traversalPublished).toHaveBeenCalledOnce();
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBe(7);
+    expect(runtime.getDraftSnapshot(second.id, "COL_ID_SCORE")).toBe(8);
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 2,
+      conflictCount: 2,
+      undoCount: 1,
+      redoCount: 1,
+    });
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({
+      draftCount: 0,
+      conflictCount: 0,
+      undoCount: 0,
+      redoCount: 2,
+    });
+    unsubscribeReview();
+    unsubscribeActivity();
+    unsubscribeTraversal();
+  });
+
+  it("resolves an Immediate conflict without requiring Batch history", () => {
+    let current = row;
+    const onCommitGesture = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+      onCommitGesture,
+    });
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(onCommitGesture).not.toHaveBeenCalled();
+
+    current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    const conflict = runtime.getDraftReviewSnapshot()[0];
+    expect(conflict?.conflict).toBeDefined();
+
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: conflict!.id,
+          resolution: "mine",
+          reviewedServer: conflict!.conflict!.server,
+          reviewedServerVersion: conflict!.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(true);
+    expect(onCommitGesture).toHaveBeenCalledOnce();
+    expect(onCommitGesture).toHaveBeenLastCalledWith([
+      {
+        rowId: row.id,
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        before: 5,
+        after: 7,
+      },
+    ]);
     expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 0 });
   });
 

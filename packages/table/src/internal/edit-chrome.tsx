@@ -344,9 +344,18 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
     runtime.getConflictReviewRowsSnapshot,
   );
   useEffect(() => {
-    const rowIds = rows.map((row) => row.id);
-    selection.reconcile(rowIds, rowIds, rows);
+    if (rows.length === 0) selection.clear();
   }, [rows, selection]);
+  const canSave = useSyncExternalStore(
+    runtime.subscribeCanSave,
+    runtime.getCanSaveSnapshot,
+    runtime.getCanSaveSnapshot,
+  );
+  const editSummary = useSyncExternalStore(
+    runtime.subscribeEditSummary,
+    runtime.getEditSummarySnapshot,
+    runtime.getEditSummarySnapshot,
+  );
   const selectionHeader = useSyncExternalStore(
     selection.subscribeHeader,
     selection.getHeaderSnapshot,
@@ -356,10 +365,14 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
     (id: string, resolution: "mine" | "server") => runtime.resolveConflictRows([id], resolution),
     [runtime],
   );
+  const activeConflictIds = new Set(
+    rows.flatMap((row) => (row.getSnapshot().conflict === undefined ? [] : [row.id])),
+  );
+  const selectedActiveConflictCount =
+    selectionHeader.selectedCount === 0
+      ? 0
+      : selection.getSelectedRowIds().filter((id) => activeConflictIds.has(id)).length;
   const resolveSelected = (resolution: "mine" | "server") => {
-    const activeConflictIds = new Set(
-      rows.flatMap((row) => (row.getSnapshot().conflict === undefined ? [] : [row.id])),
-    );
     const [first, ...rest] = selection
       .getSelectedRowIds()
       .filter((id) => activeConflictIds.has(id));
@@ -390,21 +403,26 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
           Cancel
         </AlertDialogCancel>
         <Button
-          disabled={selectionHeader.selectedCount === 0 || snapshot.saving}
+          disabled={selectedActiveConflictCount === 0 || snapshot.saving}
           variant="outline"
           onClick={() => resolveSelected("mine")}
         >
           Apply Mine to Selected
         </Button>
         <Button
-          disabled={selectionHeader.selectedCount === 0 || snapshot.saving}
+          disabled={selectedActiveConflictCount === 0 || snapshot.saving}
           variant="outline"
           onClick={() => resolveSelected("server")}
         >
           Apply Server to Selected
         </Button>
         <Button
-          disabled={snapshot.count > 0 || snapshot.resolutionCount === 0 || snapshot.saving}
+          disabled={
+            snapshot.count > 0 ||
+            snapshot.resolutionCount === 0 ||
+            snapshot.saving ||
+            (editSummary.pendingCount > 0 && !canSave)
+          }
           onClick={runtime.saveConflictReview}
         >
           {snapshot.saving ? "Saving…" : "Save"}
@@ -436,7 +454,7 @@ export const BrunoTableConflictReviewResolution: NamedExoticComponent<BrunoTable
       [row.id, runtime],
     );
     const resolution = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)?.resolution;
-    const active = snapshot.conflict !== undefined;
+    const active = snapshot.conflict !== undefined && resolution === undefined;
     return (
       <div aria-label="Conflict resolution" className="flex items-center gap-1" role="group">
         <Button
@@ -505,8 +523,7 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
     runtime.getBlockedReviewRowsSnapshot,
   );
   useEffect(() => {
-    const rowIds = rows.map((row) => row.id);
-    selection.reconcile(rowIds, rowIds, rows);
+    if (rows.length === 0) selection.clear();
   }, [rows, selection]);
   const selectionHeader = useSyncExternalStore(
     selection.subscribeHeader,

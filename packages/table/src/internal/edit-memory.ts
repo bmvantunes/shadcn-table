@@ -411,8 +411,8 @@ export class BrunoTableEditMemoryRuntime {
   private reviewFocusFrame: number | undefined;
   private reviewFocusFrameWindow: Window | undefined;
   private reviewFocusReturn: HTMLElement | undefined;
+  private reviewFocusRoot: HTMLElement | undefined;
   private reviewFocusFallbackSelector: string | undefined;
-  private reviewFocusDocument: Document | undefined;
   private reviewFocusWindow: Window | undefined;
   private unsubscribeDraftReview: (() => void) | undefined;
   private readonly resetControls = new Set<Element>();
@@ -463,8 +463,8 @@ export class BrunoTableEditMemoryRuntime {
     this.reviewFocusFrame = undefined;
     this.reviewFocusFrameWindow = undefined;
     this.reviewFocusReturn = undefined;
+    this.reviewFocusRoot = undefined;
     this.reviewFocusFallbackSelector = undefined;
-    this.reviewFocusDocument = undefined;
     this.reviewFocusWindow = undefined;
     this.modeStore.setState(() => INITIAL_MODE_SNAPSHOT);
     this.reconcileCellEditActivity(CLEAN_CELL_EDIT_ACTIVITY);
@@ -1035,6 +1035,7 @@ export class BrunoTableEditMemoryRuntime {
       this.closeConflictReview();
       return true;
     }
+    if (!this.canSaveStore.get()) return false;
     this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: true });
     this.conflictReviewSaveRequested = true;
     this.saveCommand();
@@ -1313,22 +1314,22 @@ export class BrunoTableEditMemoryRuntime {
 
       let context = this.actor.getSnapshot().context;
       const invalidResolutionIds = [...context.conflictReviewResolutions].flatMap(
-        ([id, resolution]) => {
-          const conflict = this.conflictReviewSourcesById.get(id)?.getSnapshot().conflict;
-          return conflict !== undefined &&
-            !runtime.isDraftConflictEvidenceCurrent(
-              id,
-              resolution.reviewedServer,
-              resolution.reviewedServerVersion,
-            )
-            ? [id]
-            : [];
-        },
+        ([id, resolution]) =>
+          runtime.isDraftConflictEvidenceCurrent(
+            id,
+            resolution.reviewedServer,
+            resolution.reviewedServerVersion,
+          )
+            ? []
+            : [id],
       );
       if (invalidResolutionIds.length > 0) {
-        this.actor.send({
-          type: "INVALIDATE_CONFLICT_RESOLUTIONS",
-          ids: Object.freeze(invalidResolutionIds),
+        batch(() => {
+          runtime.reopenResolvedConflicts(invalidResolutionIds);
+          this.actor.send({
+            type: "INVALIDATE_CONFLICT_RESOLUTIONS",
+            ids: Object.freeze(invalidResolutionIds),
+          });
         });
         context = this.actor.getSnapshot().context;
       }
@@ -1381,12 +1382,13 @@ export class BrunoTableEditMemoryRuntime {
       HTMLElementConstructor !== undefined && candidate instanceof HTMLElementConstructor
         ? (candidate as HTMLElement)
         : undefined;
+    this.reviewFocusRoot =
+      this.reviewFocusReturn?.closest<HTMLElement>("[data-bruno-table]") ?? undefined;
     const focusKey = this.reviewFocusReturn?.dataset["brunoTableReviewFocus"];
     this.reviewFocusFallbackSelector =
       focusKey === "conflict" || focusKey === "blocked"
         ? `[data-bruno-table-review-focus="${focusKey}"]`
         : undefined;
-    this.reviewFocusDocument = ownerDocument;
     this.reviewFocusWindow = ownerWindow;
   };
 
@@ -1395,12 +1397,12 @@ export class BrunoTableEditMemoryRuntime {
       this.reviewFocusFrameWindow?.cancelAnimationFrame(this.reviewFocusFrame);
     }
     const target = this.reviewFocusReturn;
+    const root = this.reviewFocusRoot;
     const fallbackSelector = this.reviewFocusFallbackSelector;
-    const ownerDocument = this.reviewFocusDocument;
     const ownerWindow = this.reviewFocusWindow;
     this.reviewFocusReturn = undefined;
+    this.reviewFocusRoot = undefined;
     this.reviewFocusFallbackSelector = undefined;
-    this.reviewFocusDocument = undefined;
     this.reviewFocusWindow = undefined;
     if (ownerWindow === undefined) {
       this.gridFocusCommand?.();
@@ -1416,7 +1418,7 @@ export class BrunoTableEditMemoryRuntime {
           const fallback =
             fallbackSelector === undefined
               ? undefined
-              : ownerDocument?.querySelector<HTMLElement>(fallbackSelector);
+              : root?.querySelector<HTMLElement>(fallbackSelector);
           if (fallback?.isConnected) fallback.focus();
           else this.gridFocusCommand?.();
         }
