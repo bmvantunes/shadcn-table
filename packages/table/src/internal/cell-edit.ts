@@ -1053,20 +1053,20 @@ function reconcileInvalidatedResolutionHistory(
   evidenceByKey: ReadonlyMap<string, ConflictEvidence>,
   resolutionLineageByKey: ReadonlyMap<string, object>,
 ): readonly DraftHistoryCommand[] {
-  if (evidenceByKey.size === 0) return commands;
+  if (evidenceByKey.size === 0 && resolutionLineageByKey.size === 0) return commands;
   let changed = false;
   const nextCommands: DraftHistoryCommand[] = [];
   for (const command of commands) {
     let commandChanged = false;
     const nextPatches = new DraftHistoryPatchMapBuilder();
     for (const [key, patch] of command.patches) {
+      if (resolutionLineageByKey.get(key) === command.lineage) {
+        commandChanged = true;
+        continue;
+      }
       const evidence = evidenceByKey.get(key);
       if (evidence === undefined) {
         nextPatches.set(key, patch);
-        continue;
-      }
-      if (resolutionLineageByKey.get(key) === command.lineage) {
-        commandChanged = true;
         continue;
       }
       const before = setDraftConflictEvidence(patch.before, evidence);
@@ -2206,10 +2206,19 @@ export class BrunoTableCellEditRuntime {
 
   public readonly isDraftConflictEvidenceCurrent = (
     id: string,
+    resolution: "mine" | "server",
     reviewedServer: unknown,
     reviewedServerVersion: unknown,
   ): boolean => {
-    const entry = this.draftStore.get().get(id) ?? this.resolvedDraftReviewEntriesById.get(id);
+    const activeDraft = this.draftStore.get().get(id);
+    const entry =
+      resolution === "mine"
+        ? activeDraft?.conflict === undefined
+          ? activeDraft
+          : undefined
+        : activeDraft === undefined
+          ? this.resolvedDraftReviewEntriesById.get(id)
+          : undefined;
     if (entry === undefined) return false;
     const column = entry.presentationColumn ?? this.fieldColumnsById.get(entry.columnId);
     const serverRow = this.getRow(entry.rowId);
@@ -2229,17 +2238,72 @@ export class BrunoTableCellEditRuntime {
     );
   };
 
+  public readonly isConflictResolutionLocallyUndone = (
+    id: string,
+    reviewedServer: unknown,
+    reviewedServerVersion: unknown,
+  ): boolean => {
+    const lineage = this.resolvedDraftReviewLineagesById.get(id);
+    const location = lineage === undefined ? undefined : this.draftHistoryLocations.get(lineage);
+    if (
+      lineage === undefined ||
+      location?.stack !== "redo" ||
+      this.redoStack[location.index]?.lineage !== lineage
+    ) {
+      return false;
+    }
+    const draft = this.draftStore.get().get(id);
+    const column =
+      draft?.presentationColumn ??
+      (draft === undefined ? undefined : this.fieldColumnsById.get(draft.columnId));
+    return (
+      draft?.conflict !== undefined &&
+      column !== undefined &&
+      Object.is(draft.conflict.serverVersion, reviewedServerVersion) &&
+      safeEquivalentEditValue(column, draft.conflict.server, reviewedServer) === true
+    );
+  };
+
   public readonly reopenResolvedConflicts = (ids: readonly string[]): boolean => {
     const previousDrafts = this.draftStore.get();
     const nextDrafts = new Map(previousDrafts);
     const reopenedKeys = new Set<string>();
     const convergedKeys = new Set<string>();
+    const supersededKeys = new Set<string>();
     const affectedEntries = new Map<string, DraftEntry>();
     const serverRows = new Map<string, unknown>();
     const evidenceByKey = new Map<string, ConflictEvidence>();
     const resolutionLineageByKey = new Map<string, object>();
     for (const id of ids) {
-      const resolved = previousDrafts.get(id) ?? this.resolvedDraftReviewEntriesById.get(id);
+      const activeDraft = previousDrafts.get(id);
+      const retainedResolved = this.resolvedDraftReviewEntriesById.get(id);
+      const resolutionLineage = this.resolvedDraftReviewLineagesById.get(id);
+      const resolutionLocation =
+        resolutionLineage === undefined
+          ? undefined
+          : this.draftHistoryLocations.get(resolutionLineage);
+      if (
+        activeDraft !== undefined &&
+        activeDraft.conflict === undefined &&
+        resolutionLineage !== undefined &&
+        resolutionLocation?.stack === "redo"
+      ) {
+        supersededKeys.add(id);
+        affectedEntries.set(id, retainedResolved ?? activeDraft);
+        resolutionLineageByKey.set(id, resolutionLineage);
+        continue;
+      }
+      if (
+        activeDraft !== undefined &&
+        retainedResolved !== undefined &&
+        resolutionLocation?.stack !== "redo"
+      ) {
+        supersededKeys.add(id);
+        affectedEntries.set(id, retainedResolved);
+        if (resolutionLineage !== undefined) resolutionLineageByKey.set(id, resolutionLineage);
+        continue;
+      }
+      const resolved = activeDraft ?? retainedResolved;
       if (resolved === undefined) continue;
       const column = resolved.presentationColumn ?? this.fieldColumnsById.get(resolved.columnId);
       const serverRow = this.getRow(resolved.rowId);
@@ -2254,6 +2318,7 @@ export class BrunoTableCellEditRuntime {
       }
       affectedEntries.set(id, resolved);
       if (safeEquivalentEditValue(column, resolved.mine, currentServer.value) === true) {
+        nextDrafts.delete(id);
         convergedKeys.add(id);
         continue;
       }
@@ -2268,10 +2333,9 @@ export class BrunoTableCellEditRuntime {
       reopenedKeys.add(id);
       serverRows.set(id, serverRow);
       evidenceByKey.set(id, evidence);
-      const resolutionLineage = this.resolvedDraftReviewLineagesById.get(id);
       if (resolutionLineage !== undefined) resolutionLineageByKey.set(id, resolutionLineage);
     }
-    const affectedKeys = new Set([...reopenedKeys, ...convergedKeys]);
+    const affectedKeys = new Set([...reopenedKeys, ...convergedKeys, ...supersededKeys]);
     if (affectedKeys.size === 0) return false;
     for (const id of affectedKeys) {
       this.resolvedDraftReviewEntriesById.delete(id);
@@ -2674,6 +2738,13 @@ export class BrunoTableCellEditRuntime {
     }
     return this.commitDraftReviewHistoryCommand(nextDrafts, historyPatchBuilder.build());
   };
+
+  public readonly isBlockedDraftDiscardable = (id: string): boolean =>
+    this.batchHistoryEnabled &&
+    this.getSessionSnapshot().kind !== "editing" &&
+    this.batchSaveLockOperationId === undefined &&
+    !this.saveLockedCellKeys.has(id) &&
+    this.draftStore.get().get(id)?.blockedReason !== undefined;
 
   public readonly undoBatchDraft = (): boolean => {
     if (!this.batchHistoryEnabled || this.getSessionSnapshot().kind === "editing") return false;
@@ -3115,8 +3186,12 @@ export class BrunoTableCellEditRuntime {
       this.clearRejectedOperation(operationId);
     }
     const previousDrafts = this.draftStore.get();
-    const affectedKeys = [...this.draftEvidenceKeys];
+    const affectedKeys = [
+      ...new Set([...this.draftEvidenceKeys, ...this.resolvedDraftReviewEntriesById.keys()]),
+    ];
     const nextDrafts = new Map<string, DraftEntry>();
+    this.resolvedDraftReviewEntriesById.clear();
+    this.resolvedDraftReviewLineagesById.clear();
     this.blockedDraftKeys.clear();
     this.validationDraftKeys.clear();
     this.conflictDraftKeys.clear();
@@ -4056,8 +4131,7 @@ export class BrunoTableCellEditRuntime {
         previousRow !== undefined &&
         ((previousRow.conflict === undefined) !== (nextRow.conflict === undefined) ||
           (previousRow.blockedReason === undefined) !== (nextRow.blockedReason === undefined) ||
-          (this.resolvedDraftReviewEntriesById.has(id) &&
-            previousRow.serverRow !== nextRow.serverRow))
+          this.resolvedDraftReviewLineagesById.has(id))
       ) {
         membershipChanged = true;
       }
@@ -4108,7 +4182,7 @@ export class BrunoTableCellEditRuntime {
     const rows = Object.freeze(
       [
         ...drafts.keys(),
-        ...this.resolvedDraftReviewEntriesById.keys(),
+        ...[...this.resolvedDraftReviewEntriesById.keys()].filter((id) => !drafts.has(id)),
         ...(activeKey === undefined || drafts.has(activeKey) ? [] : [activeKey]),
       ].flatMap((id) => {
         const row = this.draftReviewRowsById.get(id);
@@ -4385,8 +4459,6 @@ export class BrunoTableCellEditRuntime {
         reviewChangedKeys.add(key);
         const serverRow = authoritativeRows?.get(resolved.rowId) ?? this.getRow(resolved.rowId);
         reviewServerRows.set(key, serverRow);
-        const column = resolved.presentationColumn ?? this.fieldColumnsById.get(resolved.columnId);
-        if (column === undefined || typeof serverRow !== "object" || serverRow === null) continue;
       }
     }
     for (const rowId of visitedRowIds) {

@@ -530,6 +530,9 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
     selection.getHeaderSnapshot,
     selection.getHeaderSnapshot,
   );
+  const selectedIds = selectionHeader.selectedCount === 0 ? [] : selection.getSelectedRowIds();
+  const selectedBlockedChangesDiscardable =
+    selectedIds.length > 0 && selectedIds.every(runtime.isBlockedChangeDiscardable);
   return (
     <AlertDialogContent
       className="max-w-5xl sm:max-w-5xl"
@@ -551,12 +554,14 @@ const BrunoTableBlockedReviewContent = memo(function BrunoTableBlockedReviewCont
         {rows.length === 0 ? <p role="status">All blocked changes are current.</p> : null}
       </div>
       <AlertDialogFooter>
+        {selectedIds.length > 0 && !selectedBlockedChangesDiscardable ? (
+          <p role="status">Finish or cancel the active edit before discarding it.</p>
+        ) : null}
         <AlertDialogCancel onClick={runtime.closeBlockedReview}>Close</AlertDialogCancel>
         <Button
-          disabled={rows.length === 0 || selectionHeader.selectedCount === 0}
+          disabled={rows.length === 0 || !selectedBlockedChangesDiscardable}
           variant="destructive"
           onClick={() => {
-            const selectedIds = selection.getSelectedRowIds();
             const [first, ...rest] = selectedIds;
             if (first !== undefined && runtime.discardBlockedChanges([first, ...rest])) {
               selection.clear();

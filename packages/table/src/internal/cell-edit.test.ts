@@ -4584,6 +4584,176 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 0 });
   });
 
+  it("supersedes retained Server resolution evidence when the same cell is edited again", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: row.quantity,
+          base: row.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(true);
+    current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    const unsubscribe = runtime.subscribeDraftReview(() => undefined);
+    const conflict = runtime.getDraftReviewSnapshot()[0]!;
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: conflict.id,
+          resolution: "server",
+          reviewedServer: conflict.conflict!.server,
+          reviewedServerVersion: conflict.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(true);
+    expect(runtime.getDraftReviewSourceSnapshot()).toHaveLength(1);
+
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: current,
+          expectedVersion: current.quantity,
+          base: current.score,
+          mine: 9,
+        },
+      ]),
+    ).toBe(true);
+    expect(runtime.getDraftReviewSourceSnapshot()).toHaveLength(1);
+    expect(
+      runtime.isDraftConflictEvidenceCurrent(
+        conflict.id,
+        "server",
+        conflict.conflict!.server,
+        conflict.conflict!.serverVersion,
+      ),
+    ).toBe(false);
+    expect(runtime.reopenResolvedConflicts([conflict.id])).toBe(true);
+    expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBe(9);
+    expect(runtime.getDraftReviewSnapshot()[0]?.conflict).toBeUndefined();
+    expect(runtime.getDraftReviewSourceSnapshot()).toHaveLength(1);
+    unsubscribe();
+  });
+
+  it("prunes a locally undone Server resolution when its source evidence changes", () => {
+    let current = row;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: row.quantity,
+          base: row.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(true);
+    current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    const conflict = runtime.getDraftReviewSnapshot()[0]!;
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: conflict.id,
+          resolution: "server",
+          reviewedServer: conflict.conflict!.server,
+          reviewedServerVersion: conflict.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getActivitySnapshot().redoCount).toBe(1);
+
+    current = Object.freeze({ ...row, score: 6, quantity: row.quantity + 2n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    expect(runtime.isConflictResolutionLocallyUndone(conflict.id, 5, row.quantity + 1n)).toBe(
+      false,
+    );
+    expect(runtime.reopenResolvedConflicts([conflict.id])).toBe(true);
+    expect(runtime.getActivitySnapshot()).toMatchObject({ conflictCount: 1, redoCount: 0 });
+    expect(runtime.getDraftReviewSnapshot()[0]?.conflict).toMatchObject({
+      server: 6,
+      serverVersion: row.quantity + 2n,
+    });
+  });
+
+  it.each(["mine", "server"] as const)(
+    "keeps a safely rebased draft conflict-free when a locally undone %s resolution is invalidated",
+    (resolution) => {
+      let current = row;
+      const runtime = new BrunoTableCellEditRuntime({
+        columns,
+        getRow: () => current,
+        getRowVersion: (candidate) => (candidate as Row).quantity,
+      });
+      runtime.setBatchHistoryEnabled(true);
+      expect(
+        runtime.applyAcceptedDraftGesture([
+          {
+            rowId: row.id,
+            columnId: "COL_ID_SCORE",
+            field: "score",
+            baseRow: row,
+            expectedVersion: row.quantity,
+            base: row.score,
+            mine: 7,
+          },
+        ]),
+      ).toBe(true);
+      current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+      runtime.reconcileSourceRows(new Set([row.id]));
+      const conflict = runtime.getDraftReviewSnapshot()[0]!;
+      expect(
+        runtime.resolveDraftConflicts([
+          {
+            id: conflict.id,
+            resolution,
+            reviewedServer: conflict.conflict!.server,
+            reviewedServerVersion: conflict.conflict!.serverVersion,
+          },
+        ]),
+      ).toBe(true);
+      expect(runtime.undoBatchDraft()).toBe(true);
+
+      current = Object.freeze({ ...row, quantity: row.quantity + 2n });
+      runtime.reconcileSourceRows(new Set([row.id]));
+      expect(runtime.getDraftReviewSnapshot()[0]?.conflict).toBeUndefined();
+      expect(runtime.reopenResolvedConflicts([conflict.id])).toBe(true);
+      expect(runtime.getActivitySnapshot()).toMatchObject({
+        draftCount: 1,
+        conflictCount: 0,
+        undoCount: 1,
+        redoCount: 0,
+      });
+      expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBe(7);
+      expect(runtime.undoBatchDraft()).toBe(true);
+      expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
+    },
+  );
+
   it("reopens multiple invalidated resolutions in one observable transaction", () => {
     const second = Object.freeze({ ...row, id: "row-2", quantity: row.quantity + 1n });
     const rowsById = new Map<string, Row>([

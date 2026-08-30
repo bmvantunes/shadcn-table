@@ -755,6 +755,7 @@ function BrunoTableBlockedReviewTable({
       ] satisfies BrunoTableColumns<BrunoTableCellEditDraftReviewSourceRow>,
     [],
   );
+  const initialOrderBy = useMemo(() => [{ columnId: "COL_ID_ROW", direction: "asc" }] as const, []);
   if (rows.length === 0) return null;
   const tableId = `BRUNO_TABLE_INTERNAL_BLOCKED_REVIEW_${instanceId}`;
   return (
@@ -766,7 +767,7 @@ function BrunoTableBlockedReviewTable({
       props={{
         tableId,
         columns,
-        initialOrderBy: [{ columnId: "COL_ID_ROW", direction: "asc" }],
+        initialOrderBy,
         clientSource: {
           rows,
           totalRows: rows.length,

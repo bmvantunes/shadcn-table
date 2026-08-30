@@ -275,7 +275,6 @@ const brunoTableEditWorkflowMachine = createMachine({
             resetReviewOpen: false,
             conflictReviewOpen: true,
             blockedReviewOpen: false,
-            conflictReviewResolutions: () => new Map(),
             conflictReviewSaving: false,
           }),
         },
@@ -283,7 +282,6 @@ const brunoTableEditWorkflowMachine = createMachine({
           guard: ({ context }) => !context.conflictReviewSaving,
           actions: assign({
             conflictReviewOpen: false,
-            conflictReviewResolutions: () => new Map(),
             conflictReviewSaving: false,
           }),
         },
@@ -299,7 +297,7 @@ const brunoTableEditWorkflowMachine = createMachine({
           actions: assign({ blockedReviewOpen: false }),
         },
         RECORD_CONFLICT_RESOLUTIONS: {
-          guard: ({ context }) => context.conflictReviewOpen && !context.conflictReviewSaving,
+          guard: ({ context }) => context.conflictReviewOpen,
           actions: assign({
             conflictReviewResolutions: ({ context, event }) => {
               const resolutions = new Map(context.conflictReviewResolutions);
@@ -798,9 +796,10 @@ export class BrunoTableEditMemoryRuntime {
     kind: "batch" | "immediate" = "immediate",
   ): (() => void) => {
     this.activeSaveWorkCount += 1;
-    if (kind === "batch" && operationId !== undefined && this.conflictReviewSaveRequested) {
+    if (operationId !== undefined && this.conflictReviewSaveRequested) {
       this.conflictReviewSaveRequested = false;
       this.conflictReviewSaveOperationId = operationId;
+      this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: true });
     }
     if (operationId !== undefined) {
       this.saveWorkByOperation.set(
@@ -922,6 +921,7 @@ export class BrunoTableEditMemoryRuntime {
     if (!this.resetReviewStore.get().open || this.cellEdit === undefined) return false;
     this.actor.send({ type: "CONFIRM_RESET" });
     if (this.actor.getSnapshot().context.resetReviewOpen) return false;
+    this.clearRecordedConflictResolutions();
     this.cellEdit.resetAllDrafts();
     this.unsubscribeDraftReview?.();
     this.unsubscribeDraftReview = undefined;
@@ -1000,6 +1000,11 @@ export class BrunoTableEditMemoryRuntime {
     });
     if (records.length !== ids.length) return false;
     const [first, ...rest] = records;
+    const immediateSaveExpected =
+      this.modeStore.get().mode === "immediate" && resolution === "mine";
+    if (immediateSaveExpected) {
+      this.conflictReviewSaveRequested = true;
+    }
     for (const id of ids) this.conflictResolutionInProgressIds.add(id);
     if (
       first === undefined ||
@@ -1010,11 +1015,19 @@ export class BrunoTableEditMemoryRuntime {
         ],
       )
     ) {
+      if (immediateSaveExpected) {
+        this.conflictReviewSaveRequested = false;
+        this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
+      }
       for (const id of ids) this.conflictResolutionInProgressIds.delete(id);
       this.publishSparseReviewRows();
       return false;
     }
     this.actor.send({ type: "RECORD_CONFLICT_RESOLUTIONS", resolutions: records });
+    if (immediateSaveExpected && this.conflictReviewSaveRequested) {
+      this.conflictReviewSaveRequested = false;
+      this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
+    }
     for (const id of ids) this.conflictResolutionInProgressIds.delete(id);
     this.publishSparseReviewRows();
     return true;
@@ -1032,6 +1045,7 @@ export class BrunoTableEditMemoryRuntime {
       return false;
     }
     if (this.cellEditActivity.draftCount === 0) {
+      this.clearRecordedConflictResolutions();
       this.closeConflictReview();
       return true;
     }
@@ -1051,6 +1065,7 @@ export class BrunoTableEditMemoryRuntime {
     if (this.conflictReviewSaveOperationId !== operationId) return;
     this.conflictReviewSaveOperationId = undefined;
     this.actor.send({ type: "SET_CONFLICT_REVIEW_SAVING", active: false });
+    this.clearRecordedConflictResolutions();
     this.closeConflictReview();
   };
 
@@ -1101,6 +1116,9 @@ export class BrunoTableEditMemoryRuntime {
     return this.cellEdit.discardBlockedDrafts(ids);
   };
 
+  public readonly isBlockedChangeDiscardable = (id: string): boolean =>
+    this.cellEdit?.isBlockedDraftDiscardable(id) === true;
+
   public readonly undo = (): boolean =>
     !this.actor.getSnapshot().context.saveWorkActive &&
     this.modeStore.get().mode === "batch" &&
@@ -1116,9 +1134,23 @@ export class BrunoTableEditMemoryRuntime {
   ): Store<BrunoTableConflictReviewResolutionSnapshot | undefined> => {
     const existing = this.conflictResolutionStores.get(id);
     if (existing !== undefined) return existing;
-    const created = new Store(this.actor.getSnapshot().context.conflictReviewResolutions.get(id));
+    const created = new Store(this.getProjectedConflictResolution(id));
     this.conflictResolutionStores.set(id, created);
     return created;
+  };
+
+  private readonly getProjectedConflictResolution = (
+    id: string,
+  ): BrunoTableConflictReviewResolutionSnapshot | undefined => {
+    const resolution = this.actor.getSnapshot().context.conflictReviewResolutions.get(id);
+    return resolution !== undefined &&
+      this.cellEdit?.isConflictResolutionLocallyUndone(
+        id,
+        resolution.reviewedServer,
+        resolution.reviewedServerVersion,
+      ) === true
+      ? undefined
+      : resolution;
   };
 
   private readonly clearConflictResolutionStores = (): void => {
@@ -1126,6 +1158,13 @@ export class BrunoTableEditMemoryRuntime {
       if (store.get() !== undefined) store.setState(() => undefined);
     }
     this.conflictResolutionStores.clear();
+  };
+
+  private readonly clearRecordedConflictResolutions = (): void => {
+    const ids = [...this.actor.getSnapshot().context.conflictReviewResolutions.keys()];
+    if (ids.length > 0) {
+      this.actor.send({ type: "INVALIDATE_CONFLICT_RESOLUTIONS", ids: Object.freeze(ids) });
+    }
   };
 
   private readonly publishWorkflow = (): void => {
@@ -1178,7 +1217,7 @@ export class BrunoTableEditMemoryRuntime {
         this.conflictReviewStore.setState(() => nextConflictReview);
       }
       for (const [id, store] of this.conflictResolutionStores) {
-        const resolution = context.conflictReviewResolutions.get(id);
+        const resolution = this.getProjectedConflictResolution(id);
         if (store.get() !== resolution) store.setState(() => resolution);
       }
       const previousBlockedReview = this.blockedReviewStore.get();
@@ -1304,34 +1343,52 @@ export class BrunoTableEditMemoryRuntime {
     if (this.cellEdit === undefined || this.unsubscribeDraftReview === undefined) return;
     const runtime = this.cellEdit;
     const rows = runtime.getDraftReviewSourceSnapshot();
+    let context = this.actor.getSnapshot().context;
+    const invalidResolutionIds = [...context.conflictReviewResolutions].flatMap(
+      ([id, resolution]) =>
+        runtime.isDraftConflictEvidenceCurrent(
+          id,
+          resolution.resolution,
+          resolution.reviewedServer,
+          resolution.reviewedServerVersion,
+        )
+          ? []
+          : [id],
+    );
+    if (invalidResolutionIds.length > 0) {
+      const sourceInvalidatedIds = invalidResolutionIds.filter((id) => {
+        const resolution = context.conflictReviewResolutions.get(id);
+        return (
+          resolution === undefined ||
+          !runtime.isConflictResolutionLocallyUndone(
+            id,
+            resolution.reviewedServer,
+            resolution.reviewedServerVersion,
+          )
+        );
+      });
+      if (sourceInvalidatedIds.length > 0) {
+        batch(() => {
+          runtime.reopenResolvedConflicts(sourceInvalidatedIds);
+          this.actor.send({
+            type: "INVALIDATE_CONFLICT_RESOLUTIONS",
+            ids: Object.freeze(sourceInvalidatedIds),
+          });
+        });
+        context = this.actor.getSnapshot().context;
+      }
+    }
+    for (const [id, store] of this.conflictResolutionStores) {
+      const resolution = this.getProjectedConflictResolution(id);
+      if (store.get() !== resolution) store.setState(() => resolution);
+    }
+
     if (this.conflictReviewStore.get().open) {
       const activeConflictIds = new Set<string>();
       for (const row of rows) {
         if (row.getSnapshot().conflict === undefined) continue;
         activeConflictIds.add(row.id);
         this.conflictReviewSourcesById.set(row.id, row);
-      }
-
-      let context = this.actor.getSnapshot().context;
-      const invalidResolutionIds = [...context.conflictReviewResolutions].flatMap(
-        ([id, resolution]) =>
-          runtime.isDraftConflictEvidenceCurrent(
-            id,
-            resolution.reviewedServer,
-            resolution.reviewedServerVersion,
-          )
-            ? []
-            : [id],
-      );
-      if (invalidResolutionIds.length > 0) {
-        batch(() => {
-          runtime.reopenResolvedConflicts(invalidResolutionIds);
-          this.actor.send({
-            type: "INVALIDATE_CONFLICT_RESOLUTIONS",
-            ids: Object.freeze(invalidResolutionIds),
-          });
-        });
-        context = this.actor.getSnapshot().context;
       }
 
       for (const id of this.conflictReviewSourcesById.keys()) {
@@ -1356,7 +1413,14 @@ export class BrunoTableEditMemoryRuntime {
 
   private readonly releaseDraftReviewSubscriptionWhenClosed = (): void => {
     const context = this.actor.getSnapshot().context;
-    if (context.resetReviewOpen || context.conflictReviewOpen || context.blockedReviewOpen) return;
+    if (
+      context.resetReviewOpen ||
+      context.conflictReviewOpen ||
+      context.blockedReviewOpen ||
+      context.conflictReviewResolutions.size > 0
+    ) {
+      return;
+    }
     this.unsubscribeDraftReview?.();
     this.unsubscribeDraftReview = undefined;
   };
