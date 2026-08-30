@@ -225,6 +225,12 @@ const STALE_EVIDENCE_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabili
     mineReason: "Conflict choices are unavailable until the latest source evidence is ready.",
     serverReason: "Conflict choices are unavailable until the latest source evidence is ready.",
   });
+const BLOCKED_MINE_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
+  Object.freeze({
+    mineAvailable: false,
+    serverAvailable: true,
+    mineReason: "Keep Mine is unavailable while this change is blocked.",
+  });
 const IMMEDIATE_SOURCE_GAP_CONFLICT_RESOLUTION: BrunoTableConflictResolutionAvailabilitySnapshot =
   Object.freeze({
     mineAvailable: false,
@@ -1393,7 +1399,7 @@ export class BrunoTableEditMemoryRuntime {
     if (
       !snapshot.open ||
       snapshot.count > 0 ||
-      snapshot.resolutionCount === 0 ||
+      (snapshot.resolutionCount === 0 && this.cellEditActivity.draftCount === 0) ||
       snapshot.saving ||
       this.saveCommand === undefined
     ) {
@@ -1588,12 +1594,15 @@ export class BrunoTableEditMemoryRuntime {
     id: string,
   ): BrunoTableConflictResolutionAvailabilitySnapshot => {
     const context = this.actor.getSnapshot().context;
-    if (this.cellEdit?.canResolveDraftConflict(id) !== true) {
+    if (this.cellEdit?.canResolveDraftConflict(id, "server") !== true) {
       if (context.activity.activeEditor) return ACTIVE_EDITOR_CONFLICT_RESOLUTION;
       if (context.saveWorkActive) return SAVE_WORK_CONFLICT_RESOLUTION;
       return this.savePreflightAvailable
         ? STALE_EVIDENCE_CONFLICT_RESOLUTION
         : SOURCE_GAP_CONFLICT_RESOLUTION;
+    }
+    if (this.cellEdit.canResolveDraftConflict(id, "mine") !== true) {
+      return BLOCKED_MINE_CONFLICT_RESOLUTION;
     }
     if (this.modeStore.get().mode === "immediate" && !this.canRequestImmediateSave()) {
       return this.savePreflightAvailable

@@ -1563,9 +1563,11 @@ export type BrunoTableEditRowPatch<TRow, TColumns extends BrunoTableColumns<TRow
 export type BrunoTableEditRowProjectorInput<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion = unknown,
 > = Readonly<{
   readonly row: TRow;
   readonly patch: BrunoTableEditRowPatch<TRow, TColumns>;
+  readonly rowVersion: TRowVersion;
 }>;
 
 /**
@@ -1574,8 +1576,8 @@ export type BrunoTableEditRowProjectorInput<
  * The returned Row is presentation evidence only. It does not replace the source Row, Row Version,
  * or Save Change Set authority. A memoized projection remains valid while the source Row reference,
  * opaque Row Version, projector configuration, and exact patch are identical, including after a
- * review closes and reopens. Changed source or patch evidence requires a fresh immutable Row
- * replacement.
+ * review closes and reopens. Changed source, Row Version, or patch evidence requires a fresh
+ * immutable Row replacement. The opaque Row Version is cache-key evidence only.
  *
  * Missing required configuration is an explicit configuration error. Before this Row has published
  * one valid projection, a projector failure, null or non-object result, source-Row result for a
@@ -1584,9 +1586,11 @@ export type BrunoTableEditRowProjectorInput<
  * inputs instead withdraw row-aware Yours as unavailable. Exact Mine, Base, and Server evidence
  * remains available; BrunoTable never substitutes stale or Server evidence for Yours.
  */
-export type BrunoTableEditRowProjector<TRow, TColumns extends BrunoTableColumns<TRow>> = (
-  input: BrunoTableEditRowProjectorInput<TRow, TColumns>,
-) => TRow;
+export type BrunoTableEditRowProjector<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion = unknown,
+> = (input: BrunoTableEditRowProjectorInput<TRow, TColumns, TRowVersion>) => TRow;
 
 export type BrunoTableSaveCellChangeSet<TRow, TColumns extends BrunoTableColumns<TRow>> = readonly [
   BrunoTableSaveCellChange<TRow, TColumns>,
@@ -1655,11 +1659,12 @@ type PotentiallyEditableRowAwarePresentationColumn<
 type BrunoTableEditRowProjectionCapability<
   TRow,
   TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
 > = number extends TColumns["length"]
-  ? { readonly projectEditRow?: BrunoTableEditRowProjector<TRow, TColumns> }
+  ? { readonly projectEditRow?: BrunoTableEditRowProjector<TRow, TColumns, TRowVersion> }
   : [PotentiallyEditableRowAwarePresentationColumn<TColumns>] extends [never]
-    ? { readonly projectEditRow?: BrunoTableEditRowProjector<TRow, TColumns> }
-    : { readonly projectEditRow: BrunoTableEditRowProjector<TRow, TColumns> };
+    ? { readonly projectEditRow?: BrunoTableEditRowProjector<TRow, TColumns, TRowVersion> }
+    : { readonly projectEditRow: BrunoTableEditRowProjector<TRow, TColumns, TRowVersion> };
 
 export type BrunoTableEditableCapability<
   TRow,
@@ -1672,7 +1677,7 @@ export type BrunoTableEditableCapability<
         readonly editable: true;
         readonly getRowVersion: (row: TRow) => TRowVersion;
         readonly onSaveEdits: BrunoTableSaveEditsHandler<TRow, TColumns, NoInfer<TRowVersion>>;
-      } & BrunoTableEditRowProjectionCapability<TRow, TColumns> &
+      } & BrunoTableEditRowProjectionCapability<TRow, TColumns, TRowVersion> &
         BrunoTableNoGroupingCapability;
 
 export type BrunoTableEditingCapability<

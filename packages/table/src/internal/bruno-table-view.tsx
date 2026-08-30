@@ -5546,6 +5546,28 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const initialDraftReviewSource = isBrunoTableCellEditDraftReviewSourceRow(initialRow)
     ? initialRow
     : undefined;
+  const draftReviewColumnLabelSource =
+    initialDraftReviewSource !== undefined &&
+    effectivePresentationColumn.kind === "field" &&
+    effectivePresentationColumn.field === "columnLabel"
+      ? initialDraftReviewSource
+      : undefined;
+  const subscribeDraftReviewColumnLabel = useMemo(
+    () =>
+      draftReviewColumnLabelSource === undefined
+        ? (_listener: () => void) => () => undefined
+        : draftReviewColumnLabelSource.subscribe,
+    [draftReviewColumnLabelSource],
+  );
+  const getDraftReviewColumnLabelSnapshot = useMemo(
+    () => () => draftReviewColumnLabelSource?.getSnapshot().columnLabel,
+    [draftReviewColumnLabelSource],
+  );
+  const draftReviewColumnLabel = useSyncExternalStore(
+    subscribeDraftReviewColumnLabel,
+    getDraftReviewColumnLabelSnapshot,
+    getDraftReviewColumnLabelSnapshot,
+  );
   // Review rows intentionally skip the grid's row-cell subscription: their reactive value and
   // presentation snapshots arrive through subscribeDraftReview, avoiding duplicate listeners.
   const rowAware =
@@ -5646,7 +5668,8 @@ const BrunoTableCell = memo(function BrunoTableCell(props: BrunoTableCellProps) 
   const rowMissing = rowAware
     ? row === undefined
     : cellSnapshot?.kind === "available" && !cellSnapshot.rowPresent;
-  const sourceValue = rowAware ? rowSnapshot?.value : cellSnapshot?.value;
+  const sourceValue =
+    draftReviewColumnLabel ?? (rowAware ? rowSnapshot?.value : cellSnapshot?.value);
   const value = edit.hasAcceptedOverlay
     ? edit.acceptedOverlay
     : edit.hasDraft

@@ -1875,6 +1875,82 @@ describe("BrunoTable Cell Edit Session", () => {
     unsubscribe();
   });
 
+  it("passes opaque Row Version evidence to a version-aware edit-row projector", () => {
+    type VersionedProjectionRow = Readonly<{
+      readonly id: string;
+      readonly value: string;
+      readonly revision: bigint;
+    }>;
+    const source = Object.freeze({ id: "row-1", value: "server", revision: 1n });
+    const projectionColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<VersionedProjectionRow>);
+    const projectionsByVersion = new Map<unknown, VersionedProjectionRow>();
+    const projectEditRow = vi.fn(
+      ({
+        row,
+        patch,
+        rowVersion,
+      }: {
+        readonly row: object;
+        readonly patch: Readonly<Record<string, unknown>>;
+        readonly rowVersion: unknown;
+      }) => {
+        const retained = projectionsByVersion.get(rowVersion);
+        if (retained !== undefined) return retained;
+        const projected = Object.freeze({
+          ...(row as VersionedProjectionRow),
+          ...patch,
+          revision: rowVersion as bigint,
+        });
+        projectionsByVersion.set(rowVersion, projected);
+        return projected;
+      },
+    );
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: projectionColumns,
+      getRow: () => source,
+      getRowId: (candidate) => (candidate as VersionedProjectionRow).id,
+      getRowVersion: (candidate) => (candidate as VersionedProjectionRow).revision,
+      projectEditRow,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: source.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: source,
+          expectedVersion: source.revision,
+          base: source.value,
+          mine: "mine",
+        },
+      ]),
+    ).toBe(true);
+    const unsubscribe = runtime.subscribeDraftReview(() => undefined);
+    const firstProjection = runtime.getDraftReviewSnapshot()[0]?.projectedRow;
+
+    runtime.setRowVersionExtractor(() => 2n);
+
+    expect(projectEditRow).toHaveBeenLastCalledWith({
+      row: source,
+      patch: { value: "mine" },
+      rowVersion: 2n,
+    });
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({
+      projectedRowAvailable: true,
+      projectedRow: { revision: 2n, value: "mine" },
+    });
+    expect(runtime.getDraftReviewSnapshot()[0]?.projectedRow).not.toBe(firstProjection);
+    unsubscribe();
+  });
+
   it("marks a cached projected row unavailable when its reference is reused after a sibling patch changes", () => {
     type SiblingProjectionRow = Readonly<{
       readonly id: string;
@@ -3581,14 +3657,18 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.commit("mine")).toBe(true);
     const membershipListener = vi.fn();
     const unsubscribe = runtime.subscribeDraftReview(membershipListener);
+    const sourceRow = runtime.getDraftReviewSourceSnapshot()[0]!;
+    const rowListener = vi.fn();
+    const unsubscribeRow = sourceRow.subscribe(rowListener);
 
     runtime.reconcileColumns(makeColumns("After"));
 
-    expect(membershipListener).toHaveBeenCalledOnce();
-    expect(runtime.getDraftReviewSourceSnapshot()[0]?.columnLabel).toBe("After");
-    expect(runtime.getDraftReviewSourceSnapshot()[0]?.getSnapshot().column.headerName).toBe(
-      "After",
-    );
+    expect(membershipListener).not.toHaveBeenCalled();
+    expect(rowListener).toHaveBeenCalledOnce();
+    expect(runtime.getDraftReviewSourceSnapshot()[0]).toBe(sourceRow);
+    expect(sourceRow.columnLabel).toBe("After");
+    expect(sourceRow.getSnapshot().column.headerName).toBe("After");
+    unsubscribeRow();
     unsubscribe();
   });
 
@@ -6400,6 +6480,98 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
   });
 
+  it("migrates retained Server-resolution evidence before publishing decoder changes", () => {
+    type DecoderRow = Readonly<{
+      readonly id: string;
+      readonly value: string;
+      readonly revision: bigint;
+    }>;
+    const makeColumns = (suffix: "a" | "b") => {
+      const decodeRuntime = (input: unknown) =>
+        ({
+          _tag: "Success",
+          value: `${String(input).replace(/-[ab]$/, "")}-${suffix}`,
+        }) as const;
+      const valueType: BrunoTableValueType<string> = {
+        codecId: `test/retained-resolution-${suffix}`,
+        codecVersion: 1,
+        filterFamily: "equality",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime,
+        equivalent: Object.is,
+        compare: (left, right) => (left < right ? -1 : left > right ? 1 : 0),
+        formatCanonicalText: (value) => value,
+        parseCanonicalText: (text) => ({ _tag: "Success", value: text }) as const,
+        formatDisplay: (value) => value,
+        encodePersisted: (value) => value,
+        decodePersisted: decodeRuntime,
+      };
+      return compileColumns([
+        {
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          valueType,
+          isEditable: true,
+        },
+      ] satisfies BrunoTableColumns<DecoderRow>);
+    };
+    let current: DecoderRow = Object.freeze({
+      id: "row-decoder",
+      value: "base",
+      revision: 1n,
+    });
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: makeColumns("a"),
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as DecoderRow).revision,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: current.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: current,
+          expectedVersion: current.revision,
+          base: "base-a",
+          mine: "mine-a",
+        },
+      ]),
+    ).toBe(true);
+    current = Object.freeze({ ...current, value: "server", revision: 2n });
+    runtime.reconcileSourceRows(new Set([current.id]));
+    const conflict = runtime.getDraftReviewSnapshot()[0]!;
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: conflict.id,
+          resolution: "server",
+          reviewedServer: conflict.conflict!.server,
+          reviewedServerVersion: conflict.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(true);
+    const published = vi.fn();
+    const unsubscribe = runtime.subscribeRetainedResolutionPublication(published);
+
+    runtime.reconcileColumns(makeColumns("b"));
+
+    expect(published).toHaveBeenCalledOnce();
+    expect([...runtime.getRetainedResolutionPublicationSnapshot()]).toEqual([conflict.id]);
+    expect([...runtime.reconcileResolvedConflictIds([conflict.id])]).toEqual([conflict.id]);
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({
+      base: "base-b",
+      mine: "mine-b",
+      conflict: { server: "server-b", serverVersion: 2n },
+    });
+    unsubscribe();
+  });
+
   it("drops a draft when a replacement runtime decoder throws", () => {
     type CanonicalRow = Readonly<{ readonly value: string }>;
     const makeColumns = (throws: boolean) => {
@@ -7698,6 +7870,98 @@ describe("BrunoTable Cell Edit Session", () => {
     unsubscribeTraversal();
   });
 
+  it("rejects permission-blocked Immediate Mine resolution without blocking Server resolution", () => {
+    type PermissionRow = Readonly<{
+      readonly id: string;
+      readonly score: number;
+      readonly editable: boolean;
+      readonly revision: bigint;
+    }>;
+    const permissionColumns = compileColumns([
+      {
+        columnId: "COL_ID_SCORE",
+        field: "score",
+        headerName: "Score",
+        valueType: "number",
+        isEditable: ({ row: candidate }: { readonly row: PermissionRow }) => candidate.editable,
+      },
+    ] satisfies BrunoTableColumns<PermissionRow>);
+    let current: PermissionRow = Object.freeze({
+      id: "row-permission",
+      score: 4,
+      editable: true,
+      revision: 1n,
+    });
+    let resolvePhase = false;
+    let runtime!: BrunoTableCellEditRuntime;
+    const onCommitGesture = vi.fn((changes: BrunoTableCellEditChangeGesture) => {
+      if (!resolvePhase) return "admitted" as const;
+      const preparation = runtime.createImmediateSaveChangeSet(changes);
+      return preparation.kind === "reconciled"
+        ? ("preflight-reconciled" as const)
+        : preparation.kind === "change-set"
+          ? ("admitted" as const)
+          : ("rejected" as const);
+    });
+    runtime = new BrunoTableCellEditRuntime({
+      columns: permissionColumns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as PermissionRow).revision,
+      onCommitGesture,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: current.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: current,
+          expectedVersion: current.revision,
+          base: current.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(true);
+    onCommitGesture.mockClear();
+    current = Object.freeze({ ...current, score: 5, editable: false, revision: 2n });
+    runtime.reconcileSourceRows(new Set([current.id]));
+    const conflict = runtime.getDraftReviewSnapshot()[0]!;
+    expect(conflict).toMatchObject({
+      mine: 7,
+      blockedReason: "This cell is no longer editable.",
+      conflict: { server: 5, serverVersion: 2n },
+    });
+    resolvePhase = true;
+
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: conflict.id,
+          resolution: "mine",
+          reviewedServer: conflict.conflict!.server,
+          reviewedServerVersion: conflict.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(false);
+    expect(onCommitGesture).not.toHaveBeenCalled();
+    expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({
+      mine: 7,
+      blockedReason: "This cell is no longer editable.",
+      conflict: { server: 5, serverVersion: 2n },
+    });
+    expect(
+      runtime.resolveDraftConflicts([
+        {
+          id: conflict.id,
+          resolution: "server",
+          reviewedServer: conflict.conflict!.server,
+          reviewedServerVersion: conflict.conflict!.serverVersion,
+        },
+      ]),
+    ).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
+  });
+
   it("rolls back a scalar Immediate commit when save admission is rejected", () => {
     const runtime = new BrunoTableCellEditRuntime({
       columns,
@@ -8767,7 +9031,7 @@ describe("BrunoTable Cell Edit Session", () => {
 
     editable = false;
 
-    expect(runtime.createImmediateSaveChangeSet(gesture)).toEqual({ kind: "reconciled" });
+    expect(runtime.createImmediateSaveChangeSet(gesture)).toEqual({ kind: "rejected" });
     expect(runtime.getActivitySnapshot()).toMatchObject({ blockedCount: 1 });
   });
 

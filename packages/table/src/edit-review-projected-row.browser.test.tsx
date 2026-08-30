@@ -469,6 +469,169 @@ test("Reset Review applies formatter, class, and renderer to one frozen projecte
   );
 });
 
+test("Reset Review stays live after a compatible header replacement", async () => {
+  type HeaderReplacementRow = Readonly<{
+    readonly id: string;
+    readonly primary: string;
+    readonly sibling: string;
+    readonly revision: bigint;
+  }>;
+  const makeColumns = (headerName: string) =>
+    [
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName,
+        valueType: "text",
+        isEditable: true,
+        valueFormatter: ({
+          row,
+          value,
+        }: {
+          readonly row: HeaderReplacementRow;
+          readonly value: string;
+        }) => `${row.sibling}: ${value}`,
+      },
+      {
+        columnId: "COL_ID_SIBLING",
+        field: "sibling",
+        headerName: "Sibling",
+        valueType: "text",
+      },
+    ] satisfies BrunoTableColumns<HeaderReplacementRow>;
+  const initialRow: HeaderReplacementRow = Object.freeze({
+    id: "row-1",
+    primary: "Primary base",
+    sibling: "Sibling base",
+    revision: 1n,
+  });
+  const renderTable = (sourceRow: HeaderReplacementRow, version: number, headerName: string) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_REVIEW_HEADER_REPLACEMENT"
+      columns={makeColumns(headerName)}
+      initialOrderBy={[{ columnId: "COL_ID_PRIMARY", direction: "asc" }]}
+      clientSource={{ rows: [sourceRow], totalRows: 1, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+      projectEditRow={({ row, patch }) => Object.freeze({ ...row, ...patch })}
+    />
+  );
+  const screen = await render(renderTable(initialRow, 1, "Before"));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_REVIEW_HEADER_REPLACEMENT",
+  });
+  await userEvent.click(
+    grid.getByRole("gridcell", { name: "Sibling base: Primary base", exact: true }),
+  );
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Before" }), "Primary mine");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+  const reviewGrid = screen
+    .getByRole("alertdialog", { name: "Reset Review" })
+    .getByRole("grid", { name: "Reset Review changes" });
+  await revealReviewCell(reviewGrid, "Sibling base: Primary mine");
+
+  await screen.rerender(renderTable(initialRow, 2, "After"));
+  await revealReviewCell(reviewGrid, "After");
+
+  const updatedRow: HeaderReplacementRow = Object.freeze({
+    id: initialRow.id,
+    primary: "Primary server",
+    sibling: "Sibling server",
+    revision: 2n,
+  });
+  await screen.rerender(renderTable(updatedRow, 3, "After"));
+
+  await revealReviewCell(reviewGrid, "Sibling server: Primary server");
+  await revealReviewCell(reviewGrid, "Sibling server: Primary mine");
+  expect(
+    reviewGrid.getByRole("gridcell", { name: "Sibling base: Primary mine", exact: true }).all(),
+  ).toHaveLength(0);
+});
+
+test("Conflict Review refreshes action names after a compatible header replacement", async () => {
+  type HeaderReplacementRow = Readonly<{
+    readonly id: string;
+    readonly primary: string;
+    readonly revision: bigint;
+  }>;
+  const makeColumns = (headerName: string) =>
+    [
+      {
+        columnId: "COL_ID_PRIMARY",
+        field: "primary",
+        headerName,
+        valueType: "text",
+        isEditable: true,
+      },
+    ] satisfies BrunoTableColumns<HeaderReplacementRow>;
+  const initialRow: HeaderReplacementRow = Object.freeze({
+    id: "row-1",
+    primary: "Primary base",
+    revision: 1n,
+  });
+  const serverRow: HeaderReplacementRow = Object.freeze({
+    id: initialRow.id,
+    primary: "Primary server",
+    revision: 2n,
+  });
+  const renderTable = (sourceRow: HeaderReplacementRow, version: number, headerName: string) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_CONFLICT_ACTION_HEADER_REPLACEMENT"
+      columns={makeColumns(headerName)}
+      initialOrderBy={[{ columnId: "COL_ID_PRIMARY", direction: "asc" }]}
+      clientSource={{ rows: [sourceRow], totalRows: 1, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={() => Promise.resolve()}
+    />
+  );
+  const screen = await render(renderTable(initialRow, 1, "Before"));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_CONFLICT_ACTION_HEADER_REPLACEMENT",
+  });
+  await userEvent.click(grid.getByRole("gridcell", { name: initialRow.primary, exact: true }));
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Before" }), "Primary mine");
+  await userEvent.keyboard("{Enter}");
+  await screen.rerender(renderTable(serverRow, 2, "Before"));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+  const reviewGrid = review.getByRole("grid", { name: "Conflict Review changes" });
+  reviewGrid.element().scrollLeft = reviewGrid.element().scrollWidth;
+  reviewGrid.element().dispatchEvent(new Event("scroll"));
+  await nextBrowserFrame();
+  await expect
+    .element(review.getByRole("button", { name: "Keep Mine for row row-1, column Before" }))
+    .toBeVisible();
+  await expect
+    .element(review.getByRole("button", { name: "Keep Server for row row-1, column Before" }))
+    .toBeVisible();
+
+  await screen.rerender(renderTable(serverRow, 3, "After"));
+
+  await expect.element(review).toBeVisible();
+  await expect
+    .element(review.getByRole("button", { name: "Keep Mine for row row-1, column After" }))
+    .toBeVisible();
+  await expect
+    .element(review.getByRole("button", { name: "Keep Server for row row-1, column After" }))
+    .toBeVisible();
+  expect(
+    review.getByRole("button", { name: "Keep Mine for row row-1, column Before" }).all(),
+  ).toHaveLength(0);
+  expect(
+    review.getByRole("button", { name: "Keep Server for row row-1, column Before" }).all(),
+  ).toHaveLength(0);
+});
+
 test("Blocked Changes Review keeps Server authentic and Mine projected after permission revocation", async () => {
   const editableWhilePermitted = ({ row }: { readonly row: ReviewRow }) =>
     row.permission === "editable";

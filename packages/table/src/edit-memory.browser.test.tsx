@@ -4796,15 +4796,24 @@ test("exposes live conflict and permission-block evidence without replacing Your
     .element().scrollLeft = blockedConflictReview
     .getByRole("grid", { name: "Conflict Review changes" })
     .element().scrollWidth;
-  await userEvent.click(
-    blockedConflictReview.getByRole("button", {
-      name: "Keep Mine for row ada, column Name",
-    }),
-  );
+  const blockedMine = blockedConflictReview.getByRole("button", {
+    name: /Keep Mine for row ada, column Name.*blocked/,
+  });
+  await expect.element(blockedMine).toBeDisabled();
+  await expect
+    .element(blockedMine)
+    .toHaveAttribute("title", "Keep Mine is unavailable while this change is blocked.");
+  await expect
+    .element(
+      blockedConflictReview.getByRole("button", {
+        name: "Keep Server for row ada, column Name",
+      }),
+    )
+    .toBeEnabled();
   await expect.element(blockedConflictReview.getByRole("button", { name: "Save" })).toBeDisabled();
   await userEvent.click(blockedConflictReview.getByRole("button", { name: "Cancel" }));
   await expect.element(blockedConflictReview).not.toBeInTheDocument();
-  await expect.element(grid).toHaveFocus();
+  await expect.element(screen.getByRole("button", { name: "1 conflict" })).toHaveFocus();
 
   await screen.rerender(renderTable([{ id: "ada", name: "Locked", revision: 3n }] as const, 3));
   await expect.element(screen.getByRole("button", { name: "1 conflict" })).toBeVisible();
@@ -5355,6 +5364,75 @@ test("keeps an open Conflict Review stable when every conflict converges externa
     .element(screen.getByRole("region", { name: "Edit safety" }))
     .toHaveTextContent("No unsaved changes");
   await userEvent.click(review.getByRole("button", { name: "Cancel" }));
+  await expect.element(review).not.toBeInTheDocument();
+});
+
+test("saves remaining Batch work when an open Conflict Review becomes all-current", async () => {
+  const initialRows = [
+    { id: "ada", name: "Ada", revision: 1n },
+    { id: "grace", name: "Grace", revision: 1n },
+  ] as const;
+  let resolveSave!: () => void;
+  const onSaveEdits = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveSave = resolve;
+      }),
+  );
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_ALL_CURRENT_REVIEW_SAVE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  const screen = await render(renderTable(initialRows, 1));
+  await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+  const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_ALL_CURRENT_REVIEW_SAVE" });
+  await userEvent.click(grid.getByRole("gridcell", { name: "Ada", exact: true }));
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Augusta");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(grid.getByRole("gridcell", { name: "Grace", exact: true }));
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Edit Name" }), "Amazing Grace");
+  await userEvent.keyboard("{Enter}");
+
+  const conflictedRows = [{ id: "ada", name: "Server", revision: 2n }, initialRows[1]] as const;
+  await screen.rerender(renderTable(conflictedRows, 2));
+  await userEvent.click(screen.getByRole("button", { name: "1 conflict" }));
+  const review = screen.getByRole("alertdialog", { name: "Conflict Review" });
+
+  const convergedRows = [{ id: "ada", name: "Augusta", revision: 3n }, initialRows[1]] as const;
+  await screen.rerender(renderTable(convergedRows, 3));
+  await expect.element(review).toBeVisible();
+  await expect.element(review.getByRole("status")).toHaveTextContent("All conflicts are current.");
+  const save = review.getByRole("button", { name: "Save" });
+  await expect.element(save).toBeEnabled();
+
+  await userEvent.click(save);
+  expect(onSaveEdits).toHaveBeenCalledWith([
+    {
+      rowId: "grace",
+      baseRow: initialRows[1],
+      expectedVersion: 1n,
+      changes: [
+        {
+          columnId: "COL_ID_NAME",
+          field: "name",
+          before: "Grace",
+          after: "Amazing Grace",
+        },
+      ],
+    },
+  ]);
+  await expect.element(review).toBeVisible();
+  resolveSave();
   await expect.element(review).not.toBeInTheDocument();
 });
 

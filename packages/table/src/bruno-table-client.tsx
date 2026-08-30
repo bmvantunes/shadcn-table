@@ -78,15 +78,20 @@ function adaptBrunoTableRowVersionExtractor<TRow>(
   return extractor === undefined ? undefined : (row) => extractor(row as TRow);
 }
 
-function adaptBrunoTableEditRowProjector<TRow, TColumns extends BrunoTableColumns<TRow>>(
-  projector: BrunoTableEditRowProjector<TRow, TColumns> | undefined,
+function adaptBrunoTableEditRowProjector<
+  TRow,
+  TColumns extends BrunoTableColumns<TRow>,
+  TRowVersion,
+>(
+  projector: BrunoTableEditRowProjector<TRow, TColumns, TRowVersion> | undefined,
 ): BrunoTableCellEditRowProjector | undefined {
   return projector === undefined
     ? undefined
-    : ({ row, patch }) =>
+    : ({ row, patch, rowVersion }) =>
         projector({
           row: row as TRow,
           patch: patch as BrunoTableEditRowPatch<TRow, TColumns>,
+          rowVersion: rowVersion as TRowVersion,
         });
 }
 

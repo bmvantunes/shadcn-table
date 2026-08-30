@@ -966,7 +966,7 @@ void BrunoTableClient({
   projectEditRow: ({
     row,
     patch,
-  }: BrunoTableEditRowProjectorInput<Order, typeof emittedRowAwareEditableColumns>) => ({
+  }: BrunoTableEditRowProjectorInput<Order, typeof emittedRowAwareEditableColumns, bigint>) => ({
     ...row,
     ...patch,
   }),

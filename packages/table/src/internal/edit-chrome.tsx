@@ -510,7 +510,7 @@ const BrunoTableConflictReviewContent = memo(function BrunoTableConflictReviewCo
         <Button
           disabled={
             snapshot.count > 0 ||
-            snapshot.resolutionCount === 0 ||
+            (snapshot.resolutionCount === 0 && editSummary.pendingCount === 0) ||
             snapshot.saving ||
             (editSummary.pendingCount > 0 && !canSave)
           }
@@ -571,9 +571,19 @@ export const BrunoTableConflictReviewResolution: NamedExoticComponent<BrunoTable
       [row.id, runtime],
     );
     const control = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const subscribeColumnLabel = useCallback(
+      (listener: () => void) => row.subscribe(listener),
+      [row],
+    );
+    const getColumnLabelSnapshot = useCallback(() => row.getSnapshot().columnLabel, [row]);
+    const columnLabel = useSyncExternalStore(
+      subscribeColumnLabel,
+      getColumnLabelSnapshot,
+      getColumnLabelSnapshot,
+    );
     const { active, resolution } = control;
-    const mineLabel = `Keep Mine for row ${row.rowId}, column ${row.columnLabel}`;
-    const serverLabel = `Keep Server for row ${row.rowId}, column ${row.columnLabel}`;
+    const mineLabel = `Keep Mine for row ${row.rowId}, column ${columnLabel}`;
+    const serverLabel = `Keep Server for row ${row.rowId}, column ${columnLabel}`;
     return (
       <div aria-label="Conflict resolution" className="flex items-center gap-1" role="group">
         <Button

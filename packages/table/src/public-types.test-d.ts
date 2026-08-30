@@ -1666,11 +1666,12 @@ describe("BrunoTable public types", () => {
       Readonly<Partial<Pick<Order, "symbol" | "price" | "quantity">>>
     >();
 
-    const input: BrunoTableEditRowProjectorInput<Order, typeof rowAwareEditableColumns> = {
+    const input: BrunoTableEditRowProjectorInput<Order, typeof rowAwareEditableColumns, bigint> = {
       row: {} as Order,
       patch: { symbol: "AMD", price: 128, quantity: 4n },
+      rowVersion: 1n,
     };
-    const projector: BrunoTableEditRowProjector<Order, typeof rowAwareEditableColumns> = ({
+    const projector: BrunoTableEditRowProjector<Order, typeof rowAwareEditableColumns, bigint> = ({
       row,
       patch,
     }) => ({ ...row, ...patch });
@@ -1679,6 +1680,7 @@ describe("BrunoTable public types", () => {
     expectTypeOf(input.patch).toEqualTypeOf<
       BrunoTableEditRowPatch<Order, typeof rowAwareEditableColumns>
     >();
+    expectTypeOf(input.rowVersion).toEqualTypeOf<bigint>();
     expectTypeOf(projector).returns.toEqualTypeOf<Order>();
 
     const invalidPatch: BrunoTableEditRowPatch<Order, typeof rowAwareEditableColumns> = {
@@ -1713,13 +1715,13 @@ describe("BrunoTable public types", () => {
       projectEditRow: ({
         row,
         patch,
-      }: BrunoTableEditRowProjectorInput<Order, typeof rowAwareEditableColumns>) => ({
+      }: BrunoTableEditRowProjectorInput<Order, typeof rowAwareEditableColumns, bigint>) => ({
         ...row,
         ...patch,
       }),
     } satisfies BrunoTableEditingCapability<Order, typeof rowAwareEditableColumns, bigint>;
     expectTypeOf(validCapability.projectEditRow).toMatchTypeOf<
-      BrunoTableEditRowProjector<Order, typeof rowAwareEditableColumns>
+      BrunoTableEditRowProjector<Order, typeof rowAwareEditableColumns, bigint>
     >();
 
     const widened: BrunoTableColumns<Order> = rowAwareEditableColumns;
@@ -1872,7 +1874,10 @@ describe("BrunoTable public types", () => {
         expectTypeOf(changes[0].expectedVersion).toEqualTypeOf<bigint>();
         return Promise.resolve();
       },
-      projectEditRow: ({ row, patch }: BrunoTableEditRowProjectorInput<Order, Columns>) => ({
+      projectEditRow: ({
+        row,
+        patch,
+      }: BrunoTableEditRowProjectorInput<Order, Columns, bigint>) => ({
         ...row,
         ...patch,
       }),

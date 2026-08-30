@@ -167,6 +167,74 @@ describe("BrunoTable Edit Memory", () => {
     });
   });
 
+  it("keeps Server available while a permission block disables Mine", () => {
+    type Row = Readonly<{
+      readonly id: string;
+      readonly value: string;
+      readonly editable: boolean;
+      readonly revision: bigint;
+    }>;
+    const permissionColumns = compileColumns([
+      {
+        columnId: "COL_ID_VALUE",
+        field: "value",
+        headerName: "Value",
+        valueType: "text",
+        isEditable: ({ row }: { readonly row: Row }) => row.editable,
+      },
+    ]);
+    const base: Row = Object.freeze({
+      id: "row-1",
+      value: "base",
+      editable: true,
+      revision: 1n,
+    });
+    const server: Row = Object.freeze({
+      ...base,
+      value: "server",
+      editable: false,
+      revision: 2n,
+    });
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns: permissionColumns,
+      getRow: () => server,
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    cellEdit.activate();
+    memory.activate();
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    expect(memory.requestMode("batch")).toBe(true);
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: base.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: base,
+          expectedVersion: base.revision,
+          base: base.value,
+          mine: "mine",
+          conflict: { server: server.value, serverVersion: server.revision },
+        },
+      ]),
+    ).toBe(true);
+    cellEdit.reconcileSourceRows(new Set([base.id]));
+    expect(cellEdit.getActivitySnapshot()).toMatchObject({ blockedCount: 1, conflictCount: 1 });
+    expect(memory.openConflictReview()).toBe(true);
+    const id = cellEdit.getDraftReviewSnapshot()[0]!.id;
+
+    expect(memory.getConflictResolutionAvailabilitySnapshot(id)).toEqual({
+      mineAvailable: false,
+      serverAvailable: true,
+      mineReason: "Keep Mine is unavailable while this change is blocked.",
+    });
+  });
+
   it("publishes bulk conflict availability without a mounted per-row subscriber", () => {
     type Row = EditMemoryTestRow;
     let authoritative = true;
@@ -446,6 +514,80 @@ describe("BrunoTable Edit Memory", () => {
     expect(cellEdit.getActivitySnapshot()).toMatchObject({ conflictCount: 0, undoCount: 2 });
     expect(memory.undo()).toBe(true);
     expect(cellEdit.getActivitySnapshot()).toMatchObject({ conflictCount: 1, draftCount: 1 });
+  });
+
+  it("saves ordinary Batch drafts from an all-current open Conflict Review", () => {
+    type Row = EditMemoryTestRow;
+    const rows = new Map<string, Row>([
+      ["row-a", Object.freeze({ id: "row-a", value: "base-a", revision: 1n })],
+      ["row-b", Object.freeze({ id: "row-b", value: "base-b", revision: 1n })],
+    ]);
+    const cellEdit = new BrunoTableCellEditRuntime({
+      columns: valueColumns,
+      getRow: (rowId) => rows.get(rowId),
+      getRowVersion: (candidate) => (candidate as Row).revision,
+    });
+    const memory = new BrunoTableEditMemoryRuntime();
+    let releaseSave = (): void => undefined;
+    const save = vi.fn((initiatedFrom: "footer" | "conflict-review") => {
+      releaseSave = memory.beginSaveWork("all-current-review-save", "batch", initiatedFrom);
+      return true;
+    });
+    cellEdit.activate();
+    memory.activate();
+    disposers.push(
+      memory.connectCellEdit(cellEdit),
+      memory.registerSaveCommand(save),
+      () => releaseSave(),
+      () => memory.dispose(),
+      () => cellEdit.dispose(),
+    );
+    expect(memory.requestMode("batch")).toBe(true);
+    const rowA = rows.get("row-a")!;
+    const rowB = rows.get("row-b")!;
+    expect(
+      cellEdit.applyAcceptedDraftGesture([
+        {
+          rowId: rowA.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rowA,
+          expectedVersion: rowA.revision,
+          base: rowA.value,
+          mine: "mine-a",
+        },
+        {
+          rowId: rowB.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: rowB,
+          expectedVersion: rowB.revision,
+          base: rowB.value,
+          mine: "mine-b",
+        },
+      ]),
+    ).toBe(true);
+
+    rows.set("row-a", Object.freeze({ ...rowA, value: "server-a", revision: 2n }));
+    cellEdit.reconcileSourceRows(new Set([rowA.id]));
+    expect(memory.openConflictReview()).toBe(true);
+
+    rows.set("row-a", Object.freeze({ ...rowA, value: "mine-a", revision: 3n }));
+    cellEdit.reconcileSourceRows(new Set([rowA.id]));
+    expect(cellEdit.getActivitySnapshot()).toMatchObject({
+      conflictCount: 0,
+      draftCount: 1,
+    });
+    expect(memory.getConflictReviewSnapshot()).toMatchObject({
+      open: true,
+      count: 0,
+      resolutionCount: 0,
+    });
+    expect(memory.getCanSaveSnapshot()).toBe(true);
+
+    expect(memory.saveConflictReview()).toBe(true);
+    expect(save).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledWith("conflict-review");
   });
 
   it("keeps retained Server choices out of Reset Review until Undo restores the draft", () => {
