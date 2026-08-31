@@ -9671,4 +9671,270 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(onCommitGesture).not.toHaveBeenCalled();
     expect(runtime.createBatchSaveChangeSet()).toHaveLength(1);
   });
+
+  it("completes paste availability preflight before invoking any parser or validator", () => {
+    const scoreColumn = columns.find((column) => column.columnId === "COL_ID_SCORE")!;
+    if (scoreColumn.kind !== "field") throw new Error("score fixture must be a field column");
+    const parseCanonicalText = vi.fn(scoreColumn.semantics.parseCanonicalText);
+    const validate = vi.fn(scoreColumn.validate);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: [
+        {
+          ...scoreColumn,
+          semantics: { ...scoreColumn.semantics, parseCanonicalText },
+          validate,
+        },
+      ],
+      getRow: (rowId) => (rowId === row.id ? row : undefined),
+      getRowVersion: () => 1n,
+    });
+
+    expect(
+      runtime.applyCanonicalTextGesture([
+        { rowId: row.id, columnId: "COL_ID_SCORE", canonicalText: "7" },
+        { rowId: "missing-row", columnId: "COL_ID_SCORE", canonicalText: "8" },
+      ]),
+    ).toMatchObject({
+      kind: "rejected",
+      reason: "unavailable",
+      rowId: "missing-row",
+      columnId: "COL_ID_SCORE",
+    });
+    expect(parseCanonicalText).not.toHaveBeenCalled();
+    expect(validate).not.toHaveBeenCalled();
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
+  });
+
+  it("treats empty canonical Select paste as the configured nullish blank intent", () => {
+    type ChoiceRow = Readonly<{
+      readonly id: string;
+      readonly choice: "ready" | null | undefined;
+    }>;
+    const choiceRow: ChoiceRow = { id: "choice", choice: "ready" };
+
+    for (const blankValue of [null, undefined] as const) {
+      const runtime = new BrunoTableCellEditRuntime({
+        columns: compileColumns([
+          BrunoTableSelectColumn({
+            columnId: "COL_ID_CHOICE",
+            field: "choice",
+            headerName: "Choice",
+            options: ["ready"] as const,
+            isEditable: true,
+            blankValue,
+          }),
+        ] satisfies BrunoTableColumns<ChoiceRow>),
+        getRow: () => choiceRow,
+      });
+      runtime.setBatchHistoryEnabled(true);
+
+      expect(
+        runtime.applyCanonicalTextGesture([
+          { rowId: choiceRow.id, columnId: "COL_ID_CHOICE", canonicalText: "" },
+        ]),
+      ).toEqual({ kind: "accepted" });
+      const snapshot = runtime.getCellSnapshot(choiceRow.id, "COL_ID_CHOICE");
+      expect(snapshot).toMatchObject({
+        hasDraft: true,
+        draft: blankValue,
+      });
+      expect(Object.hasOwn(snapshot, "draft")).toBe(true);
+      expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
+    }
+  });
+
+  it("uses nullish draft presence during complete paste availability preflight", () => {
+    type OptionalRow = Readonly<{
+      readonly id: string;
+      readonly value: string | null | undefined;
+    }>;
+    const optionalRow: OptionalRow = { id: "optional", value: "source" };
+
+    for (const mine of [null, undefined] as const) {
+      const parseCanonicalText = vi.fn((text: string) => ({
+        _tag: "Success" as const,
+        value: text,
+      }));
+      const validate = vi.fn(
+        (_context: { readonly row: OptionalRow; readonly value: string | null | undefined }) =>
+          undefined,
+      );
+      const optionalValueType: BrunoTableValueType<string> = {
+        codecId: `test/paste-nullish-presence-${String(mine)}`,
+        codecVersion: 1,
+        filterFamily: "text",
+        editorFamily: "text",
+        cellAlign: "start",
+        editorLayout: "inline",
+        defaultWidth: 120,
+        decodeRuntime: (input) =>
+          typeof input === "string"
+            ? { _tag: "Success", value: input }
+            : { _tag: "Failure", message: "Expected text." },
+        equivalent: Object.is,
+        compare: (left, right) => {
+          const comparison = String(left).localeCompare(String(right));
+          return comparison === 0 ? 0 : comparison < 0 ? -1 : 1;
+        },
+        formatCanonicalText: (value) => String(value),
+        parseCanonicalText,
+        formatDisplay: (value) => String(value),
+        encodePersisted: (value) => value,
+        decodePersisted: (input) =>
+          typeof input === "string"
+            ? { _tag: "Success", value: input }
+            : { _tag: "Failure", message: "Expected persisted text." },
+      };
+      const runtime = new BrunoTableCellEditRuntime({
+        columns: compileColumns([
+          {
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            headerName: "Value",
+            valueType: optionalValueType,
+            blankValue: mine,
+            isEditable: ({
+              value,
+            }: {
+              readonly row: OptionalRow;
+              readonly value: string | null | undefined;
+            }) => !Object.is(value, mine),
+            validate,
+          },
+        ] satisfies BrunoTableColumns<OptionalRow>),
+        getRow: () => optionalRow,
+      });
+      runtime.setBatchHistoryEnabled(true);
+      expect(
+        runtime.applyAcceptedDraftGesture([
+          {
+            rowId: optionalRow.id,
+            columnId: "COL_ID_VALUE",
+            field: "value",
+            baseRow: optionalRow,
+            expectedVersion: undefined,
+            base: optionalRow.value,
+            mine,
+          },
+        ]),
+      ).toBe(true);
+
+      expect(
+        runtime.applyCanonicalTextGesture([
+          { rowId: optionalRow.id, columnId: "COL_ID_VALUE", canonicalText: "next" },
+        ]),
+      ).toMatchObject({ kind: "rejected", reason: "read-only" });
+      expect(parseCanonicalText).not.toHaveBeenCalled();
+      expect(validate).not.toHaveBeenCalled();
+      expect(runtime.getCellSnapshot(optionalRow.id, "COL_ID_VALUE")).toMatchObject({
+        hasDraft: true,
+        draft: mine,
+      });
+      expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
+    }
+  });
+
+  it("retains nullish Base and Row Version evidence while replacing an existing draft", () => {
+    type NullableRow = Readonly<{
+      readonly id: string;
+      readonly value: "draft" | "server" | null;
+    }>;
+    const initialRow: NullableRow = { id: "nullable", value: null };
+    let liveRow = initialRow;
+    let liveVersion: unknown = undefined;
+    const runtime = new BrunoTableCellEditRuntime({
+      columns: compileColumns([
+        BrunoTableSelectColumn({
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          headerName: "Value",
+          options: ["draft", "server"] as const,
+          blankValue: null,
+          isEditable: true,
+        }),
+      ] satisfies BrunoTableColumns<NullableRow>),
+      getRow: () => liveRow,
+      getRowVersion: () => liveVersion,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: initialRow.id,
+          columnId: "COL_ID_VALUE",
+          field: "value",
+          baseRow: initialRow,
+          expectedVersion: undefined,
+          base: null,
+          mine: "draft",
+        },
+      ]),
+    ).toBe(true);
+
+    liveRow = { id: initialRow.id, value: "server" };
+    liveVersion = "version-2";
+    expect(
+      runtime.applyCanonicalTextGesture([
+        { rowId: initialRow.id, columnId: "COL_ID_VALUE", canonicalText: "server" },
+      ]),
+    ).toEqual({ kind: "accepted" });
+    expect(runtime.getCellSnapshot(initialRow.id, "COL_ID_VALUE")).toMatchObject({
+      hasDraft: true,
+      draft: "server",
+    });
+    expect(runtime.getDraftReviewSnapshot()).toEqual([
+      expect.objectContaining({
+        rowId: initialRow.id,
+        columnId: "COL_ID_VALUE",
+        baseRow: initialRow,
+        expectedVersion: undefined,
+        base: null,
+        mine: "server",
+      }),
+    ]);
+  });
+
+  it("rejects all-no-op Paste gestures with first-target evidence in both edit modes", () => {
+    for (const batch of [false, true]) {
+      const onCommitGesture = vi.fn();
+      const runtime = new BrunoTableCellEditRuntime({
+        columns,
+        getRow: () => row,
+        getRowVersion: () => 1n,
+        onCommitGesture,
+      });
+      runtime.setBatchHistoryEnabled(batch);
+
+      expect(
+        runtime.applyCanonicalTextGesture([
+          { rowId: row.id, columnId: "COL_ID_SCORE", canonicalText: String(row.score) },
+        ]),
+      ).toEqual({
+        kind: "rejected",
+        reason: "unchanged",
+        rowId: row.id,
+        columnId: "COL_ID_SCORE",
+      });
+      expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
+      expect(onCommitGesture).not.toHaveBeenCalled();
+    }
+  });
+
+  it("reports a refused Immediate Paste admission as temporarily unavailable", () => {
+    const onCommitGesture = vi.fn(() => "rejected" as const);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture,
+    });
+
+    expect(
+      runtime.applyCanonicalTextGesture([
+        { rowId: row.id, columnId: "COL_ID_SCORE", canonicalText: "7" },
+      ]),
+    ).toEqual({ kind: "rejected", reason: "temporarily-unavailable" });
+    expect(onCommitGesture).toHaveBeenCalledOnce();
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
+  });
 });

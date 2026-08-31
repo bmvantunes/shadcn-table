@@ -110,6 +110,40 @@ export type BrunoTableCellEditDraftSnapshot = Readonly<{
   }>;
 }>;
 
+export type BrunoTableCellEditCanonicalTextGesture = readonly [
+  Readonly<{ readonly rowId: string; readonly columnId: string; readonly canonicalText: string }>,
+  ...Readonly<{
+    readonly rowId: string;
+    readonly columnId: string;
+    readonly canonicalText: string;
+  }>[],
+];
+
+export type BrunoTableCellEditCanonicalTextGestureRejectionReason =
+  | "temporarily-unavailable"
+  | "invalid-target"
+  | "save-locked"
+  | "unavailable"
+  | "stale"
+  | "blocked"
+  | "row-version"
+  | "invalid-source"
+  | "read-only"
+  | "invalid-value"
+  | "empty"
+  | "unchanged";
+
+export type BrunoTableCellEditCanonicalTextGestureResult =
+  | Readonly<{ readonly kind: "accepted" }>
+  | Readonly<{
+      readonly kind: "rejected";
+      readonly reason: BrunoTableCellEditCanonicalTextGestureRejectionReason;
+      readonly detail?: string;
+      readonly rowId?: string;
+      readonly columnId?: string;
+      readonly additionalInvalidCount?: number;
+    }>;
+
 export type BrunoTableCellEditDraftReviewRow = BrunoTableCellEditDraftSnapshot &
   Readonly<{
     readonly id: string;
@@ -2808,6 +2842,187 @@ export class BrunoTableCellEditRuntime {
     this.publishTraversalInvalidation();
   };
 
+  public readonly applyCanonicalTextGesture = (
+    cells: BrunoTableCellEditCanonicalTextGesture,
+  ): BrunoTableCellEditCanonicalTextGestureResult => {
+    if (
+      !this.saveOperationCapacityAvailable ||
+      this.getSessionSnapshot().kind === "editing" ||
+      (!this.batchHistoryEnabled && !this.isSourceAuthoritative()) ||
+      this.batchSaveLockOperationId !== undefined
+    ) {
+      return Object.freeze({ kind: "rejected", reason: "temporarily-unavailable" });
+    }
+    const drafts = this.draftStore.get();
+    const prepared: BrunoTableCellEditDraftSnapshot[] = [];
+    const available: Array<
+      Readonly<{
+        readonly cell: BrunoTableCellEditCanonicalTextGesture[number];
+        readonly column: CompiledFieldColumn;
+        readonly row: object;
+        readonly previous: DraftEntry | undefined;
+        readonly expectedVersion: unknown;
+        readonly sourceValue: Extract<CanonicalSourceValue, { readonly _tag: "Success" }>;
+      }>
+    > = [];
+    let hasMutation = false;
+    const seen = new Set<string>();
+    const failureState: {
+      first:
+        | Readonly<{
+            readonly reason: BrunoTableCellEditCanonicalTextGestureRejectionReason;
+            readonly detail?: string;
+            readonly rowId: string;
+            readonly columnId: string;
+          }>
+        | undefined;
+      additionalCount: number;
+    } = { first: undefined, additionalCount: 0 };
+    const recordFailure = (
+      cell: (typeof cells)[number],
+      reason: BrunoTableCellEditCanonicalTextGestureRejectionReason,
+      detail?: string,
+    ): void => {
+      if (failureState.first === undefined) {
+        failureState.first = Object.freeze({
+          reason,
+          ...(detail === undefined ? {} : { detail }),
+          rowId: cell.rowId,
+          columnId: cell.columnId,
+        });
+      } else {
+        failureState.additionalCount += 1;
+      }
+    };
+    const rejectionFromFailures = (): BrunoTableCellEditCanonicalTextGestureResult | undefined => {
+      const first = failureState.first;
+      if (first === undefined) return undefined;
+      return Object.freeze({
+        kind: "rejected",
+        reason: first.reason,
+        ...(first.detail === undefined ? {} : { detail: first.detail }),
+        rowId: first.rowId,
+        columnId: first.columnId,
+        ...(failureState.additionalCount === 0
+          ? {}
+          : { additionalInvalidCount: failureState.additionalCount }),
+      });
+    };
+    for (const cell of cells) {
+      const key = cellKey(cell.rowId, cell.columnId);
+      if (seen.has(key)) {
+        return Object.freeze({ kind: "rejected", reason: "invalid-target" });
+      }
+      seen.add(key);
+      if (this.saveLockedCellKeys.has(key)) {
+        recordFailure(cell, "save-locked");
+        continue;
+      }
+      const column = this.fieldColumnsById.get(cell.columnId);
+      const row = this.getRow(cell.rowId);
+      if (column === undefined || typeof row !== "object" || row === null) {
+        recordFailure(cell, "unavailable");
+        continue;
+      }
+      const previous = drafts.get(key);
+      if (
+        previous?.conflict !== undefined ||
+        this.conflictDraftKeys.has(key) ||
+        this.rowVersionBlockedRowIds.has(cell.rowId)
+      ) {
+        recordFailure(cell, "stale");
+        continue;
+      }
+      if (
+        previous?.blockedReason !== undefined ||
+        previous?.validationMessage !== undefined ||
+        this.blockedDraftKeys.has(key) ||
+        this.validationDraftKeys.has(key)
+      ) {
+        recordFailure(cell, "blocked");
+        continue;
+      }
+      let expectedVersion: unknown;
+      try {
+        expectedVersion = this.getRowVersion?.(row);
+      } catch {
+        recordFailure(cell, "row-version");
+        continue;
+      }
+      const sourceValue = this.readCanonicalSourceValue(cell.rowId, row, column);
+      if (sourceValue._tag !== "Success") {
+        recordFailure(cell, "invalid-source");
+        continue;
+      }
+      if (
+        !isDraftEditable(column, row, previous === undefined ? sourceValue.value : previous.mine)
+      ) {
+        recordFailure(cell, "read-only");
+        continue;
+      }
+      available.push(Object.freeze({ cell, column, row, previous, expectedVersion, sourceValue }));
+    }
+    const availabilityRejection = rejectionFromFailures();
+    if (availabilityRejection !== undefined) return availabilityRejection;
+    for (const { cell, column, row, previous, expectedVersion, sourceValue } of available) {
+      const session = prepareSession({
+        type: "START",
+        rowId: cell.rowId,
+        column,
+        row,
+        sourceValue,
+        expectedVersion,
+        hasDraft: previous !== undefined,
+        draftValue: previous?.mine,
+        mode: "replace",
+        producedText: cell.canonicalText,
+      });
+      const evaluation = evaluateCandidate(
+        session,
+        cell.canonicalText,
+        false,
+        cell.canonicalText.length === 0 && column.blankValue !== undefined ? "blank" : "scalar",
+      );
+      if (evaluation.kind === "invalid") {
+        recordFailure(cell, "invalid-value", evaluation.message);
+        continue;
+      }
+      hasMutation ||=
+        evaluation.change !== undefined || (previous !== undefined && evaluation.removeDraft);
+      prepared.push(
+        Object.freeze({
+          rowId: cell.rowId,
+          columnId: cell.columnId,
+          field: column.field,
+          baseRow: previous === undefined ? row : previous.baseRow,
+          expectedVersion: previous === undefined ? expectedVersion : previous.expectedVersion,
+          base: previous === undefined ? sourceValue.value : previous.base,
+          mine: evaluation.value,
+          ...(previous?.conflict === undefined ? {} : { conflict: previous.conflict }),
+        }),
+      );
+    }
+    const evaluationRejection = rejectionFromFailures();
+    if (evaluationRejection !== undefined) return evaluationRejection;
+    if (!hasMutation) {
+      const firstTarget = cells[0];
+      return Object.freeze({
+        kind: "rejected",
+        reason: "unchanged",
+        ...(firstTarget === undefined
+          ? {}
+          : { rowId: firstTarget.rowId, columnId: firstTarget.columnId }),
+      });
+    }
+    const [first, ...rest] = prepared;
+    if (first === undefined) {
+      return Object.freeze({ kind: "rejected", reason: "empty" });
+    }
+    return this.applyAcceptedDraftGesture(Object.freeze([first, ...rest]))
+      ? Object.freeze({ kind: "accepted" })
+      : Object.freeze({ kind: "rejected", reason: "temporarily-unavailable" });
+  };
+
   public readonly applyAcceptedDraftGesture = (
     drafts: readonly [BrunoTableCellEditDraftSnapshot, ...BrunoTableCellEditDraftSnapshot[]],
   ): boolean => {
@@ -2841,7 +3056,7 @@ export class BrunoTableCellEditRuntime {
       const before = previousDrafts.get(key);
       const existing = nextDrafts.get(key);
       if (existing !== before || unchangedGestureKeys?.has(key) === true) return false;
-      const base = existing?.base ?? draft.base;
+      const base = existing === undefined ? draft.base : existing.base;
       const equivalentToBase = safeEquivalentEditValue(column, draft.mine, base);
       if (equivalentToBase === undefined) return false;
       if (equivalentToBase) nextDrafts.delete(key);

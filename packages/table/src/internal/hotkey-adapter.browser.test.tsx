@@ -278,6 +278,72 @@ describe("BrunoTable hotkey Adapter browser contract", () => {
     expect(innerCopy).toHaveBeenCalledOnce();
   });
 
+  test("scopes optional Mod+V outside text input and IME composition and cleans it up", async () => {
+    const manager = getHotkeyManager();
+    const modifier = detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true };
+    const wrongPlatformModifier =
+      detectPlatform() === "mac" ? { ctrlKey: true } : { metaKey: true };
+    const paste = vi.fn();
+    const screen = await render(
+      <AdapterProbe commands={probeCommands({ paste })} label="Paste owner">
+        <input aria-label="Native paste target" />
+      </AdapterProbe>,
+    );
+    const owner = screen.getByRole("region", { name: "Paste owner" }).element();
+    const input = screen.getByRole("textbox", { name: "Native paste target" }).element();
+    await vi.waitFor(() =>
+      expect(
+        [...manager.registrations.state.values()].filter(
+          (registration) => registration.target === owner && registration.hotkey === "Mod+V",
+        ),
+      ).toHaveLength(1),
+    );
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "v",
+        ...modifier,
+      }),
+    );
+    owner.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        isComposing: true,
+        key: "v",
+        ...modifier,
+      }),
+    );
+    owner.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "v",
+        ...wrongPlatformModifier,
+      }),
+    );
+    expect(paste).not.toHaveBeenCalled();
+
+    owner.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "v",
+        ...modifier,
+      }),
+    );
+    expect(paste).toHaveBeenCalledOnce();
+
+    await cleanup();
+    expect(
+      [...manager.registrations.state.values()].filter(
+        (registration) => registration.target === owner && registration.hotkey === "Mod+V",
+      ),
+    ).toHaveLength(0);
+  });
+
   test.each(["active-first", "active-last"] as const)(
     "keeps table-owned Escape in its realm and uses the sole-active document fallback when mounted $order",
     async (order) => {
