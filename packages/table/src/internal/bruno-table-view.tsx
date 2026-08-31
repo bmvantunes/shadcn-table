@@ -212,6 +212,13 @@ import {
 } from "./cell-paste";
 import { BrunoTablePasteChrome } from "./cell-paste-chrome";
 import {
+  BrunoTableDragFillRuntime,
+  type BrunoTableDragFillInteractionGeometry,
+  type BrunoTableDragFillSource,
+  type BrunoTableDragFillSourceShape,
+} from "./drag-fill";
+import { BrunoTableDragFillChrome } from "./drag-fill-chrome";
+import {
   BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY,
   BrunoTableEditSafetyFooter,
   type BrunoTableBlockedReviewRenderer,
@@ -221,6 +228,12 @@ import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_SELECTION_COLUMN_WIDTH = 40;
+const EMPTY_DRAG_FILL_INTERACTION_GEOMETRY: BrunoTableDragFillInteractionGeometry = Object.freeze({
+  bodyTop: 0,
+  bodyBottom: 1,
+  centreLeft: 0,
+  centreRight: 0,
+});
 const SAVE_SUCCESS_KEYFRAMES = `
 @keyframes bruno-table-save-success {
   0%, 20% { opacity: 1; }
@@ -1138,7 +1151,13 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   const [pasteRuntime] = useState(() =>
     cellEdit === undefined ? undefined : new BrunoTablePasteRuntime(focusFallback),
   );
+  const [dragFillRuntime] = useState(() =>
+    cellEdit === undefined || cellRange === undefined
+      ? undefined
+      : new BrunoTableDragFillRuntime(tableId),
+  );
   useEffect(() => () => pasteRuntime?.dispose(), [pasteRuntime]);
+  useEffect(() => () => dragFillRuntime?.dispose(), [dragFillRuntime]);
   const body = useSyncExternalStore(
     runtime.subscribeBody,
     runtime.getBodySnapshot,
@@ -1231,6 +1250,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             cellRange={cellRange}
             interactionAnnouncer={interactionAnnouncer}
             pasteRuntime={pasteRuntime}
+            dragFillRuntime={dragFillRuntime}
           />
         )
       }
@@ -1243,6 +1263,9 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
       ) : null}
       {rowPipeline}
       {pasteRuntime === undefined ? null : <BrunoTablePasteChrome runtime={pasteRuntime} />}
+      {dragFillRuntime === undefined ? null : (
+        <BrunoTableDragFillChrome runtime={dragFillRuntime} />
+      )}
     </>
   );
 }
@@ -1418,6 +1441,7 @@ type BrunoTableViewportAdapterProps = {
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
   readonly interactionAnnouncer: BrunoTableInteractionAnnouncer;
   readonly pasteRuntime?: BrunoTablePasteRuntime | undefined;
+  readonly dragFillRuntime?: BrunoTableDragFillRuntime | undefined;
 };
 
 export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportAdapterProps> = memo(
@@ -1440,6 +1464,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     cellRange,
     interactionAnnouncer,
     pasteRuntime,
+    dragFillRuntime,
   }: BrunoTableViewportAdapterProps): ReactElement {
     const cellEdit = useContext(BrunoTableCellEditContext);
     const installedProjection = useSyncExternalStore(
@@ -1530,6 +1555,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             attachScrollbarOverlay={adapter.attachScrollbarOverlay}
             subscribeViewportEnvironment={adapter.subscribeViewportEnvironment}
             scrollByLogical={adapter.scrollByLogical}
+            scrollVerticalByLogical={adapter.scrollVerticalByLogical}
             adjustVerticalByLogical={adapter.adjustVerticalByLogical}
             previewColumnWidth={adapter.previewColumnWidth}
             clearColumnWidthPreview={adapter.clearColumnWidthPreview}
@@ -1542,6 +1568,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             rowSelection={projectedRowSelection}
             cellRange={cellRange}
             pasteRuntime={pasteRuntime}
+            dragFillRuntime={dragFillRuntime}
           />
         )}
       </BrunoTableViewportAdapterBoundary>
@@ -1573,6 +1600,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   attachScrollbarOverlay,
   subscribeViewportEnvironment,
   scrollByLogical,
+  scrollVerticalByLogical,
   adjustVerticalByLogical,
   previewColumnWidth,
   clearColumnWidthPreview,
@@ -1585,6 +1613,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   rowSelection,
   cellRange,
   pasteRuntime,
+  dragFillRuntime,
 }: {
   readonly announce: (message: string) => void;
   readonly announcementMessage: string;
@@ -1610,6 +1639,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly attachScrollbarOverlay: (element: HTMLElement | null) => void;
   readonly subscribeViewportEnvironment: (listener: () => void) => () => void;
   readonly scrollByLogical: (delta: number) => boolean;
+  readonly scrollVerticalByLogical: (delta: number) => boolean;
   readonly adjustVerticalByLogical: (delta: number) => number | undefined;
   readonly previewColumnWidth: (columnId: string, width: number) => void;
   readonly clearColumnWidthPreview: (publishSnapshot?: boolean) => void;
@@ -1627,6 +1657,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
   readonly pasteRuntime?: BrunoTablePasteRuntime | undefined;
+  readonly dragFillRuntime?: BrunoTableDragFillRuntime | undefined;
 }) {
   const cellEdit = useContext(BrunoTableCellEditContext);
   const editMemory = useContext(BrunoTableEditMemoryContext);
@@ -1703,6 +1734,20 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   );
   const columnIndexOffset = rowSelection === undefined ? 0 : 1;
   const gridElement = useRef<HTMLDivElement | null>(null);
+  const dragFillLayout = useRef<
+    | Readonly<{
+        readonly direction: "ltr" | "rtl";
+        readonly interactionGeometry: BrunoTableDragFillInteractionGeometry;
+      }>
+    | undefined
+  >(undefined);
+  const dragFillLayoutInput = useRef(
+    Object.freeze({
+      pinnedStart: columnWindow.pinnedStart,
+      pinnedEnd: columnWindow.pinnedEnd,
+      rowSelectionWidth,
+    }),
+  );
   const producedTextCapture = useRef<HTMLSpanElement | null>(null);
   const interactionFrame = useRef<number | null>(null);
   const focusRestoreFrame = useRef<number | null>(null);
@@ -2307,6 +2352,37 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     () => (event, column, kind) => columnPointerDownHandler.current(event, column, kind),
     [],
   );
+  const refreshDragFillLayout = useCallback((): void => {
+    const grid = gridElement.current;
+    if (grid === null) {
+      dragFillLayout.current = undefined;
+      return;
+    }
+    const bounds = grid.getBoundingClientRect();
+    const direction = getComputedStyle(grid).direction === "rtl" ? "rtl" : "ltr";
+    const input = dragFillLayoutInput.current;
+    const pinnedStartWidth = totalColumnWidth(input.pinnedStart);
+    const pinnedEndWidth = totalColumnWidth(input.pinnedEnd);
+    const startInset = input.rowSelectionWidth + pinnedStartWidth;
+    const endInset = pinnedEndWidth;
+    const centreLeft = Math.min(
+      Math.max(bounds.left + (direction === "rtl" ? endInset : startInset), bounds.left),
+      bounds.right,
+    );
+    const centreRight = Math.max(
+      centreLeft,
+      Math.min(bounds.right - (direction === "rtl" ? startInset : endInset), bounds.right),
+    );
+    dragFillLayout.current = Object.freeze({
+      direction,
+      interactionGeometry: Object.freeze({
+        bodyTop: Math.min(Math.max(bounds.top + ROW_HEIGHT, bounds.top), bounds.bottom),
+        bodyBottom: bounds.bottom,
+        centreLeft,
+        centreRight,
+      }),
+    });
+  }, []);
   const attachGrid = useMemo(
     () => (element: HTMLDivElement | null) => {
       const previousGrid = gridElement.current;
@@ -2324,9 +2400,28 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       gridElement.current = element;
       cellRange?.attachGrid(element);
       attach(element);
+      refreshDragFillLayout();
       if (element !== null && focusHandoff.claim()) element.focus({ preventScroll: true });
     },
-    [attach, cellRange, focusFallback, focusHandoff],
+    [attach, cellRange, focusFallback, focusHandoff, refreshDragFillLayout],
+  );
+  useLayoutEffect(() => {
+    dragFillLayoutInput.current = Object.freeze({
+      pinnedStart: columnWindow.pinnedStart,
+      pinnedEnd: columnWindow.pinnedEnd,
+      rowSelectionWidth,
+    });
+    refreshDragFillLayout();
+  }, [
+    columnWindow.pinnedEnd,
+    columnWindow.pinnedStart,
+    refreshDragFillLayout,
+    rowSelectionWidth,
+    viewportSnapshot.height,
+  ]);
+  useEffect(
+    () => subscribeViewportEnvironment(refreshDragFillLayout),
+    [refreshDragFillLayout, subscribeViewportEnvironment],
   );
   const attachBodyLayerWithFocusHandoff = useMemo<RefCallback<HTMLElement>>(
     () => (element) => {
@@ -2871,6 +2966,155 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     );
   }, [cellEdit, describePasteCoordinate, pasteRuntime]);
 
+  const dragFillShape = useRef<
+    | Readonly<{
+        readonly structure: ReturnType<typeof createBrunoTableCellRangeStructureFromRowSpace>;
+        readonly axis: "horizontal" | "vertical";
+        readonly rowIds: readonly string[];
+        readonly columnIds: readonly string[];
+        readonly identity: object;
+        readonly source: BrunoTableDragFillSourceShape;
+      }>
+    | undefined
+  >(undefined);
+  const refreshDragFillSourceShape = useCallback((): void => {
+    const structure = latestPasteStructure.current;
+    if (dragFillRuntime === undefined || cellRange === undefined || structure === undefined) {
+      dragFillShape.current = undefined;
+      return;
+    }
+    const active = navigation.getSnapshot();
+    const activeCoordinate =
+      active?.region === "body" && active.rowId !== undefined
+        ? Object.freeze({ rowId: active.rowId, columnId: active.columnId })
+        : undefined;
+    const selection = cellRange.getSnapshot();
+    const target = clipboardTargetFromSelection(selection, activeCoordinate);
+    if (target === undefined) {
+      dragFillShape.current = undefined;
+      return;
+    }
+    const previous = dragFillShape.current;
+    const shapeCurrent =
+      previous !== undefined &&
+      previous.structure === structure &&
+      previous.axis === target.axis &&
+      sameStringSequence(previous.rowIds, target.rowIds) &&
+      sameStringSequence(previous.columnIds, target.columnIds);
+    const identity = shapeCurrent ? previous.identity : Object.freeze({});
+    const handle = selection.range?.focus ?? activeCoordinate;
+    if (handle === undefined) {
+      dragFillShape.current = undefined;
+      return;
+    }
+    const source = Object.freeze({
+      shapeIdentity: identity,
+      axis: target.axis,
+      rowIds: target.rowIds,
+      columnIds: target.columnIds,
+      handle: Object.freeze({ ...handle }),
+    });
+    dragFillShape.current = Object.freeze({
+      structure,
+      axis: target.axis,
+      rowIds: target.rowIds,
+      columnIds: target.columnIds,
+      identity,
+      source,
+    });
+  }, [cellRange, dragFillRuntime, navigation]);
+  const getDragFillSourceShape = useCallback(
+    (): BrunoTableDragFillSourceShape | undefined => dragFillShape.current?.source,
+    [],
+  );
+  const captureDragFillSource = useCallback((): BrunoTableDragFillSource | undefined => {
+    refreshDragFillLayout();
+    const shape = getDragFillSourceShape();
+    if (shape === undefined || cellEdit === undefined) return undefined;
+    try {
+      const readCell = runtime.captureCellCommandReader();
+      const readDraft = cellEdit.captureDraftCommandReader();
+      const target =
+        shape.axis === "horizontal"
+          ? Object.freeze({
+              axis: shape.axis,
+              rowIds: Object.freeze([shape.rowIds[0]!] as const),
+              columnIds: shape.columnIds,
+            })
+          : Object.freeze({
+              axis: shape.axis,
+              rowIds: shape.rowIds,
+              columnIds: Object.freeze([shape.columnIds[0]!] as const),
+            });
+      const snapshot = captureBrunoTableClipboardSnapshot(target, ({ rowId, columnId }) => {
+        const cell = readCell(rowId, columnId);
+        if (
+          cell.kind !== "available" ||
+          !cell.rowPresent ||
+          cell.column === undefined ||
+          isBrunoTableInvalidCellValue(cell.value)
+        ) {
+          return undefined;
+        }
+        const draft = readDraft(rowId, columnId);
+        return Object.freeze({
+          value: draft.hasDraft ? draft.value : cell.value,
+          formatCanonicalText: cell.column.semantics.formatCanonicalText,
+        });
+      });
+      return snapshot === undefined
+        ? undefined
+        : Object.freeze({ ...shape, canonicalTexts: snapshot.canonicalTexts });
+    } catch {
+      return undefined;
+    }
+  }, [cellEdit, getDragFillSourceShape, refreshDragFillLayout, runtime]);
+  useLayoutEffect(() => {
+    const grid = gridElement.current;
+    if (grid === null || dragFillRuntime === undefined || cellEdit === undefined) return;
+    const unregister = dragFillRuntime.register({
+      grid,
+      getSourceShape: getDragFillSourceShape,
+      captureSource: captureDragFillSource,
+      getStructure: () => latestPasteStructure.current,
+      apply: (cells) => cellEdit.applyCanonicalTextGesture(cells),
+      interactionGeometry: () =>
+        dragFillLayout.current?.interactionGeometry ?? EMPTY_DRAG_FILL_INTERACTION_GEOMETRY,
+      scrollHorizontalByPhysical: (delta) =>
+        scrollByLogical((dragFillLayout.current?.direction === "rtl" ? -1 : 1) * delta),
+      scrollVerticalByLogical,
+      describeCoordinate: (coordinate) => {
+        const evidence = describePasteCoordinate(coordinate);
+        return `${evidence.columnLabel}, row ${evidence.rowLabel}`;
+      },
+    });
+    const reconcile = (): void => {
+      refreshDragFillSourceShape();
+      dragFillRuntime.reconcile();
+    };
+    const unsubscribeRange = cellRange?.subscribe(reconcile);
+    reconcile();
+    return () => {
+      unsubscribeRange?.();
+      unregister();
+      dragFillShape.current = undefined;
+    };
+  }, [
+    captureDragFillSource,
+    cellEdit,
+    cellRange,
+    describePasteCoordinate,
+    dragFillRuntime,
+    getDragFillSourceShape,
+    refreshDragFillSourceShape,
+    scrollByLogical,
+    scrollVerticalByLogical,
+  ]);
+  useLayoutEffect(() => {
+    refreshDragFillSourceShape();
+    dragFillRuntime?.reconcile();
+  }, [cellRangeStructure, dragFillRuntime, refreshDragFillSourceShape]);
+
   const runCellRangePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (cellRange === undefined || cellRangeStructure === undefined) return;
     const grid = event.currentTarget;
@@ -3226,11 +3470,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   useBrunoTableGridHotkeys(gridElement, {
     documentEscapeActive: () =>
       editMemory?.getResetReviewSnapshot().open !== true &&
-      (columnGesture.current !== undefined ||
+      (dragFillRuntime?.getSnapshot().active === true ||
+        columnGesture.current !== undefined ||
         cellRange?.isPointerGestureActive() === true ||
         cellEdit?.getSessionSnapshot().kind === "editing"),
     escape: (event) => {
       if (editMemory?.getResetReviewSnapshot().open === true) return;
+      if (dragFillRuntime?.cancel() === true) {
+        event.preventDefault();
+        return;
+      }
       if (cellRange?.cancelPointerGesture() === true) {
         event.preventDefault();
         return;
@@ -7075,4 +7324,8 @@ function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
 
 function viewportPageSize(viewport: HTMLElement): number {
   return Math.max(1, Math.floor(Math.max(0, viewport.clientHeight - ROW_HEIGHT) / ROW_HEIGHT));
+}
+
+function sameStringSequence(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }

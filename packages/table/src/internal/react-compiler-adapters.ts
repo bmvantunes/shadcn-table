@@ -138,6 +138,7 @@ export type BrunoTableViewportAdapterState = Readonly<{
   attachScrollbarOverlay: (element: HTMLElement | null) => void;
   subscribeViewportEnvironment: (listener: () => void) => () => void;
   scrollByLogical: (delta: number) => boolean;
+  scrollVerticalByLogical: (delta: number) => boolean;
   adjustVerticalByLogical: (delta: number) => number | undefined;
   previewColumnWidth: (columnId: string, width: number) => void;
   clearColumnWidthPreview: (publishSnapshot?: boolean) => void;
@@ -233,6 +234,7 @@ export function BrunoTableViewportAdapterBoundary({
     attachScrollbarOverlay: viewport.attachScrollbarOverlay,
     subscribeEnvironment: viewport.subscribeEnvironment,
     scrollByLogical: viewport.scrollByLogical,
+    scrollVerticalByLogical: viewport.scrollVerticalByLogical,
     adjustVerticalByLogical: viewport.adjustVerticalByLogical,
     previewColumnWidth: viewport.previewColumnWidth,
     clearColumnWidthPreview: viewport.clearColumnWidthPreview,
@@ -374,6 +376,7 @@ export function BrunoTableViewportAdapterBoundary({
     attachScrollbarOverlay: viewportBindings.attachScrollbarOverlay,
     subscribeViewportEnvironment: viewportBindings.subscribeEnvironment,
     scrollByLogical: viewportBindings.scrollByLogical,
+    scrollVerticalByLogical: viewportBindings.scrollVerticalByLogical,
     adjustVerticalByLogical: viewportBindings.adjustVerticalByLogical,
     previewColumnWidth: viewportBindings.previewColumnWidth,
     clearColumnWidthPreview: viewportBindings.clearColumnWidthPreview,

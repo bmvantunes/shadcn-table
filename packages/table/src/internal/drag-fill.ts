@@ -1,0 +1,1063 @@
+import { Store } from "@tanstack/store";
+import { assign, createActor, createMachine } from "xstate";
+
+import {
+  brunoTableCellRangePointerHit,
+  type BrunoTableCellCoordinate,
+  type BrunoTableCellRangeAxis,
+  type BrunoTableCellRangeStructure,
+} from "./cell-range-clipboard";
+import {
+  captureBrunoTableDragFillGesture,
+  materializeBrunoTableDragFillCandidates,
+  projectBrunoTableDragFillPreview,
+  resolveBrunoTableDragFillAxis,
+  type BrunoTableDragFillGesture,
+  type BrunoTableDragFillPreview,
+} from "./drag-fill-planner";
+import {
+  hasBrunoTableClientDragFillFrameListener,
+  recordBrunoTableClientDragFillFrame,
+} from "./render-instrumentation";
+
+const DRAG_FILL_SLOP = 4;
+const DRAG_FILL_AUTOSCROLL_ZONE = 24;
+const DRAG_FILL_AUTOSCROLL_STEP = 12;
+
+type NonEmptyStrings = readonly [string, ...string[]];
+
+export type BrunoTableDragFillSourceShape = Readonly<{
+  /** Stable opaque identity for the ordered source shape, excluding canonical value publications. */
+  readonly shapeIdentity: object;
+  readonly axis: BrunoTableCellRangeAxis;
+  readonly rowIds: NonEmptyStrings;
+  readonly columnIds: NonEmptyStrings;
+  readonly handle: BrunoTableCellCoordinate;
+}>;
+
+export type BrunoTableDragFillSource = BrunoTableDragFillSourceShape &
+  Readonly<{ readonly canonicalTexts: NonEmptyStrings }>;
+
+export type BrunoTableDragFillCell = Readonly<{
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly canonicalText: string;
+}>;
+
+export type BrunoTableDragFillRejectionReason =
+  | "structure-changed"
+  | "temporarily-unavailable"
+  | "invalid-target"
+  | "save-locked"
+  | "unavailable"
+  | "stale"
+  | "blocked"
+  | "row-version"
+  | "invalid-source"
+  | "read-only"
+  | "invalid-value"
+  | "empty"
+  | "unchanged";
+
+export type BrunoTableDragFillApplyResult =
+  | Readonly<{ readonly kind: "accepted" }>
+  | Readonly<{
+      readonly kind: "rejected";
+      readonly reason: BrunoTableDragFillRejectionReason;
+      readonly detail?: string;
+      readonly rowId?: string;
+      readonly columnId?: string;
+      readonly additionalInvalidCount?: number;
+    }>;
+
+export type BrunoTableDragFillNotification = Readonly<{
+  readonly sequence: number;
+  readonly message: string;
+}>;
+
+export type BrunoTableDragFillProjection = Readonly<{
+  readonly active: boolean;
+  readonly axis?: BrunoTableCellRangeAxis;
+}>;
+
+/** The physical interaction lane supplied by the production grid surface. */
+export type BrunoTableDragFillInteractionGeometry = Readonly<{
+  readonly bodyTop: number;
+  readonly bodyBottom: number;
+  readonly centreLeft: number;
+  readonly centreRight: number;
+}>;
+
+type DragFillResources = Readonly<{ readonly acquire: () => void; readonly release: () => void }>;
+type DragFillReleasePreflight =
+  | Readonly<{ readonly kind: "cancelled" }>
+  | Readonly<{
+      readonly kind: "ready";
+      readonly cells: readonly [BrunoTableDragFillCell, ...BrunoTableDragFillCell[]];
+    }>
+  | Readonly<{
+      readonly kind: "rejected";
+      readonly rejection: Exclude<BrunoTableDragFillApplyResult, { readonly kind: "accepted" }>;
+    }>;
+type DragFillReleaseOutcome =
+  | BrunoTableDragFillApplyResult
+  | Readonly<{ readonly kind: "cancelled" }>;
+type DragFillReleaseOperation = Readonly<{
+  readonly preflight: () => DragFillReleasePreflight;
+  readonly apply: (
+    cells: readonly [BrunoTableDragFillCell, ...BrunoTableDragFillCell[]],
+  ) => BrunoTableDragFillApplyResult;
+  readonly settle: (outcome: DragFillReleaseOutcome) => void;
+}>;
+type DragFillContext = Readonly<{
+  readonly axis: BrunoTableCellRangeAxis | undefined;
+  readonly resources: DragFillResources | undefined;
+  readonly release: DragFillReleaseOperation | undefined;
+  readonly preflight: DragFillReleasePreflight | undefined;
+  readonly outcome: DragFillReleaseOutcome | undefined;
+}>;
+type DragFillEvent =
+  | Readonly<{ readonly type: "START"; readonly resources: DragFillResources }>
+  | Readonly<{ readonly type: "LOCK_AXIS"; readonly axis: BrunoTableCellRangeAxis }>
+  | (Readonly<{ readonly type: "RELEASE" }> & DragFillReleaseOperation)
+  | Readonly<{ readonly type: "CANCEL" | "INVALIDATE" }>;
+
+const EMPTY_DRAG_FILL_CONTEXT: DragFillContext = Object.freeze({
+  axis: undefined,
+  resources: undefined,
+  release: undefined,
+  preflight: undefined,
+  outcome: undefined,
+});
+
+const dragFillMachine = createMachine(
+  {
+    id: "brunoTableDragFill",
+    initial: "idle",
+    types: {} as { context: DragFillContext; events: DragFillEvent },
+    context: EMPTY_DRAG_FILL_CONTEXT,
+    states: {
+      idle: {
+        on: {
+          START: {
+            target: "armed",
+            actions: [assign({ resources: ({ event }) => event.resources }), "acquireResources"],
+          },
+        },
+      },
+      armed: {
+        on: {
+          LOCK_AXIS: {
+            actions: assign({
+              axis: ({ context, event }) => context.axis ?? event.axis,
+            }),
+          },
+          RELEASE: { target: "preflighting", actions: "storeRelease" },
+          CANCEL: { target: "cancelled" },
+          INVALIDATE: { target: "cancelled" },
+        },
+      },
+      preflighting: {
+        entry: "runPreflight",
+        always: [
+          {
+            guard: "preflightCancelled",
+            target: "cancelled",
+            actions: assign({
+              outcome: () => Object.freeze({ kind: "cancelled" as const }),
+            }),
+          },
+          { guard: "preflightReady", target: "applying" },
+          {
+            target: "rejected",
+            actions: assign({
+              outcome: ({ context }) =>
+                context.preflight?.kind === "rejected"
+                  ? context.preflight.rejection
+                  : Object.freeze({
+                      kind: "rejected" as const,
+                      reason: "temporarily-unavailable" as const,
+                    }),
+            }),
+          },
+        ],
+      },
+      applying: {
+        entry: "runApply",
+        always: [{ guard: "applyAccepted", target: "accepted" }, { target: "rejected" }],
+      },
+      accepted: {
+        entry: ["releaseResources", "settle", "clear"],
+        on: {
+          START: {
+            target: "armed",
+            actions: [assign({ resources: ({ event }) => event.resources }), "acquireResources"],
+          },
+        },
+      },
+      rejected: {
+        entry: ["releaseResources", "settle", "clear"],
+        on: {
+          START: {
+            target: "armed",
+            actions: [assign({ resources: ({ event }) => event.resources }), "acquireResources"],
+          },
+        },
+      },
+      cancelled: {
+        entry: ["releaseResources", "settle", "clear"],
+        on: {
+          START: {
+            target: "armed",
+            actions: [assign({ resources: ({ event }) => event.resources }), "acquireResources"],
+          },
+        },
+      },
+    },
+  },
+  {
+    actions: {
+      acquireResources: ({ context }) => context.resources?.acquire(),
+      releaseResources: ({ context }) => context.resources?.release(),
+      storeRelease: assign({
+        release: ({ event }) =>
+          event.type === "RELEASE"
+            ? Object.freeze({
+                preflight: event.preflight,
+                apply: event.apply,
+                settle: event.settle,
+              })
+            : undefined,
+      }),
+      runPreflight: assign({
+        preflight: ({ context }) => {
+          if (context.release === undefined) {
+            return Object.freeze({
+              kind: "rejected" as const,
+              rejection: Object.freeze({
+                kind: "rejected" as const,
+                reason: "temporarily-unavailable" as const,
+              }),
+            });
+          }
+          try {
+            return context.release.preflight();
+          } catch {
+            return Object.freeze({
+              kind: "rejected" as const,
+              rejection: Object.freeze({
+                kind: "rejected" as const,
+                reason: "temporarily-unavailable" as const,
+              }),
+            });
+          }
+        },
+      }),
+      runApply: assign({
+        outcome: ({ context }) => {
+          if (context.preflight?.kind !== "ready" || context.release === undefined) {
+            return Object.freeze({
+              kind: "rejected" as const,
+              reason: "temporarily-unavailable" as const,
+            });
+          }
+          try {
+            return context.release.apply(context.preflight.cells);
+          } catch {
+            return Object.freeze({
+              kind: "rejected" as const,
+              reason: "temporarily-unavailable" as const,
+            });
+          }
+        },
+      }),
+      settle: ({ context }) => {
+        if (context.release !== undefined && context.outcome !== undefined) {
+          context.release.settle(context.outcome);
+        }
+      },
+      clear: assign({
+        axis: () => undefined,
+        resources: () => undefined,
+        release: () => undefined,
+        preflight: () => undefined,
+        outcome: () => undefined,
+      }),
+    },
+    guards: {
+      preflightCancelled: ({ context }) => context.preflight?.kind === "cancelled",
+      preflightReady: ({ context }) => context.preflight?.kind === "ready",
+      applyAccepted: ({ context }) => context.outcome?.kind === "accepted",
+    },
+  },
+);
+
+type DragFillState =
+  | "idle"
+  | "armed"
+  | "preflighting"
+  | "applying"
+  | "accepted"
+  | "rejected"
+  | "cancelled";
+
+type DragFillActorSnapshot = Readonly<{
+  readonly value: DragFillState;
+  readonly context: DragFillContext;
+}>;
+
+type DragFillActor = Readonly<{
+  start: () => void;
+  stop: () => void;
+  send: (event: DragFillEvent) => void;
+  getSnapshot: () => DragFillActorSnapshot;
+  subscribe: (
+    observer: (snapshot: DragFillActorSnapshot) => void,
+  ) => Readonly<{ unsubscribe: () => void }>;
+}>;
+
+export function createBrunoTableDragFillActor(): DragFillActor {
+  const actor = createActor(dragFillMachine);
+  const projectSnapshot = (): DragFillActorSnapshot => {
+    const snapshot = actor.getSnapshot();
+    const value = snapshot.value;
+    if (
+      value !== "idle" &&
+      value !== "armed" &&
+      value !== "preflighting" &&
+      value !== "applying" &&
+      value !== "accepted" &&
+      value !== "rejected" &&
+      value !== "cancelled"
+    ) {
+      throw new Error("Unexpected Drag Fill workflow state");
+    }
+    return Object.freeze({ value, context: snapshot.context });
+  };
+  return Object.freeze({
+    start: () => {
+      actor.start();
+    },
+    stop: () => {
+      actor.stop();
+    },
+    send: (event: DragFillEvent) => {
+      actor.send(event);
+    },
+    getSnapshot: projectSnapshot,
+    subscribe: (observer: (snapshot: DragFillActorSnapshot) => void) => {
+      const subscription = actor.subscribe(() => observer(projectSnapshot()));
+      return Object.freeze({ unsubscribe: () => subscription.unsubscribe() });
+    },
+  });
+}
+
+type DragFillRegistration = Readonly<{
+  readonly grid: HTMLElement;
+  /** Cheap shape-only read used by DOM reconciliation and release invalidation. */
+  readonly getSourceShape: () => BrunoTableDragFillSourceShape | undefined;
+  /** One immutable canonical capture, invoked only for an admitted pointerdown. */
+  readonly captureSource?: (() => BrunoTableDragFillSource | undefined) | undefined;
+  /** Stable immutable reference until the ordered row or column identities change. */
+  readonly getStructure: () => BrunoTableCellRangeStructure | undefined;
+  readonly apply: (
+    cells: readonly [BrunoTableDragFillCell, ...BrunoTableDragFillCell[]],
+  ) => BrunoTableDragFillApplyResult;
+  /** Excludes sticky headers, pinned overlays, and the row-selection utility from auto-scroll. */
+  readonly interactionGeometry?: (() => BrunoTableDragFillInteractionGeometry) | undefined;
+  readonly scrollHorizontalByPhysical: (delta: number) => boolean;
+  readonly scrollVerticalByLogical?: ((delta: number) => boolean) | undefined;
+  readonly describeCoordinate?: (coordinate: BrunoTableCellCoordinate) => string;
+}>;
+
+type PointerGesture = Readonly<{
+  readonly pointerId: number;
+  readonly grid: HTMLElement;
+  readonly view: Window;
+  readonly sourceShapeIdentity: object;
+  readonly source: BrunoTableDragFillSource;
+  readonly structure: BrunoTableCellRangeStructure;
+  readonly startX: number;
+  readonly startY: number;
+  readonly registration: DragFillRegistration;
+}> & {
+  clientX: number;
+  clientY: number;
+  eventTarget: EventTarget | null;
+  frame: number | null;
+  gesture: BrunoTableDragFillGesture | undefined;
+  preview: BrunoTableDragFillPreview | undefined;
+  projectedAxis: BrunoTableCellRangeAxis | undefined;
+  projectedTargetIdentity: string | undefined;
+};
+
+const EMPTY_PROJECTION: BrunoTableDragFillProjection = Object.freeze({ active: false });
+const EMPTY_NOTIFICATION: BrunoTableDragFillNotification = Object.freeze({
+  sequence: 0,
+  message: "",
+});
+
+export class BrunoTableDragFillRuntime {
+  private readonly actor = createBrunoTableDragFillActor();
+  private readonly projectionStore = new Store<BrunoTableDragFillProjection>(EMPTY_PROJECTION);
+  private readonly notificationStore = new Store<BrunoTableDragFillNotification>(
+    EMPTY_NOTIFICATION,
+  );
+  private registration: DragFillRegistration | undefined;
+  private pointer: PointerGesture | undefined;
+  private handle: HTMLElement | undefined;
+  private handleHost: HTMLElement | undefined;
+  private observer: MutationObserver | undefined;
+  private reconcileFrame: number | null = null;
+  private readonly previewCells = new Set<HTMLElement>();
+
+  public constructor(private readonly tableId?: string) {
+    this.actor.subscribe((snapshot) => {
+      const active = snapshot.value === "armed";
+      const next = active
+        ? Object.freeze({
+            active: true,
+            ...(snapshot.context.axis === undefined ? {} : { axis: snapshot.context.axis }),
+          })
+        : EMPTY_PROJECTION;
+      if (!sameProjection(this.projectionStore.get(), next)) {
+        this.projectionStore.setState(() => next);
+      }
+    });
+    this.actor.start();
+  }
+
+  public readonly getSnapshot = (): BrunoTableDragFillProjection => this.projectionStore.get();
+  public readonly subscribe = (listener: () => void): (() => void) => {
+    const subscription = this.projectionStore.subscribe(listener);
+    return () => subscription.unsubscribe();
+  };
+  public readonly getNotificationSnapshot = (): BrunoTableDragFillNotification =>
+    this.notificationStore.get();
+  public readonly subscribeNotification = (listener: () => void): (() => void) => {
+    const subscription = this.notificationStore.subscribe(listener);
+    return () => subscription.unsubscribe();
+  };
+
+  public readonly register = (registration: DragFillRegistration): (() => void) => {
+    this.unregister();
+    this.registration = registration;
+    this.observer = new MutationObserver(() => this.scheduleReconcile());
+    this.observer.observe(registration.grid, { childList: true, subtree: true });
+    this.scheduleReconcile();
+    return () => {
+      if (this.registration === registration) this.unregister();
+    };
+  };
+
+  public readonly reconcile = (): void => {
+    const registration = this.registration;
+    if (registration === undefined) return;
+    const source = registration.getSourceShape();
+    const structure = registration.getStructure();
+    if (
+      this.pointer !== undefined &&
+      (source === undefined ||
+        structure === undefined ||
+        this.pointer.structure !== structure ||
+        this.pointer.sourceShapeIdentity !== source.shapeIdentity)
+    ) {
+      this.invalidate();
+    }
+    this.placeHandle(source);
+    if (this.pointer !== undefined) this.decoratePreview(this.pointer.preview);
+  };
+
+  public readonly cancel = (): boolean => {
+    if (this.pointer === undefined) return false;
+    this.actor.send({ type: "CANCEL" });
+    this.clearPreview();
+    this.scheduleReconcile();
+    return true;
+  };
+
+  public readonly invalidate = (): boolean => {
+    if (this.pointer === undefined) return false;
+    this.actor.send({ type: "INVALIDATE" });
+    this.clearPreview();
+    this.scheduleReconcile();
+    return true;
+  };
+
+  public readonly clearNotification = (): void =>
+    this.notificationStore.setState((previous) =>
+      Object.freeze({ sequence: previous.sequence + 1, message: "" }),
+    );
+
+  public readonly dismissNotification = (sequence: number): void =>
+    this.notificationStore.setState((previous) =>
+      previous.sequence !== sequence || previous.message.length === 0
+        ? previous
+        : Object.freeze({ sequence: previous.sequence + 1, message: "" }),
+    );
+
+  public readonly dispose = (): void => {
+    this.unregister();
+    this.actor.stop();
+  };
+
+  private readonly start = (event: PointerEvent): void => {
+    const registration = this.registration;
+    const sourceShape = registration?.getSourceShape();
+    let source: BrunoTableDragFillSource | undefined;
+    try {
+      source =
+        registration?.captureSource?.() ??
+        (isBrunoTableDragFillSource(sourceShape) ? sourceShape : undefined);
+    } catch {
+      source = undefined;
+    }
+    const structure = registration?.getStructure();
+    const view = registration?.grid.ownerDocument.defaultView;
+    if (
+      registration === undefined ||
+      sourceShape === undefined ||
+      source === undefined ||
+      source.shapeIdentity !== sourceShape.shapeIdentity ||
+      structure === undefined ||
+      view === null ||
+      view === undefined ||
+      event.button !== 0 ||
+      this.pointer !== undefined
+    ) {
+      return;
+    }
+    const capturedSource = freezeSource(source);
+    const sourceAxis = capturedSource.canonicalTexts.length > 1 ? capturedSource.axis : undefined;
+    const gesture =
+      sourceAxis === undefined ? undefined : captureGesture(capturedSource, structure, sourceAxis);
+    if (sourceAxis !== undefined && gesture === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pointer: PointerGesture = {
+      pointerId: event.pointerId,
+      grid: registration.grid,
+      view,
+      sourceShapeIdentity: source.shapeIdentity,
+      source: capturedSource,
+      structure,
+      startX: event.clientX,
+      startY: event.clientY,
+      registration,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      eventTarget: event.target,
+      frame: null,
+      gesture,
+      preview: undefined,
+      projectedAxis: undefined,
+      projectedTargetIdentity: undefined,
+    };
+    this.actor.send({
+      type: "START",
+      resources: {
+        acquire: () => {
+          this.pointer = pointer;
+          try {
+            registration.grid.setPointerCapture(pointer.pointerId);
+          } catch {
+            // Synthetic pointer input may not have a native active pointer.
+          }
+          view.addEventListener("pointermove", this.onPointerMove, true);
+          view.addEventListener("pointerup", this.onPointerUp, true);
+          view.addEventListener("pointercancel", this.onPointerCancel, true);
+        },
+        release: () => this.releasePointer(pointer),
+      },
+    });
+  };
+
+  private readonly onPointerMove = (event: PointerEvent): void => {
+    const pointer = this.pointer;
+    if (pointer === undefined || event.pointerId !== pointer.pointerId) return;
+    event.preventDefault();
+    pointer.clientX = event.clientX;
+    pointer.clientY = event.clientY;
+    pointer.eventTarget = event.target;
+    this.schedulePointerFrame(pointer);
+  };
+
+  private readonly onPointerUp = (event: PointerEvent): void => {
+    const pointer = this.pointer;
+    if (pointer === undefined || event.pointerId !== pointer.pointerId) return;
+    pointer.clientX = event.clientX;
+    pointer.clientY = event.clientY;
+    pointer.eventTarget = event.target;
+    this.applyPointerFrame(pointer, false);
+    this.actor.send({
+      type: "RELEASE",
+      preflight: (): DragFillReleasePreflight => {
+        const preview = pointer.preview;
+        if (preview === undefined) return Object.freeze({ kind: "cancelled" as const });
+        const gesture = pointer.gesture;
+        const currentSource = pointer.registration.getSourceShape();
+        const sourceCurrent = currentSource?.shapeIdentity === pointer.sourceShapeIdentity;
+        const current = pointer.registration.getStructure();
+        const structureCurrent = current !== undefined && pointer.structure === current;
+        const identities = structureCurrent ? identitiesForAxis(current, preview.axis) : undefined;
+        const indexById = structureCurrent ? indexForAxis(current, preview.axis) : undefined;
+        const candidates =
+          !sourceCurrent ||
+          gesture === undefined ||
+          identities === undefined ||
+          indexById === undefined
+            ? undefined
+            : materializeBrunoTableDragFillCandidates({
+                gesture,
+                preview,
+                identities,
+                indexById,
+              });
+        if (candidates === undefined) {
+          return Object.freeze({
+            kind: "rejected" as const,
+            rejection: Object.freeze({
+              kind: "rejected" as const,
+              reason: "structure-changed" as const,
+            }),
+          });
+        }
+        const cells = candidates.map(({ canonicalText, identity }) =>
+          Object.freeze(
+            preview.axis === "horizontal"
+              ? { rowId: pointer.source.rowIds[0]!, columnId: identity, canonicalText }
+              : { rowId: identity, columnId: pointer.source.columnIds[0]!, canonicalText },
+          ),
+        );
+        const [first, ...rest] = cells;
+        return first === undefined
+          ? Object.freeze({
+              kind: "rejected" as const,
+              rejection: Object.freeze({ kind: "rejected" as const, reason: "empty" as const }),
+            })
+          : Object.freeze({
+              kind: "ready" as const,
+              cells: Object.freeze([first, ...rest]) as readonly [
+                BrunoTableDragFillCell,
+                ...BrunoTableDragFillCell[],
+              ],
+            });
+      },
+      apply: pointer.registration.apply,
+      settle: (outcome) => {
+        this.clearPreview();
+        if (outcome.kind === "accepted") this.clearNotification();
+        else if (outcome.kind === "rejected") {
+          this.notify(outcome, pointer.registration.describeCoordinate);
+        }
+        this.scheduleReconcile();
+      },
+    });
+  };
+
+  private readonly onPointerCancel = (event: PointerEvent): void => {
+    if (event.pointerId === this.pointer?.pointerId) this.cancel();
+  };
+
+  private readonly schedulePointerFrame = (pointer: PointerGesture): void => {
+    if (pointer.frame !== null) return;
+    const shouldRecordFrame =
+      __BRUNO_TABLE_TEST_DIAGNOSTICS__ &&
+      this.tableId !== undefined &&
+      hasBrunoTableClientDragFillFrameListener(this.tableId);
+    const frame = pointer.view.requestAnimationFrame(() => {
+      pointer.frame = null;
+      if (this.pointer !== pointer) return;
+      const startedAt = shouldRecordFrame ? performance.now() : 0;
+      const autoscrolled = this.applyPointerFrame(pointer, true);
+      if (shouldRecordFrame) {
+        recordBrunoTableClientDragFillFrame(this.tableId!, {
+          phase: "ran",
+          frameId: frame,
+          durationMs: performance.now() - startedAt,
+        });
+      }
+      if (autoscrolled) this.schedulePointerFrame(pointer);
+    });
+    pointer.frame = frame;
+    if (shouldRecordFrame) {
+      recordBrunoTableClientDragFillFrame(this.tableId!, { phase: "scheduled", frameId: frame });
+    }
+  };
+
+  private readonly applyPointerFrame = (
+    pointer: PointerGesture,
+    allowAutoscroll: boolean,
+  ): boolean => {
+    const sourceAxis = pointer.source.canonicalTexts.length > 1 ? pointer.source.axis : undefined;
+    const lockedAxis = this.actor.getSnapshot().context.axis;
+    const axis = resolveBrunoTableDragFillAxis({
+      dragSlop: DRAG_FILL_SLOP,
+      horizontalDisplacement: pointer.clientX - pointer.startX,
+      verticalDisplacement: pointer.clientY - pointer.startY,
+      ...(lockedAxis === undefined ? {} : { lockedAxis }),
+      ...(sourceAxis === undefined ? {} : { sourceAxis }),
+    });
+    if (axis === undefined) return false;
+    pointer.gesture ??= captureGesture(pointer.source, pointer.structure, axis);
+    if (pointer.gesture === undefined) return false;
+    if (lockedAxis === undefined) this.actor.send({ type: "LOCK_AXIS", axis });
+    const hit = hitAtPointer(pointer);
+    if (hit !== undefined) {
+      const targetIdentity = axis === "horizontal" ? hit.columnId : hit.rowId;
+      if (pointer.projectedAxis !== axis || pointer.projectedTargetIdentity !== targetIdentity) {
+        pointer.projectedAxis = axis;
+        pointer.projectedTargetIdentity = targetIdentity;
+        pointer.preview = projectBrunoTableDragFillPreview({
+          gesture: pointer.gesture,
+          targetIdentity,
+        });
+        this.decoratePreview(pointer.preview);
+      }
+    } else if (pointer.preview === undefined) {
+      pointer.projectedAxis = undefined;
+      pointer.projectedTargetIdentity = undefined;
+      this.clearPreview();
+    }
+    if (!allowAutoscroll) return false;
+    const geometry = readInteractionGeometry(pointer.registration, pointer.grid);
+    if (axis === "horizontal") {
+      const delta = edgeDelta(pointer.clientX, geometry.centreLeft, geometry.centreRight);
+      return delta !== 0 && pointer.registration.scrollHorizontalByPhysical(delta);
+    }
+    const delta = edgeDelta(pointer.clientY, geometry.bodyTop, geometry.bodyBottom);
+    if (delta === 0) return false;
+    return pointer.registration.scrollVerticalByLogical?.(delta) === true;
+  };
+
+  private readonly placeHandle = (source: BrunoTableDragFillSourceShape | undefined): void => {
+    const registration = this.registration;
+    if (registration === undefined || source === undefined || this.pointer !== undefined) {
+      this.removeHandle();
+      return;
+    }
+    const cell = findMountedCell(registration.grid, source.handle);
+    const host = cell?.querySelector<HTMLElement>(":scope > div.relative") ?? cell ?? undefined;
+    if (host === undefined) {
+      this.removeHandle();
+      return;
+    }
+    if (this.handleHost === host && this.handle !== undefined) return;
+    this.removeHandle();
+    const handle = registration.grid.ownerDocument.createElement("span");
+    handle.dataset["brunoDragFillHandle"] = "";
+    handle.setAttribute("aria-hidden", "true");
+    Object.assign(handle.style, {
+      background: "Highlight",
+      blockSize: "8px",
+      border: "1px solid Canvas",
+      boxSizing: "border-box",
+      cursor: "crosshair",
+      insetBlockEnd: "0",
+      insetInlineEnd: "0",
+      inlineSize: "8px",
+      position: "absolute",
+      touchAction: "none",
+      zIndex: "12",
+    });
+    handle.addEventListener("pointerdown", this.start);
+    host.append(handle);
+    this.handle = handle;
+    this.handleHost = host;
+  };
+
+  private readonly decoratePreview = (preview: BrunoTableDragFillPreview | undefined): void => {
+    this.clearPreview();
+    const pointer = this.pointer;
+    if (pointer === undefined || preview === undefined) return;
+    for (const cell of ownedMountedCells(pointer.grid)) {
+      const rowId = cell.dataset["brunoRowId"];
+      const columnId = cell.dataset["brunoColumnId"];
+      if (rowId === undefined || columnId === undefined) continue;
+      const parallelIdentity = preview.axis === "horizontal" ? columnId : rowId;
+      const perpendicularIdentity = preview.axis === "horizontal" ? rowId : columnId;
+      const perpendicularSource =
+        preview.axis === "horizontal" ? pointer.source.rowIds[0] : pointer.source.columnIds[0];
+      const index = pointer.gesture?.indexById.get(parallelIdentity);
+      if (
+        perpendicularIdentity !== perpendicularSource ||
+        index === undefined ||
+        index < preview.extension.startIndex ||
+        index > preview.extension.endIndex
+      ) {
+        continue;
+      }
+      cell.dataset["brunoDragFillPreview"] = "";
+      cell.style.outline = "2px dashed Highlight";
+      cell.style.outlineOffset = "-3px";
+      this.previewCells.add(cell);
+    }
+  };
+
+  private readonly clearPreview = (): void => {
+    for (const cell of this.previewCells) {
+      delete cell.dataset["brunoDragFillPreview"];
+      cell.style.removeProperty("outline");
+      cell.style.removeProperty("outline-offset");
+    }
+    this.previewCells.clear();
+  };
+
+  private readonly notify = (
+    rejection: Exclude<BrunoTableDragFillApplyResult, { readonly kind: "accepted" }>,
+    describeCoordinate?: (coordinate: BrunoTableCellCoordinate) => string,
+  ): void => {
+    const coordinate =
+      rejection.rowId === undefined || rejection.columnId === undefined
+        ? undefined
+        : describeCoordinate?.({ rowId: rejection.rowId, columnId: rejection.columnId });
+    const boundedCoordinate =
+      coordinate === undefined ? undefined : boundDiagnosticText(coordinate, 160);
+    const reason = boundDiagnosticText(
+      rejection.detail ?? formatBrunoTableDragFillRejectionReason(rejection.reason),
+      240,
+    );
+    const additional = rejection.additionalInvalidCount ?? 0;
+    const message = `${boundedCoordinate === undefined ? "" : `${boundedCoordinate}: `}${reason}${
+      additional === 0 ? "" : ` (+${String(additional)} more)`
+    } Nothing was applied.`;
+    this.notificationStore.setState((previous) =>
+      Object.freeze({ sequence: previous.sequence + 1, message }),
+    );
+  };
+
+  private readonly scheduleReconcile = (): void => {
+    const view = this.registration?.grid.ownerDocument.defaultView;
+    if (view === null || view === undefined || this.reconcileFrame !== null) return;
+    this.reconcileFrame = view.requestAnimationFrame(() => {
+      this.reconcileFrame = null;
+      this.reconcile();
+    });
+  };
+
+  private readonly releasePointer = (pointer: PointerGesture): void => {
+    if (pointer.frame !== null) {
+      pointer.view.cancelAnimationFrame(pointer.frame);
+      if (
+        __BRUNO_TABLE_TEST_DIAGNOSTICS__ &&
+        this.tableId !== undefined &&
+        hasBrunoTableClientDragFillFrameListener(this.tableId)
+      ) {
+        recordBrunoTableClientDragFillFrame(this.tableId, {
+          phase: "cancelled",
+          frameId: pointer.frame,
+        });
+      }
+      pointer.frame = null;
+    }
+    pointer.view.removeEventListener("pointermove", this.onPointerMove, true);
+    pointer.view.removeEventListener("pointerup", this.onPointerUp, true);
+    pointer.view.removeEventListener("pointercancel", this.onPointerCancel, true);
+    try {
+      if (pointer.grid.hasPointerCapture(pointer.pointerId)) {
+        pointer.grid.releasePointerCapture(pointer.pointerId);
+      }
+    } catch {
+      // Synthetic pointer input may not own native pointer capture.
+    }
+    if (this.pointer === pointer) this.pointer = undefined;
+  };
+
+  private readonly removeHandle = (): void => {
+    this.handle?.removeEventListener("pointerdown", this.start);
+    this.handle?.remove();
+    this.handle = undefined;
+    this.handleHost = undefined;
+  };
+
+  private readonly unregister = (): void => {
+    this.invalidate();
+    this.observer?.disconnect();
+    this.observer = undefined;
+    const view = this.registration?.grid.ownerDocument.defaultView;
+    if (this.reconcileFrame !== null && view !== null && view !== undefined) {
+      view.cancelAnimationFrame(this.reconcileFrame);
+    }
+    this.reconcileFrame = null;
+    this.clearPreview();
+    this.removeHandle();
+    this.registration = undefined;
+  };
+}
+
+function captureGesture(
+  source: BrunoTableDragFillSource,
+  structure: BrunoTableCellRangeStructure,
+  axis: BrunoTableCellRangeAxis,
+): BrunoTableDragFillGesture | undefined {
+  const identities = identitiesForAxis(structure, axis);
+  const indexById = indexForAxis(structure, axis);
+  const sourceIdentities = axis === "horizontal" ? source.columnIds : source.rowIds;
+  return captureBrunoTableDragFillGesture({
+    axis,
+    identities,
+    indexById,
+    sourceCanonicalTexts: source.canonicalTexts,
+    sourceFirstIdentity: sourceIdentities[0]!,
+    sourceLastIdentity: sourceIdentities.at(-1)!,
+  });
+}
+
+function identitiesForAxis(
+  structure: BrunoTableCellRangeStructure,
+  axis: BrunoTableCellRangeAxis,
+): readonly string[] {
+  return axis === "horizontal" ? structure.columnIds : structure.rowIds;
+}
+
+function indexForAxis(
+  structure: BrunoTableCellRangeStructure,
+  axis: BrunoTableCellRangeAxis,
+): ReadonlyMap<string, number> {
+  return axis === "horizontal" ? structure.columnIndexById : structure.rowIndexById;
+}
+
+function freezeSource(source: BrunoTableDragFillSource): BrunoTableDragFillSource {
+  return Object.freeze({
+    shapeIdentity: source.shapeIdentity,
+    axis: source.axis,
+    rowIds: Object.freeze([...source.rowIds]) as NonEmptyStrings,
+    columnIds: Object.freeze([...source.columnIds]) as NonEmptyStrings,
+    canonicalTexts: Object.freeze([...source.canonicalTexts]) as NonEmptyStrings,
+    handle: Object.freeze({ ...source.handle }),
+  });
+}
+
+function isBrunoTableDragFillSource(
+  source: BrunoTableDragFillSourceShape | undefined,
+): source is BrunoTableDragFillSource {
+  return source !== undefined && "canonicalTexts" in source;
+}
+
+function sameProjection(
+  left: BrunoTableDragFillProjection,
+  right: BrunoTableDragFillProjection,
+): boolean {
+  return left.active === right.active && left.axis === right.axis;
+}
+
+function hitAtPointer(pointer: PointerGesture) {
+  const bounds = pointer.grid.getBoundingClientRect();
+  if (
+    pointer.clientX < bounds.left ||
+    pointer.clientX > bounds.right ||
+    pointer.clientY < bounds.top ||
+    pointer.clientY > bounds.bottom
+  ) {
+    return undefined;
+  }
+  const target =
+    pointer.grid.ownerDocument.elementFromPoint?.(pointer.clientX, pointer.clientY) ??
+    (pointer.eventTarget instanceof Element ? pointer.eventTarget : null);
+  return brunoTableCellRangePointerHit(target, pointer.grid);
+}
+
+function edgeDelta(position: number, start: number, end: number): number {
+  if (end <= start || position < start || position > end) return 0;
+  return position < start + DRAG_FILL_AUTOSCROLL_ZONE
+    ? -DRAG_FILL_AUTOSCROLL_STEP
+    : position > end - DRAG_FILL_AUTOSCROLL_ZONE
+      ? DRAG_FILL_AUTOSCROLL_STEP
+      : 0;
+}
+
+function readInteractionGeometry(
+  registration: DragFillRegistration,
+  grid: HTMLElement,
+): BrunoTableDragFillInteractionGeometry {
+  const geometry = registration.interactionGeometry?.();
+  if (
+    geometry !== undefined &&
+    Number.isFinite(geometry.bodyTop) &&
+    Number.isFinite(geometry.bodyBottom) &&
+    Number.isFinite(geometry.centreLeft) &&
+    Number.isFinite(geometry.centreRight) &&
+    geometry.bodyBottom > geometry.bodyTop &&
+    geometry.centreRight >= geometry.centreLeft
+  ) {
+    return geometry;
+  }
+  const fallback = grid.getBoundingClientRect();
+  return Object.freeze({
+    bodyTop: fallback.top,
+    bodyBottom: fallback.bottom,
+    centreLeft: fallback.left,
+    centreRight: fallback.right,
+  });
+}
+
+function ownedMountedCells(grid: HTMLElement): readonly HTMLElement[] {
+  return [
+    ...grid.querySelectorAll<HTMLElement>(
+      '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
+    ),
+  ].filter((cell) => cell.closest('[role="grid"]') === grid);
+}
+
+function findMountedCell(
+  grid: HTMLElement,
+  coordinate: BrunoTableCellCoordinate,
+): HTMLElement | undefined {
+  const matches = ownedMountedCells(grid).filter(
+    (cell) =>
+      cell.dataset["brunoRowId"] === coordinate.rowId &&
+      cell.dataset["brunoColumnId"] === coordinate.columnId,
+  );
+  const topmost = matches.find((cell) => isTopmostMountedCell(grid, cell));
+  if (topmost !== undefined) return topmost;
+  return (
+    matches.find((cell) => cell.closest("[data-bruno-pinned-body-region]") !== null) ?? matches[0]
+  );
+}
+
+function isTopmostMountedCell(grid: HTMLElement, cell: HTMLElement): boolean {
+  const rect = cell.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const target = grid.ownerDocument.elementFromPoint?.(x, y);
+  return target !== null && target !== undefined && cell.contains(target);
+}
+
+export function formatBrunoTableDragFillRejectionReason(
+  reason: BrunoTableDragFillRejectionReason,
+): string {
+  switch (reason) {
+    case "structure-changed":
+      return "The fill destination changed before release.";
+    case "temporarily-unavailable":
+      return "Editing is temporarily unavailable.";
+    case "invalid-target":
+      return "The fill target is invalid.";
+    case "save-locked":
+      return "This destination cell is saving.";
+    case "unavailable":
+      return "This destination cell is unavailable.";
+    case "stale":
+      return "Resolve this cell's stale conflict before filling.";
+    case "blocked":
+      return "Resolve this cell's blocked edit before filling.";
+    case "row-version":
+      return "This destination row has no usable Row Version.";
+    case "invalid-source":
+      return "The source value is invalid.";
+    case "read-only":
+      return "This destination cell is read-only.";
+    case "invalid-value":
+      return "A repeated value is invalid for its destination.";
+    case "empty":
+      return "The fill target is empty.";
+    case "unchanged":
+      return "The repeated values did not change the table.";
+  }
+}
+
+function boundDiagnosticText(text: string, maximum: number): string {
+  const normalized = text.trim().replaceAll(/\s+/g, " ");
+  return normalized.length <= maximum ? normalized : `${normalized.slice(0, maximum - 1)}…`;
+}

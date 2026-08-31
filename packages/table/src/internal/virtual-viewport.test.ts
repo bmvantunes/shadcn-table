@@ -336,6 +336,57 @@ describe("BrunoTableViewportRuntime", () => {
     expect(element.scrollTop).toBeLessThanOrEqual(BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT);
   });
 
+  it("reports segmented logical vertical movement even when recentering preserves its physical anchor", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(200_000, columns);
+    viewport.attach(element);
+    viewport.revealCell(115_000, "COL_ID_NAME");
+    callbacks.shift()!(0);
+    viewport.adjustVerticalByLogical(40);
+    callbacks.shift()!(0);
+    const physicalAnchor = element.scrollTop;
+    const before = viewport.getSnapshot().virtualWindow.rowStart;
+
+    expect(viewport.scrollVerticalByLogical(12)).toBe(true);
+    callbacks.shift()!(0);
+    const afterFirst = viewport.getSnapshot().virtualWindow.rowStart;
+    expect(element.scrollTop).toBe(physicalAnchor);
+
+    expect(viewport.scrollVerticalByLogical(12)).toBe(true);
+    callbacks.shift()!(0);
+
+    expect(element.scrollTop).toBe(physicalAnchor);
+    expect(afterFirst).toBe(before);
+    expect(viewport.getSnapshot().virtualWindow.rowStart).toBeGreaterThan(before);
+
+    expect(viewport.scrollVerticalByLogical(Number.MAX_SAFE_INTEGER)).toBe(true);
+    callbacks.shift()!(0);
+    expect(viewport.scrollVerticalByLogical(12)).toBe(false);
+  });
+
   it("frame-batches pinned-aware scrollbar geometry onto only the overlay subtree", () => {
     const columns = compileColumns([
       {

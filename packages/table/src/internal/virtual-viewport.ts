@@ -201,6 +201,17 @@ export class BrunoTableViewportRuntime {
     return element.scrollTop;
   };
 
+  public readonly scrollVerticalByLogical = (delta: number): boolean => {
+    const element = this.element;
+    if (element === null || !Number.isFinite(delta) || delta === 0) return false;
+    const previous = this.readLogicalScrollTop(element, false);
+    this.setLogicalScrollTop(element, previous + delta);
+    const next = this.readLogicalScrollTop(element, false);
+    if (next === previous) return false;
+    this.schedulePublish();
+    return true;
+  };
+
   public readonly setLeadingUtilityWidth = (leadingUtilityWidth: number): boolean => {
     const next = normalizedLeadingUtilityWidth(leadingUtilityWidth);
     if (next === this.leadingUtilityWidth) return false;
