@@ -402,6 +402,8 @@ export class BrunoTablePasteRuntime {
   private readonly actor = createBrunoTablePasteActor();
   private readonly store = new Store<BrunoTablePasteSnapshot>(CLOSED_PASTE_SNAPSHOT);
   private readonly notificationStore = new Store<PasteNotification>(EMPTY_PASTE_NOTIFICATION);
+  private clipboardReadSequence = 0;
+  private clipboardReadPending = false;
   private attempt:
     | ((
         confirmation: BrunoTablePasteConfirmation,
@@ -467,6 +469,18 @@ export class BrunoTablePasteRuntime {
     this.notificationStore.setState((previous) =>
       Object.freeze({ sequence: previous.sequence + 1, message: "" }),
     );
+  public readonly isClipboardReadPending = (): boolean => this.clipboardReadPending;
+  public readonly beginClipboardRead = (): number | undefined => {
+    if (this.clipboardReadPending) return undefined;
+    this.clipboardReadPending = true;
+    this.clipboardReadSequence += 1;
+    return this.clipboardReadSequence;
+  };
+  public readonly finishClipboardRead = (sequence: number): boolean => {
+    if (!this.clipboardReadPending || sequence !== this.clipboardReadSequence) return false;
+    this.clipboardReadPending = false;
+    return true;
+  };
   public readonly register = (
     attempt: NonNullable<BrunoTablePasteRuntime["attempt"]>,
     restoreFocus: () => void,
@@ -507,6 +521,8 @@ export class BrunoTablePasteRuntime {
     this.restoreFocus();
   };
   public readonly dispose = (): void => {
+    this.clipboardReadSequence += 1;
+    this.clipboardReadPending = false;
     this.actor.stop();
     this.attempt = undefined;
     this.restoreFocus = this.fallbackFocus;

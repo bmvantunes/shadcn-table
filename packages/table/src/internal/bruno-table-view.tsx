@@ -2686,8 +2686,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     },
     [pasteRuntime],
   );
-  const pasteReadSequence = useRef(0);
-  const pasteReadPending = useRef(false);
   useLayoutEffect(() => {
     latestPasteStructure.current = cellRangeStructure;
     latestPasteColumnLabels.current = new Map(
@@ -2696,8 +2694,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   }, [cellRangeStructure, logicalColumns]);
   useEffect(
     () => () => {
-      pasteReadSequence.current += 1;
-      pasteReadPending.current = false;
       latestPasteStructure.current = undefined;
       latestPasteColumnLabels.current = undefined;
     },
@@ -2714,11 +2710,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       return;
     }
     event.preventDefault();
-    if (pasteReadPending.current) {
+    if (pasteRuntime.isClipboardReadPending()) {
       rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-pending"));
       return;
     }
-    const readSequence = ++pasteReadSequence.current;
     const clipboard = navigator.clipboard;
     if (clipboard?.readText === undefined) {
       rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-unavailable"));
@@ -2740,19 +2735,22 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       rejectDirectPaste(createBrunoTablePasteDiagnostic("no-target"));
       return;
     }
+    const readSequence = pasteRuntime.beginClipboardRead();
+    if (readSequence === undefined) {
+      rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-pending"));
+      return;
+    }
     let read: Promise<string>;
     try {
-      pasteReadPending.current = true;
       read = clipboard.readText();
     } catch {
-      pasteReadPending.current = false;
+      pasteRuntime.finishClipboardRead(readSequence);
       rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-rejected"));
       return;
     }
     void read.then(
       (text) => {
-        if (pasteReadSequence.current !== readSequence) return;
-        pasteReadPending.current = false;
+        if (!pasteRuntime.finishClipboardRead(readSequence)) return;
         const currentStructure = latestPasteStructure.current;
         if (
           currentStructure === undefined ||
@@ -2816,8 +2814,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         );
       },
       () => {
-        if (pasteReadSequence.current !== readSequence) return;
-        pasteReadPending.current = false;
+        if (!pasteRuntime.finishClipboardRead(readSequence)) return;
         rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-rejected"));
       },
     );
@@ -3160,7 +3157,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         "aria-keyshortcuts",
         getBrunoTableGridAriaKeyShortcuts({
           copyEnabled,
-          pasteEnabled: cellEdit !== undefined,
+          pasteEnabled: cellEdit !== undefined && cellRange !== undefined,
           redoEnabled: availability.redo,
           rowSelectionEnabled: rowSelection !== undefined,
           undoEnabled: availability.undo,
@@ -3169,7 +3166,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     };
     reconcile();
     return editMemory.subscribeHotkeyAvailability(reconcile);
-  }, [cellEdit, copyEnabled, editMemory, rowSelection]);
+  }, [cellEdit, cellRange, copyEnabled, editMemory, rowSelection]);
   useLayoutEffect(() => {
     if (cellEdit === undefined) return;
     const reconcileAndScheduleTraversal = () => {
@@ -3342,7 +3339,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           editMemory === undefined
             ? getBrunoTableGridAriaKeyShortcuts({
                 copyEnabled,
-                pasteEnabled: cellEdit !== undefined,
+                pasteEnabled: cellEdit !== undefined && cellRange !== undefined,
                 redoEnabled: false,
                 rowSelectionEnabled: rowSelection !== undefined,
                 undoEnabled: false,

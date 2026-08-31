@@ -697,7 +697,7 @@ test("rejects a gesture containing an Immediate save-locked cell without a valid
     await expect.element(grid.getByRole("gridcell", { name: "first", exact: true })).toBeVisible();
   } finally {
     restoreSecondClipboard?.();
-    if (restoreSecondClipboard === undefined) restoreFirstClipboard();
+    restoreFirstClipboard();
   }
 });
 
@@ -762,7 +762,7 @@ test("rejects a stale Batch destination without overwriting conflict evidence", 
     expect(onSaveEdits).not.toHaveBeenCalled();
   } finally {
     restoreSecondClipboard?.();
-    if (restoreSecondClipboard === undefined) restoreFirstClipboard();
+    restoreFirstClipboard();
   }
 });
 

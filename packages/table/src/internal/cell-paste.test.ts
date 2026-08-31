@@ -356,4 +356,25 @@ describe("BrunoTable Cell Paste", () => {
     );
     runtime.dispose();
   });
+
+  test("owns one clipboard read across surface registration lifetimes", () => {
+    const runtime = new BrunoTablePasteRuntime();
+    const firstRead = runtime.beginClipboardRead();
+    expect(firstRead).toBe(1);
+    expect(runtime.isClipboardReadPending()).toBe(true);
+
+    const release = runtime.register(
+      () => ({ kind: "accepted" }),
+      () => undefined,
+      ({ rowId, columnId }) => createBrunoTablePasteCoordinateEvidence(columnId, rowId),
+    );
+    release();
+
+    expect(runtime.beginClipboardRead()).toBeUndefined();
+    expect(runtime.finishClipboardRead(firstRead!)).toBe(true);
+    expect(runtime.isClipboardReadPending()).toBe(false);
+    expect(runtime.beginClipboardRead()).toBe(2);
+    runtime.dispose();
+    expect(runtime.finishClipboardRead(2)).toBe(false);
+  });
 });

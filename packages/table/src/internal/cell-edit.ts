@@ -3020,7 +3020,7 @@ export class BrunoTableCellEditRuntime {
     }
     return this.applyAcceptedDraftGesture(Object.freeze([first, ...rest]))
       ? Object.freeze({ kind: "accepted" })
-      : Object.freeze({ kind: "rejected", reason: "unchanged" });
+      : Object.freeze({ kind: "rejected", reason: "temporarily-unavailable" });
   };
 
   public readonly applyAcceptedDraftGesture = (

@@ -9919,4 +9919,22 @@ describe("BrunoTable Cell Edit Session", () => {
       expect(onCommitGesture).not.toHaveBeenCalled();
     }
   });
+
+  it("reports a refused Immediate Paste admission as temporarily unavailable", () => {
+    const onCommitGesture = vi.fn(() => "rejected" as const);
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture,
+    });
+
+    expect(
+      runtime.applyCanonicalTextGesture([
+        { rowId: row.id, columnId: "COL_ID_SCORE", canonicalText: "7" },
+      ]),
+    ).toEqual({ kind: "rejected", reason: "temporarily-unavailable" });
+    expect(onCommitGesture).toHaveBeenCalledOnce();
+    expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
+  });
 });
