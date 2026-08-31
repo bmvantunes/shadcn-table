@@ -8019,6 +8019,75 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
   });
 
+  it("rolls back an Immediate Mine resolution when save admission throws", () => {
+    let current = row;
+    let throwOnResolution = false;
+    const onCommitGesture = vi.fn(() => {
+      if (throwOnResolution) throw new Error("save admission failed");
+      return "admitted" as const;
+    });
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+      onCommitGesture,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: row.quantity,
+          base: row.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(true);
+    current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    const conflict = runtime.getDraftReviewSnapshot()[0]!;
+    const reviewObservations: number[] = [];
+    const activityObservations: number[] = [];
+    const cellObservations: boolean[] = [];
+    const unsubscribeReview = runtime.subscribeDraftReview(() => {
+      reviewObservations.push(runtime.getDraftReviewSnapshot()[0]?.conflict === undefined ? 0 : 1);
+    });
+    const unsubscribeActivity = runtime.subscribeActivity(() => {
+      activityObservations.push(runtime.getActivitySnapshot().conflictCount);
+    });
+    const unsubscribeCell = runtime.subscribeCell(row.id, "COL_ID_SCORE", () => {
+      cellObservations.push(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").conflicted === true);
+    });
+    throwOnResolution = true;
+
+    try {
+      expect(
+        runtime.resolveDraftConflicts([
+          {
+            id: conflict.id,
+            resolution: "mine",
+            reviewedServer: conflict.conflict!.server,
+            reviewedServerVersion: conflict.conflict!.serverVersion,
+          },
+        ]),
+      ).toBe(false);
+      expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({
+        mine: 7,
+        conflict: { server: 5, serverVersion: row.quantity + 1n },
+      });
+      expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 1 });
+      expect(reviewObservations.every((count) => count === 1)).toBe(true);
+      expect(activityObservations.every((count) => count === 1)).toBe(true);
+      expect(cellObservations.every(Boolean)).toBe(true);
+    } finally {
+      unsubscribeReview();
+      unsubscribeActivity();
+      unsubscribeCell();
+    }
+  });
+
   it("rolls back a scalar Immediate commit when save admission is rejected", () => {
     const runtime = new BrunoTableCellEditRuntime({
       columns,

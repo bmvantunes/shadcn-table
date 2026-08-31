@@ -3502,12 +3502,15 @@ export class BrunoTableCellEditRuntime {
         if (this.cellStores.size > 0) this.publishCell(patch.cellKey, nextDrafts);
       }
       this.publishActivitySnapshot();
-      admissionResult.value =
-        firstCommittedChange === undefined
-          ? undefined
-          : this.onCommitGesture(
-              Object.freeze([firstCommittedChange, ...remainingCommittedChanges]),
-            );
+      if (firstCommittedChange !== undefined) {
+        try {
+          admissionResult.value = this.onCommitGesture(
+            Object.freeze([firstCommittedChange, ...remainingCommittedChanges]),
+          );
+        } catch {
+          admissionResult.value = "rejected";
+        }
+      }
       if (admissionResult.value === false || admissionResult.value === "rejected") {
         for (const key of historyPatches.keys()) {
           this.syncBlockedDraftKey(key, previousDrafts.get(key));
