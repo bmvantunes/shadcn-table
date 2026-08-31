@@ -298,6 +298,42 @@ describe("BrunoTable Drag Fill acceptance", () => {
     );
   });
 
+  test("uses a visible Immediate Accepted Overlay as the next Drag Fill source", async () => {
+    let resolveFirstSave!: () => void;
+    const onSaveEdits = vi.fn(() =>
+      onSaveEdits.mock.calls.length === 1
+        ? new Promise<void>((resolve) => {
+            resolveFirstSave = resolve;
+          })
+        : Promise.resolve(),
+    );
+    const tableId = "TABLE_ID_DRAG_FILL_ACCEPTED_OVERLAY";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit First" }), "overlay");
+    await userEvent.keyboard("{Enter}");
+    resolveFirstSave();
+    await expect
+      .element(screen.getByRole("region", { name: "Edit safety" }))
+      .toHaveTextContent("1 Immediate save accepted · waiting for live confirmation");
+    await expect.element(cell(grid, "overlay")).toBeVisible();
+
+    await dragTo(grid.element(), cell(grid, "beta"), 211);
+
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledTimes(2));
+    const secondCall = onSaveEdits.mock.calls[1] as readonly [ObservedSaveChangeSet] | undefined;
+    expect(secondCall?.[0][0]?.changes).toEqual([
+      {
+        columnId: "COL_ID_SECOND",
+        field: "second",
+        before: "beta",
+        after: "overlay",
+      },
+    ]);
+  });
+
   test("completes a production Drag Fill onto a pinned destination cell", async () => {
     const onSaveEdits = vi.fn(() => Promise.resolve());
     const tableId = "TABLE_ID_DRAG_FILL_PINNED_DESTINATION";

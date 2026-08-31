@@ -503,28 +503,30 @@ export class BrunoTableDragFillRuntime {
 
   private readonly start = (event: PointerEvent): void => {
     const registration = this.registration;
-    const sourceShape = registration?.getSourceShape();
+    if (registration === undefined) return;
+    const sourceShape = registration.getSourceShape();
+    const structure = registration.getStructure();
+    const view = registration.grid.ownerDocument.defaultView;
+    if (
+      sourceShape === undefined ||
+      structure === undefined ||
+      view === null ||
+      event.button !== 0 ||
+      this.pointer !== undefined
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
     let source: BrunoTableDragFillSource | undefined;
     try {
       source =
-        registration?.captureSource?.() ??
+        registration.captureSource?.() ??
         (isBrunoTableDragFillSource(sourceShape) ? sourceShape : undefined);
     } catch {
       source = undefined;
     }
-    const structure = registration?.getStructure();
-    const view = registration?.grid.ownerDocument.defaultView;
-    if (
-      registration === undefined ||
-      sourceShape === undefined ||
-      source === undefined ||
-      source.shapeIdentity !== sourceShape.shapeIdentity ||
-      structure === undefined ||
-      view === null ||
-      view === undefined ||
-      event.button !== 0 ||
-      this.pointer !== undefined
-    ) {
+    if (source === undefined || source.shapeIdentity !== sourceShape.shapeIdentity) {
       return;
     }
     const capturedSource = freezeSource(source);
@@ -532,8 +534,6 @@ export class BrunoTableDragFillRuntime {
     const gesture =
       sourceAxis === undefined ? undefined : captureGesture(capturedSource, structure, sourceAxis);
     if (sourceAxis !== undefined && gesture === undefined) return;
-    event.preventDefault();
-    event.stopPropagation();
     const pointer: PointerGesture = {
       pointerId: event.pointerId,
       grid: registration.grid,
@@ -703,7 +703,10 @@ export class BrunoTableDragFillRuntime {
     if (pointer.gesture === undefined) return false;
     if (lockedAxis === undefined) this.actor.send({ type: "LOCK_AXIS", axis });
     const gridBounds = pointer.grid.getBoundingClientRect();
-    const hit = hitAtPointer(pointer, gridBounds);
+    const geometry = allowAutoscroll
+      ? readInteractionGeometry(pointer.registration, gridBounds)
+      : undefined;
+    const hit = hitAtPointer(pointer, gridBounds, geometry);
     if (hit !== undefined) {
       const targetIdentity = axis === "horizontal" ? hit.columnId : hit.rowId;
       if (pointer.projectedAxis !== axis || pointer.projectedTargetIdentity !== targetIdentity) {
@@ -721,7 +724,7 @@ export class BrunoTableDragFillRuntime {
       this.clearPreview();
     }
     if (!allowAutoscroll) return false;
-    const geometry = readInteractionGeometry(pointer.registration, gridBounds);
+    if (geometry === undefined) return false;
     if (axis === "horizontal") {
       const delta = edgeDelta(
         pointer.clientX,
@@ -954,19 +957,40 @@ function sameProjection(
   return left.active === right.active && left.axis === right.axis;
 }
 
-function hitAtPointer(pointer: PointerGesture, bounds: DOMRectReadOnly) {
-  if (
+function hitAtPointer(
+  pointer: PointerGesture,
+  bounds: DOMRectReadOnly,
+  outsideSamplingGeometry?: BrunoTableDragFillInteractionGeometry,
+) {
+  const outside =
     pointer.clientX < bounds.left ||
     pointer.clientX > bounds.right ||
     pointer.clientY < bounds.top ||
-    pointer.clientY > bounds.bottom
-  ) {
-    return undefined;
+    pointer.clientY > bounds.bottom;
+  let clientX = pointer.clientX;
+  let clientY = pointer.clientY;
+  if (outside) {
+    if (outsideSamplingGeometry === undefined) return undefined;
+    clientX = clampInside(
+      pointer.clientX,
+      outsideSamplingGeometry.centreLeft,
+      outsideSamplingGeometry.centreRight,
+    );
+    clientY = clampInside(
+      pointer.clientY,
+      outsideSamplingGeometry.bodyTop,
+      outsideSamplingGeometry.bodyBottom,
+    );
   }
   const target =
-    pointer.grid.ownerDocument.elementFromPoint?.(pointer.clientX, pointer.clientY) ??
+    pointer.grid.ownerDocument.elementFromPoint?.(clientX, clientY) ??
     (pointer.eventTarget instanceof Element ? pointer.eventTarget : null);
   return brunoTableCellRangePointerHit(target, pointer.grid);
+}
+
+function clampInside(value: number, start: number, end: number): number {
+  if (end - start <= 2) return start + (end - start) / 2;
+  return Math.max(start + 1, Math.min(value, end - 1));
 }
 
 function edgeDelta(

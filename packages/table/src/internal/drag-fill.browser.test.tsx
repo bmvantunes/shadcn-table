@@ -5,7 +5,10 @@ import { cleanup, render } from "vitest-browser-react";
 import { createBrunoTableCellRangeStructure } from "./cell-range-clipboard";
 import { BrunoTableDragFillChrome } from "./drag-fill-chrome";
 import { BrunoTableDragFillRuntime, type BrunoTableDragFillSource } from "./drag-fill";
-import { installBrunoTableClientDragFillFrameListener } from "./render-instrumentation";
+import {
+  type BrunoTableDragFillFrameEvent,
+  installBrunoTableClientDragFillFrameListener,
+} from "./render-instrumentation";
 
 const ownedRuntimes = new Set<BrunoTableDragFillRuntime>();
 
@@ -981,13 +984,97 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     await nextFrame();
     const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
     const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_B"]')!;
+    const bubbledPointerDown = vi.fn();
+    grid.addEventListener("pointerdown", bubbledPointerDown);
+    const down = pointer("pointerdown", 55, centerOf(handle));
 
-    expect(() => handle.dispatchEvent(pointer("pointerdown", 55, centerOf(handle)))).not.toThrow();
+    expect(() => handle.dispatchEvent(down)).not.toThrow();
     window.dispatchEvent(pointer("pointermove", 55, centerOf(target)));
     window.dispatchEvent(pointer("pointerup", 55, centerOf(target)));
 
+    expect(down.defaultPrevented).toBe(true);
+    expect(bubbledPointerDown).not.toHaveBeenCalled();
     expect(runtime.getSnapshot().active).toBe(false);
     expect(apply).not.toHaveBeenCalled();
+  });
+
+  test("does not capture a canonical source for an inadmissible pointerdown", async () => {
+    const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B"]);
+    const captureSource = vi.fn(() => source(["COL_ID_A"], ["stable"]));
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      captureSource,
+      getStructure: () => structure,
+      apply: () => Object.freeze({ kind: "accepted" as const }),
+      scrollHorizontalByPhysical: () => false,
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const secondary = new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 1,
+      cancelable: true,
+      clientX: centerOf(handle).x,
+      clientY: centerOf(handle).y,
+      pointerId: 56,
+    });
+
+    handle.dispatchEvent(secondary);
+
+    expect(captureSource).not.toHaveBeenCalled();
+    expect(secondary.defaultPrevented).toBe(false);
+    expect(runtime.getSnapshot().active).toBe(false);
+
+    handle.dispatchEvent(pointer("pointerdown", 57, centerOf(handle)));
+    expect(captureSource).toHaveBeenCalledOnce();
+    expect(runtime.getSnapshot().active).toBe(true);
+    handle.dispatchEvent(pointer("pointerdown", 58, centerOf(handle)));
+    expect(captureSource).toHaveBeenCalledOnce();
+    expect(runtime.getSnapshot().active).toBe(true);
+    window.dispatchEvent(pointer("pointercancel", 57, centerOf(handle)));
+  });
+
+  test("extends the preview through cells revealed by outside-grid autoscroll", async () => {
+    const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B", "COL_ID_C"]);
+    const second = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_B"]')!;
+    const third = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_C"]')!;
+    let sampledTarget = second;
+    vi.spyOn(document, "elementFromPoint").mockImplementation(() => sampledTarget);
+    const scrollHorizontalByPhysical = vi.fn(() => {
+      if (sampledTarget === second) {
+        sampledTarget = third;
+        return true;
+      }
+      return false;
+    });
+    const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      apply,
+      scrollHorizontalByPhysical,
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const bounds = grid.getBoundingClientRect();
+    const outside = { x: bounds.right + 20, y: centerOf(second).y };
+    handle.dispatchEvent(pointer("pointerdown", 57, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 57, outside));
+    await nextFrame();
+    await nextFrame();
+    window.dispatchEvent(pointer("pointerup", 57, outside));
+
+    expect(scrollHorizontalByPhysical).toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledWith([
+      { rowId: "ROW_ID_1", columnId: "COL_ID_B", canonicalText: "stable" },
+      { rowId: "ROW_ID_1", columnId: "COL_ID_C", canonicalText: "stable" },
+    ]);
   });
 
   test("does not scan a multi-cell source span in the first axis-acquisition frame", async () => {
@@ -1261,7 +1348,7 @@ describe("BrunoTable Drag Fill browser runtime", () => {
 
   test("records scheduled, ran, and cancelled Drag Fill frames only for its table", async () => {
     const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B"]);
-    const frames: Array<{ readonly phase: string; readonly frameId: number }> = [];
+    const frames: BrunoTableDragFillFrameEvent[] = [];
     const disposeDiagnostics = installBrunoTableClientDragFillFrameListener("orders", (event) => {
       frames.push(event);
     });

@@ -5018,6 +5018,63 @@ describe("BrunoTable Cell Edit Session", () => {
     });
   });
 
+  it("captures visible Accepted Overlay values ahead of drafts for edit commands", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("5")).toBe(true);
+    runtime.acceptSave(
+      "operation-1",
+      [
+        {
+          rowId: row.id,
+          baseRow: row,
+          expectedVersion: 1n,
+          changes: [
+            {
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: row.score,
+              after: 7,
+            },
+          ],
+        },
+      ],
+      false,
+    );
+    const firstCommand = runtime.captureEditValueCommandReader();
+
+    runtime.acceptSave(
+      "operation-2",
+      [
+        {
+          rowId: row.id,
+          baseRow: row,
+          expectedVersion: 1n,
+          changes: [
+            {
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: row.score,
+              after: 8,
+            },
+          ],
+        },
+      ],
+      false,
+    );
+
+    expect(firstCommand("row-1", "COL_ID_SCORE")).toEqual({
+      hasEditValue: true,
+      value: 7,
+      presentationColumn: columns.find((column) => column.columnId === "COL_ID_SCORE"),
+    });
+    expect(runtime.captureEditValueCommandReader()("row-1", "COL_ID_SCORE")).toEqual({
+      hasEditValue: true,
+      value: 8,
+      presentationColumn: columns.find((column) => column.columnId === "COL_ID_SCORE"),
+    });
+  });
+
   it("preserves compatible drafts across recompiles and prunes a changed value domain", () => {
     const compileTextColumns = () =>
       compileColumns([

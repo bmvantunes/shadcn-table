@@ -2766,6 +2766,45 @@ export class BrunoTableCellEditRuntime {
     };
   };
 
+  public readonly captureEditValueCommandReader = (): ((
+    rowId: string,
+    columnId: string,
+  ) =>
+    | Readonly<{
+        readonly hasEditValue: false;
+      }>
+    | Readonly<{
+        readonly hasEditValue: true;
+        readonly value: unknown;
+        readonly presentationColumn?: CompiledFieldColumn;
+      }>) => {
+    const drafts = this.draftStore.get();
+    const acceptedOverlays = this.acceptedOverlays;
+    return (rowId, columnId) => {
+      const key = cellKey(rowId, columnId);
+      const acceptedOverlay = acceptedOverlays.get(key);
+      if (acceptedOverlay !== undefined) {
+        return Object.freeze({
+          hasEditValue: true,
+          value: acceptedOverlay.after,
+          ...(acceptedOverlay.valueAuthority.presentationColumn === undefined
+            ? {}
+            : { presentationColumn: acceptedOverlay.valueAuthority.presentationColumn }),
+        });
+      }
+      const draft = drafts.get(key);
+      return draft === undefined
+        ? Object.freeze({ hasEditValue: false })
+        : Object.freeze({
+            hasEditValue: true,
+            value: draft.mine,
+            ...(draft.presentationColumn === undefined
+              ? {}
+              : { presentationColumn: draft.presentationColumn }),
+          });
+    };
+  };
+
   public readonly getActiveCandidateSnapshot = (): ActiveCandidateSnapshot =>
     this.candidateStore.get();
 

@@ -2719,7 +2719,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     let snapshot: ReturnType<typeof captureBrunoTableClipboardSnapshot>;
     try {
       const readCell = runtime.captureCellCommandReader();
-      const readDraft = cellEdit?.captureDraftCommandReader();
+      const readEditValue = cellEdit?.captureEditValueCommandReader();
       snapshot = captureBrunoTableClipboardSnapshot(target, ({ rowId, columnId }) => {
         const cell = readCell(rowId, columnId);
         if (
@@ -2730,10 +2730,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         ) {
           return undefined;
         }
-        const draft = readDraft?.(rowId, columnId);
+        const editValue = readEditValue?.(rowId, columnId);
+        const editPresentationColumn =
+          editValue?.hasEditValue === true ? editValue.presentationColumn : undefined;
         return {
-          value: draft?.hasDraft === true ? draft.value : cell.value,
-          formatCanonicalText: cell.column.semantics.formatCanonicalText,
+          value: editValue?.hasEditValue === true ? editValue.value : cell.value,
+          formatCanonicalText:
+            editPresentationColumn?.semantics.formatCanonicalText ??
+            cell.column.semantics.formatCanonicalText,
         };
       });
     } catch {
@@ -2788,7 +2792,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     latestDragFillStructure.current =
       previousDragFillStructure !== undefined &&
       cellRangeStructure !== undefined &&
-      sameStringSequence(previousDragFillStructure.rowIds, cellRangeStructure.rowIds) &&
+      previousDragFillStructure.rowIds === cellRangeStructure.rowIds &&
       sameStringSequence(previousDragFillStructure.columnIds, cellRangeStructure.columnIds)
         ? previousDragFillStructure
         : cellRangeStructure;
@@ -3048,7 +3052,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (shape === undefined || cellEdit === undefined) return undefined;
     try {
       const readCell = runtime.captureCellCommandReader();
-      const readDraft = cellEdit.captureDraftCommandReader();
+      const readEditValue = cellEdit.captureEditValueCommandReader();
       const target =
         shape.axis === "horizontal"
           ? Object.freeze({
@@ -3071,10 +3075,15 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         ) {
           return undefined;
         }
-        const draft = readDraft(rowId, columnId);
+        const editValue = readEditValue(rowId, columnId);
+        const editPresentationColumn = editValue.hasEditValue
+          ? editValue.presentationColumn
+          : undefined;
         return Object.freeze({
-          value: draft.hasDraft ? draft.value : cell.value,
-          formatCanonicalText: cell.column.semantics.formatCanonicalText,
+          value: editValue.hasEditValue ? editValue.value : cell.value,
+          formatCanonicalText:
+            editPresentationColumn?.semantics.formatCanonicalText ??
+            cell.column.semantics.formatCanonicalText,
         });
       });
       return snapshot === undefined
