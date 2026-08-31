@@ -357,6 +357,53 @@ describe("BrunoTable Drag Fill planner", () => {
     ).toBeUndefined();
   });
 
+  it("preserves an exact affected span when identities are appended outside it", () => {
+    const gesture = captureBrunoTableDragFillGesture({
+      axis: "horizontal",
+      identities: orderedColumnIds,
+      indexById: columnIndexById,
+      sourceCanonicalTexts: ["stable"],
+      sourceFirstIdentity: "COL_ID_A",
+      sourceLastIdentity: "COL_ID_A",
+    });
+    const preview = gesture === undefined ? undefined : project(gesture, "COL_ID_D");
+    const identities = Object.freeze([...orderedColumnIds, "COL_ID_G"]);
+    const indexById = new Map(identities.map((columnId, index) => [columnId, index] as const));
+
+    expect(
+      gesture === undefined || preview === undefined
+        ? undefined
+        : materializeBrunoTableDragFillCandidates({ gesture, preview, identities, indexById }),
+    ).toEqual([
+      { identity: "COL_ID_B", canonicalText: "stable" },
+      { identity: "COL_ID_C", canonicalText: "stable" },
+      { identity: "COL_ID_D", canonicalText: "stable" },
+    ]);
+  });
+
+  it("preserves an exact affected span after a uniform index shift", () => {
+    const gesture = captureBrunoTableDragFillGesture({
+      axis: "horizontal",
+      identities: orderedColumnIds,
+      indexById: columnIndexById,
+      sourceCanonicalTexts: ["stable"],
+      sourceFirstIdentity: "COL_ID_B",
+      sourceLastIdentity: "COL_ID_B",
+    });
+    const preview = gesture === undefined ? undefined : project(gesture, "COL_ID_D");
+    const identities = Object.freeze(["COL_ID_PREPENDED", ...orderedColumnIds]);
+    const indexById = new Map(identities.map((columnId, index) => [columnId, index] as const));
+
+    expect(
+      gesture === undefined || preview === undefined
+        ? undefined
+        : materializeBrunoTableDragFillCandidates({ gesture, preview, identities, indexById }),
+    ).toEqual([
+      { identity: "COL_ID_C", canonicalText: "stable" },
+      { identity: "COL_ID_D", canonicalText: "stable" },
+    ]);
+  });
+
   it("returns no preview inside the source or capture for inconsistent source evidence", () => {
     const gesture = capture({
       axis: "horizontal",

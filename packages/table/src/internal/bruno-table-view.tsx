@@ -184,6 +184,7 @@ import {
   createBrunoTableCellRangeStructure,
   createBrunoTableCellRangeStructureFromRowSpace,
   serializeBrunoTableClipboardSnapshot,
+  type BrunoTableCellRange,
   type BrunoTableCellRangeRuntime,
 } from "./cell-range-clipboard";
 import {
@@ -2788,14 +2789,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   );
   useLayoutEffect(() => {
     latestPasteStructure.current = cellRangeStructure;
-    const previousDragFillStructure = latestDragFillStructure.current;
-    latestDragFillStructure.current =
-      previousDragFillStructure !== undefined &&
-      cellRangeStructure !== undefined &&
-      previousDragFillStructure.rowIds === cellRangeStructure.rowIds &&
-      sameStringSequence(previousDragFillStructure.columnIds, cellRangeStructure.columnIds)
-        ? previousDragFillStructure
-        : cellRangeStructure;
+    latestDragFillStructure.current = cellRangeStructure;
     latestPasteColumnLabels.current = new Map(
       logicalColumns.map((column) => [column.columnId, column.headerName]),
     );
@@ -2982,10 +2976,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
 
   const dragFillShape = useRef<
     | Readonly<{
-        readonly structure: ReturnType<typeof createBrunoTableCellRangeStructureFromRowSpace>;
         readonly axis: "horizontal" | "vertical";
-        readonly rowIds: readonly string[];
-        readonly columnIds: readonly string[];
+        readonly sourceFirstIdentity: string;
+        readonly sourceLastIdentity: string;
+        readonly perpendicularIdentity: string;
+        readonly sourceCellCount: number;
+        readonly handle: Readonly<{ readonly rowId: string; readonly columnId: string }>;
+        readonly range: BrunoTableCellRange | undefined;
         readonly identity: object;
         readonly source: BrunoTableDragFillSourceShape;
       }>
@@ -3008,36 +3005,55 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         ? Object.freeze({ rowId: active.rowId, columnId: active.columnId })
         : undefined;
     const selection = cellRange.getSnapshot();
-    const target = clipboardTargetFromSelection(selection, activeCoordinate);
-    if (target === undefined) {
+    const range = selection.range;
+    const cell = activeCoordinate ?? selection.anchor;
+    if (range === undefined && cell === undefined) {
       dragFillShape.current = undefined;
       return;
     }
+    const axis = range?.axis ?? "horizontal";
+    const handle = range?.focus ?? cell!;
+    const parallelSpan =
+      range?.axis === "horizontal"
+        ? range.columnSpan
+        : range?.axis === "vertical"
+          ? range.rowSpan
+          : undefined;
+    const sourceFirstIdentity =
+      parallelSpan === undefined ? handle.columnId : parallelSpan.identities[parallelSpan.start]!;
+    const sourceLastIdentity =
+      parallelSpan === undefined ? handle.columnId : parallelSpan.identities[parallelSpan.end]!;
+    const perpendicularIdentity = axis === "horizontal" ? handle.rowId : handle.columnId;
+    const sourceCellCount =
+      parallelSpan === undefined ? 1 : parallelSpan.end - parallelSpan.start + 1;
     const previous = dragFillShape.current;
     const shapeCurrent =
       previous !== undefined &&
-      previous.structure === structure &&
-      previous.axis === target.axis &&
-      sameStringSequence(previous.rowIds, target.rowIds) &&
-      sameStringSequence(previous.columnIds, target.columnIds);
+      previous.axis === axis &&
+      previous.sourceFirstIdentity === sourceFirstIdentity &&
+      previous.sourceLastIdentity === sourceLastIdentity &&
+      previous.perpendicularIdentity === perpendicularIdentity &&
+      previous.sourceCellCount === sourceCellCount &&
+      previous.handle.rowId === handle.rowId &&
+      previous.handle.columnId === handle.columnId;
     const identity = shapeCurrent ? previous.identity : Object.freeze({});
-    const handle = selection.range?.focus ?? activeCoordinate;
-    if (handle === undefined) {
-      dragFillShape.current = undefined;
-      return;
-    }
     const source = Object.freeze({
       shapeIdentity: identity,
-      axis: target.axis,
-      rowIds: target.rowIds,
-      columnIds: target.columnIds,
+      axis,
+      sourceCellCount,
+      sourceFirstIdentity,
+      sourceLastIdentity,
+      perpendicularIdentity,
       handle: Object.freeze({ ...handle }),
     });
     dragFillShape.current = Object.freeze({
-      structure,
-      axis: target.axis,
-      rowIds: target.rowIds,
-      columnIds: target.columnIds,
+      axis,
+      sourceFirstIdentity,
+      sourceLastIdentity,
+      perpendicularIdentity,
+      sourceCellCount,
+      handle: Object.freeze({ ...handle }),
+      range,
       identity,
       source,
     });
@@ -3048,23 +3064,21 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   );
   const captureDragFillSource = useCallback((): BrunoTableDragFillSource | undefined => {
     refreshDragFillLayout();
-    const shape = getDragFillSourceShape();
-    if (shape === undefined || cellEdit === undefined) return undefined;
+    const currentShape = dragFillShape.current;
+    const shape = currentShape?.source;
+    if (shape === undefined || currentShape === undefined || cellEdit === undefined)
+      return undefined;
     try {
       const readCell = runtime.captureCellCommandReader();
       const readEditValue = cellEdit.captureEditValueCommandReader();
       const target =
-        shape.axis === "horizontal"
+        currentShape.range === undefined
           ? Object.freeze({
-              axis: shape.axis,
-              rowIds: Object.freeze([shape.rowIds[0]!] as const),
-              columnIds: shape.columnIds,
+              axis: "horizontal" as const,
+              rowIds: Object.freeze([shape.handle.rowId] as const),
+              columnIds: Object.freeze([shape.handle.columnId] as const),
             })
-          : Object.freeze({
-              axis: shape.axis,
-              rowIds: shape.rowIds,
-              columnIds: Object.freeze([shape.columnIds[0]!] as const),
-            });
+          : clipboardTargetFromRange(currentShape.range);
       const snapshot = captureBrunoTableClipboardSnapshot(target, ({ rowId, columnId }) => {
         const cell = readCell(rowId, columnId);
         if (
@@ -3088,11 +3102,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       });
       return snapshot === undefined
         ? undefined
-        : Object.freeze({ ...shape, canonicalTexts: snapshot.canonicalTexts });
+        : Object.freeze({
+            ...shape,
+            rowIds: snapshot.rowIds,
+            columnIds: snapshot.columnIds,
+            canonicalTexts: snapshot.canonicalTexts,
+          });
     } catch {
       return undefined;
     }
-  }, [cellEdit, getDragFillSourceShape, refreshDragFillLayout, runtime]);
+  }, [cellEdit, refreshDragFillLayout, runtime]);
   useLayoutEffect(() => {
     const grid = gridElement.current;
     if (grid === null || dragFillRuntime === undefined || cellEdit === undefined) return;
@@ -7354,8 +7373,4 @@ function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
 
 function viewportPageSize(viewport: HTMLElement): number {
   return Math.max(1, Math.floor(Math.max(0, viewport.clientHeight - ROW_HEIGHT) / ROW_HEIGHT));
-}
-
-function sameStringSequence(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
 }

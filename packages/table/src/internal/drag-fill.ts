@@ -9,6 +9,7 @@ import {
 } from "./cell-range-clipboard";
 import {
   captureBrunoTableDragFillGesture,
+  isBrunoTableDragFillGestureCoherent,
   materializeBrunoTableDragFillCandidates,
   projectBrunoTableDragFillPreview,
   resolveBrunoTableDragFillAxis,
@@ -23,6 +24,15 @@ import {
 const DRAG_FILL_SLOP = 4;
 const DRAG_FILL_AUTOSCROLL_ZONE = 24;
 const DRAG_FILL_AUTOSCROLL_STEP = 12;
+export const BRUNO_TABLE_DRAG_FILL_MAX_CELLS = 16_384;
+
+export function isBrunoTableDragFillCellCountAllowed(cellCount: number): boolean {
+  return (
+    Number.isSafeInteger(cellCount) &&
+    cellCount >= 1 &&
+    cellCount <= BRUNO_TABLE_DRAG_FILL_MAX_CELLS
+  );
+}
 
 type NonEmptyStrings = readonly [string, ...string[]];
 
@@ -30,13 +40,19 @@ export type BrunoTableDragFillSourceShape = Readonly<{
   /** Stable opaque identity for the ordered source shape, excluding canonical value publications. */
   readonly shapeIdentity: object;
   readonly axis: BrunoTableCellRangeAxis;
-  readonly rowIds: NonEmptyStrings;
-  readonly columnIds: NonEmptyStrings;
+  readonly sourceCellCount: number;
+  readonly sourceFirstIdentity: string;
+  readonly sourceLastIdentity: string;
+  readonly perpendicularIdentity: string;
   readonly handle: BrunoTableCellCoordinate;
 }>;
 
 export type BrunoTableDragFillSource = BrunoTableDragFillSourceShape &
-  Readonly<{ readonly canonicalTexts: NonEmptyStrings }>;
+  Readonly<{
+    readonly rowIds: NonEmptyStrings;
+    readonly columnIds: NonEmptyStrings;
+    readonly canonicalTexts: NonEmptyStrings;
+  }>;
 
 export type BrunoTableDragFillCell = Readonly<{
   readonly rowId: string;
@@ -358,7 +374,7 @@ type DragFillRegistration = Readonly<{
   readonly getSourceShape: () => BrunoTableDragFillSourceShape | undefined;
   /** One immutable canonical capture, invoked only for an admitted pointerdown. */
   readonly captureSource?: (() => BrunoTableDragFillSource | undefined) | undefined;
-  /** Stable immutable reference until the ordered row or column identities change. */
+  /** Immutable snapshot; its reference may change while the runtime reconciles the affected span. */
   readonly getStructure: () => BrunoTableCellRangeStructure | undefined;
   readonly apply: (
     cells: readonly [BrunoTableDragFillCell, ...BrunoTableDragFillCell[]],
@@ -376,7 +392,6 @@ type PointerGesture = Readonly<{
   readonly view: Window;
   readonly sourceShapeIdentity: object;
   readonly source: BrunoTableDragFillSource;
-  readonly structure: BrunoTableCellRangeStructure;
   readonly startX: number;
   readonly startY: number;
   readonly registration: DragFillRegistration;
@@ -389,6 +404,7 @@ type PointerGesture = Readonly<{
   preview: BrunoTableDragFillPreview | undefined;
   projectedAxis: BrunoTableCellRangeAxis | undefined;
   projectedTargetIdentity: string | undefined;
+  structure: BrunoTableCellRangeStructure;
 };
 
 const EMPTY_PROJECTION: BrunoTableDragFillProjection = Object.freeze({ active: false });
@@ -459,7 +475,7 @@ export class BrunoTableDragFillRuntime {
       this.pointer !== undefined &&
       (source === undefined ||
         structure === undefined ||
-        this.pointer.structure !== structure ||
+        !this.reconcilePointerStructure(this.pointer, structure) ||
         this.pointer.sourceShapeIdentity !== source.shapeIdentity)
     ) {
       this.invalidate();
@@ -511,13 +527,21 @@ export class BrunoTableDragFillRuntime {
       sourceShape === undefined ||
       structure === undefined ||
       view === null ||
-      event.button !== 0 ||
-      this.pointer !== undefined
+      event.button !== 0
     ) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
+    if (this.pointer !== undefined) return;
+    if (!isBrunoTableDragFillCellCountAllowed(sourceShape.sourceCellCount)) {
+      this.notify({
+        kind: "rejected",
+        reason: "invalid-source",
+        detail: `Fill sources may contain at most ${String(BRUNO_TABLE_DRAG_FILL_MAX_CELLS)} cells`,
+      });
+      return;
+    }
     let source: BrunoTableDragFillSource | undefined;
     try {
       source =
@@ -527,6 +551,21 @@ export class BrunoTableDragFillRuntime {
       source = undefined;
     }
     if (source === undefined || source.shapeIdentity !== sourceShape.shapeIdentity) {
+      return;
+    }
+    const capturedCellCount =
+      source.axis === "horizontal" ? source.columnIds.length : source.rowIds.length;
+    const parallelIdentities = source.axis === "horizontal" ? source.columnIds : source.rowIds;
+    const perpendicularIdentities = source.axis === "horizontal" ? source.rowIds : source.columnIds;
+    if (
+      capturedCellCount !== sourceShape.sourceCellCount ||
+      source.canonicalTexts.length !== sourceShape.sourceCellCount ||
+      parallelIdentities[0] !== sourceShape.sourceFirstIdentity ||
+      parallelIdentities.at(-1) !== sourceShape.sourceLastIdentity ||
+      perpendicularIdentities.length !== 1 ||
+      perpendicularIdentities[0] !== sourceShape.perpendicularIdentity
+    ) {
+      this.notify({ kind: "rejected", reason: "invalid-source" });
       return;
     }
     const capturedSource = freezeSource(source);
@@ -594,15 +633,34 @@ export class BrunoTableDragFillRuntime {
       preflight: (): DragFillReleasePreflight => {
         const preview = pointer.preview;
         if (preview === undefined) return Object.freeze({ kind: "cancelled" as const });
+        if (!isBrunoTableDragFillCellCountAllowed(preview.extension.length)) {
+          return Object.freeze({
+            kind: "rejected" as const,
+            rejection: Object.freeze({
+              kind: "rejected" as const,
+              reason: "invalid-target" as const,
+              detail: `Fill destinations may contain at most ${String(BRUNO_TABLE_DRAG_FILL_MAX_CELLS)} cells`,
+            }),
+          });
+        }
         const gesture = pointer.gesture;
         const currentSource = pointer.registration.getSourceShape();
         const sourceCurrent = currentSource?.shapeIdentity === pointer.sourceShapeIdentity;
         const current = pointer.registration.getStructure();
-        const structureCurrent = current !== undefined && pointer.structure === current;
-        const identities = structureCurrent ? identitiesForAxis(current, preview.axis) : undefined;
-        const indexById = structureCurrent ? indexForAxis(current, preview.axis) : undefined;
+        const perpendicularIdentity =
+          preview.axis === "horizontal" ? pointer.source.rowIds[0] : pointer.source.columnIds[0];
+        const perpendicularCurrent =
+          current !== undefined &&
+          perpendicularIdentity !== undefined &&
+          (preview.axis === "horizontal"
+            ? current.rowIndexById.has(perpendicularIdentity)
+            : current.columnIndexById.has(perpendicularIdentity));
+        const identities =
+          current === undefined ? undefined : identitiesForAxis(current, preview.axis);
+        const indexById = current === undefined ? undefined : indexForAxis(current, preview.axis);
         const candidates =
           !sourceCurrent ||
+          !perpendicularCurrent ||
           gesture === undefined ||
           identities === undefined ||
           indexById === undefined
@@ -834,7 +892,8 @@ export class BrunoTableDragFillRuntime {
       240,
     );
     const additional = rejection.additionalInvalidCount ?? 0;
-    const message = `${boundedCoordinate === undefined ? "" : `${boundedCoordinate}: `}${reason}${
+    const terminatedReason = /[.!?…]$/u.test(reason) ? reason : `${reason}.`;
+    const message = `${boundedCoordinate === undefined ? "" : `${boundedCoordinate}: `}${terminatedReason}${
       additional === 0 ? "" : ` (+${String(additional)} more)`
     } Nothing was applied.`;
     this.notificationStore.setState((previous) =>
@@ -849,6 +908,40 @@ export class BrunoTableDragFillRuntime {
       this.reconcileFrame = null;
       this.reconcile();
     });
+  };
+
+  private readonly reconcilePointerStructure = (
+    pointer: PointerGesture,
+    structure: BrunoTableCellRangeStructure,
+  ): boolean => {
+    if (pointer.structure === structure) return true;
+    const gesture = pointer.gesture;
+    if (gesture === undefined) {
+      if (
+        !structure.rowIndexById.has(pointer.source.rowIds[0]!) ||
+        !structure.columnIndexById.has(pointer.source.columnIds[0]!)
+      ) {
+        return false;
+      }
+      pointer.structure = structure;
+      return true;
+    }
+    const perpendicularIdentity =
+      gesture.axis === "horizontal" ? pointer.source.rowIds[0] : pointer.source.columnIds[0];
+    const perpendicularCurrent =
+      perpendicularIdentity !== undefined &&
+      (gesture.axis === "horizontal"
+        ? structure.rowIndexById.has(perpendicularIdentity)
+        : structure.columnIndexById.has(perpendicularIdentity));
+    if (!perpendicularCurrent) return false;
+    const coherent = isBrunoTableDragFillGestureCoherent({
+      gesture,
+      preview: pointer.preview,
+      identities: identitiesForAxis(structure, gesture.axis),
+      indexById: indexForAxis(structure, gesture.axis),
+    });
+    if (coherent) pointer.structure = structure;
+    return coherent;
   };
 
   private readonly releasePointer = (pointer: PointerGesture): void => {
@@ -937,6 +1030,10 @@ function freezeSource(source: BrunoTableDragFillSource): BrunoTableDragFillSourc
   return Object.freeze({
     shapeIdentity: source.shapeIdentity,
     axis: source.axis,
+    sourceCellCount: source.sourceCellCount,
+    sourceFirstIdentity: source.sourceFirstIdentity,
+    sourceLastIdentity: source.sourceLastIdentity,
+    perpendicularIdentity: source.perpendicularIdentity,
     rowIds: Object.freeze([...source.rowIds]) as NonEmptyStrings,
     columnIds: Object.freeze([...source.columnIds]) as NonEmptyStrings,
     canonicalTexts: Object.freeze([...source.canonicalTexts]) as NonEmptyStrings,

@@ -8,6 +8,7 @@ import { createViewServerReact } from "effect-view-server/react";
 
 import { BrunoTableClient, BrunoTableServer } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
+import { installBrunoTableCellRangeInstrumentationListener } from "./internal/cell-range-clipboard";
 import type { BrunoTableColumns } from "./public-types";
 
 type FillRow = Readonly<{
@@ -252,6 +253,31 @@ afterEach(async () => {
 });
 
 describe("BrunoTable Drag Fill acceptance", () => {
+  test("keeps range source identity compact until an admitted handle press", async () => {
+    const tableId = "TABLE_ID_DRAG_FILL_COMPACT_SOURCE";
+    let materializations = 0;
+    const removeInstrumentation = installBrunoTableCellRangeInstrumentationListener(
+      tableId,
+      (event) => {
+        if (event.kind === "identity-span-materialization") materializations += 1;
+      },
+    );
+    try {
+      await render(clientTable(tableId, () => Promise.resolve()));
+      const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+      await userEvent.click(cell(grid, "alpha"));
+      await selectTwoCellSource(grid.element());
+
+      expect(materializations).toBe(0);
+      const handle = dragHandle(grid.element());
+      handle.dispatchEvent(pointer("pointerdown", 80, centerOf(handle)));
+      expect(materializations).toBe(1);
+      window.dispatchEvent(pointer("pointercancel", 80, centerOf(handle)));
+    } finally {
+      removeInstrumentation();
+    }
+  });
+
   test("keeps the last valid preview through pointer capture when the user releases outside the grid", async () => {
     const onSaveEdits = vi.fn(() => Promise.resolve());
     const tableId = "TABLE_ID_DRAG_FILL_OUTSIDE_RELEASE";
@@ -296,6 +322,50 @@ describe("BrunoTable Drag Fill acceptance", () => {
         { columnId: "COL_ID_FOURTH", field: "fourth", before: "delta", after: "beta" },
       ]),
     );
+  });
+
+  test("lets a single Active Cell acquire the vertical fill axis", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_ACTIVE_VERTICAL";
+    const secondRow: FillRow = {
+      id: "row-2",
+      first: "epsilon",
+      second: "zeta",
+      third: "eta",
+      fourth: "theta",
+      revision: 2n,
+    };
+    await render(clientTable(tableId, onSaveEdits, [rows[0]!, secondRow]));
+    const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+    const source = grid
+      .element()
+      .querySelector<HTMLElement>(
+        '[data-bruno-row-id="row-1"][data-bruno-column-id="COL_ID_FIRST"]',
+      )!;
+    const destination = grid
+      .element()
+      .querySelector<HTMLElement>(
+        '[data-bruno-row-id="row-2"][data-bruno-column-id="COL_ID_FIRST"]',
+      )!;
+    await userEvent.click(source);
+    await settleBrunoTableBrowserFrames();
+
+    const handle = dragHandle(grid.element());
+    const start = centerOf(handle);
+    const destinationCenter = centerOf(destination);
+    const verticalPoint = Object.freeze({ x: start.x, y: destinationCenter.y });
+    handle.dispatchEvent(pointer("pointerdown", 202, start));
+    destination.dispatchEvent(pointer("pointermove", 202, verticalPoint));
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).not.toHaveLength(0);
+    destination.dispatchEvent(pointer("pointerup", 202, verticalPoint));
+
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+    const changeSet = observedSaveChangeSet(onSaveEdits);
+    expect(changeSet[0]).toMatchObject({ rowId: "row-2", expectedVersion: 2n });
+    expect(changeSet[0].changes).toEqual([
+      { columnId: "COL_ID_FIRST", field: "first", before: "epsilon", after: "alpha" },
+    ]);
   });
 
   test("uses a visible Immediate Accepted Overlay as the next Drag Fill source", async () => {

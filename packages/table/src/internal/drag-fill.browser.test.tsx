@@ -4,7 +4,11 @@ import { cleanup, render } from "vitest-browser-react";
 
 import { createBrunoTableCellRangeStructure } from "./cell-range-clipboard";
 import { BrunoTableDragFillChrome } from "./drag-fill-chrome";
-import { BrunoTableDragFillRuntime, type BrunoTableDragFillSource } from "./drag-fill";
+import {
+  BRUNO_TABLE_DRAG_FILL_MAX_CELLS,
+  BrunoTableDragFillRuntime,
+  type BrunoTableDragFillSource,
+} from "./drag-fill";
 import {
   type BrunoTableDragFillFrameEvent,
   installBrunoTableClientDragFillFrameListener,
@@ -69,6 +73,10 @@ function source(
   const snapshot = Object.freeze({
     shapeIdentity,
     axis: "horizontal",
+    sourceCellCount: columnIds.length,
+    sourceFirstIdentity: columnIds[0],
+    sourceLastIdentity: columnIds.at(-1)!,
+    perpendicularIdentity: "ROW_ID_1",
     rowIds: Object.freeze(["ROW_ID_1"]) as readonly [string],
     columnIds: Object.freeze([...columnIds]) as readonly [string, ...string[]],
     canonicalTexts: Object.freeze([...canonicalTexts]) as readonly [string, ...string[]],
@@ -120,6 +128,10 @@ function verticalSource(
   const snapshot = Object.freeze({
     shapeIdentity,
     axis: "vertical",
+    sourceCellCount: rowIds.length,
+    sourceFirstIdentity: rowIds[0],
+    sourceLastIdentity: rowIds.at(-1)!,
+    perpendicularIdentity: "COL_ID_A",
     rowIds: Object.freeze([...rowIds]) as readonly [string, ...string[]],
     columnIds: Object.freeze(["COL_ID_A"]) as readonly [string],
     canonicalTexts: Object.freeze([...canonicalTexts]) as readonly [string, ...string[]],
@@ -323,6 +335,41 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     );
   });
 
+  test("preserves a fill when a structure change is outside the affected span", async () => {
+    const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
+    const { grid, structure } = createGrid(columns);
+    let currentStructure = structure;
+    const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => currentStructure,
+      apply,
+      scrollHorizontalByPhysical: () => false,
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_C"]')!;
+    handle.dispatchEvent(pointer("pointerdown", 64, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 64, centerOf(target)));
+    await nextFrame();
+
+    currentStructure = createBrunoTableCellRangeStructure(
+      ["ROW_ID_1"],
+      [...columns, "COL_ID_UNRELATED"],
+    );
+    runtime.reconcile();
+    expect(runtime.getSnapshot().active).toBe(true);
+    window.dispatchEvent(pointer("pointerup", 64, centerOf(target)));
+
+    expect(apply).toHaveBeenCalledWith([
+      { rowId: "ROW_ID_1", columnId: "COL_ID_B", canonicalText: "stable" },
+      { rowId: "ROW_ID_1", columnId: "COL_ID_C", canonicalText: "stable" },
+    ]);
+  });
+
   test("revalidates the source shape identity at release without an earlier reconciliation", async () => {
     const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
     const { grid, structure } = createGrid(columns);
@@ -397,7 +444,7 @@ describe("BrunoTable Drag Fill browser runtime", () => {
         Object.freeze({
           kind: "rejected" as const,
           reason: "invalid-value",
-          detail: "Expected a positive value.",
+          detail: "Expected a positive value",
           rowId: "ROW_ID_1",
           columnId: "COL_ID_B",
           additionalInvalidCount: 2,
@@ -891,6 +938,10 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     const sourceSnapshot: BrunoTableDragFillSource = Object.freeze({
       shapeIdentity: Object.freeze({}),
       axis: "vertical",
+      sourceCellCount: sourceRowIds.length,
+      sourceFirstIdentity: sourceRowIds[0],
+      sourceLastIdentity: sourceRowIds.at(-1)!,
+      perpendicularIdentity: "COL_ID_A",
       rowIds: sourceRowIds,
       columnIds: Object.freeze(["COL_ID_A"]) as readonly [string],
       canonicalTexts: Object.freeze(
@@ -930,6 +981,10 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     const sourceShape = Object.freeze({
       shapeIdentity: Object.freeze({}),
       axis: "vertical" as const,
+      sourceCellCount: sourceLength,
+      sourceFirstIdentity: rowIds[0]!,
+      sourceLastIdentity: rowIds[sourceLength - 1]!,
+      perpendicularIdentity: "COL_ID_A",
       rowIds: Object.freeze(rowIds.slice(0, sourceLength)) as readonly [string, ...string[]],
       columnIds: Object.freeze(["COL_ID_A"]) as readonly [string],
       handle: Object.freeze({ rowId: rowIds.at(-2)!, columnId: "COL_ID_A" }),
@@ -1031,10 +1086,76 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     handle.dispatchEvent(pointer("pointerdown", 57, centerOf(handle)));
     expect(captureSource).toHaveBeenCalledOnce();
     expect(runtime.getSnapshot().active).toBe(true);
-    handle.dispatchEvent(pointer("pointerdown", 58, centerOf(handle)));
+    const competingPrimary = pointer("pointerdown", 58, centerOf(handle));
+    const bubbledPointerDown = vi.fn();
+    grid.addEventListener("pointerdown", bubbledPointerDown);
+    handle.dispatchEvent(competingPrimary);
     expect(captureSource).toHaveBeenCalledOnce();
+    expect(competingPrimary.defaultPrevented).toBe(true);
+    expect(bubbledPointerDown).not.toHaveBeenCalled();
     expect(runtime.getSnapshot().active).toBe(true);
     window.dispatchEvent(pointer("pointercancel", 57, centerOf(handle)));
+  });
+
+  test("rejects an oversized source before canonical capture", async () => {
+    const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B"]);
+    const stable = source(["COL_ID_A"], ["stable"]);
+    const oversizedShape = Object.freeze({
+      ...stable,
+      sourceCellCount: BRUNO_TABLE_DRAG_FILL_MAX_CELLS + 1,
+    });
+    const captureSource = vi.fn(() => stable);
+    const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => oversizedShape,
+      captureSource,
+      getStructure: () => structure,
+      apply,
+      scrollHorizontalByPhysical: () => false,
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+
+    handle.dispatchEvent(pointer("pointerdown", 65, centerOf(handle)));
+
+    expect(captureSource).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(runtime.getNotificationSnapshot().message).toContain("at most 16384 cells.");
+  });
+
+  test("rejects an oversized destination before candidate materialization", async () => {
+    const columnIds = Object.freeze(
+      Array.from(
+        { length: BRUNO_TABLE_DRAG_FILL_MAX_CELLS + 2 },
+        (_unused, index) => `COL_ID_${String(index)}`,
+      ),
+    );
+    const { grid, structure } = createGrid(columnIds, [columnIds[0]!, columnIds.at(-1)!]);
+    const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source([columnIds[0]!], ["stable"]),
+      getStructure: () => structure,
+      apply,
+      scrollHorizontalByPhysical: () => false,
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const target = grid.querySelector<HTMLElement>(
+      `[data-bruno-column-id="${columnIds.at(-1)!}"]`,
+    )!;
+    handle.dispatchEvent(pointer("pointerdown", 66, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 66, centerOf(target)));
+    await nextFrame();
+    window.dispatchEvent(pointer("pointerup", 66, centerOf(target)));
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(runtime.getNotificationSnapshot().message).toContain("at most 16384 cells.");
   });
 
   test("extends the preview through cells revealed by outside-grid autoscroll", async () => {
@@ -1112,6 +1233,10 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     const sourceSnapshot: BrunoTableDragFillSource = Object.freeze({
       shapeIdentity: Object.freeze({}),
       axis: "vertical",
+      sourceCellCount: sourceRowIds.length,
+      sourceFirstIdentity: sourceRowIds[0],
+      sourceLastIdentity: sourceRowIds.at(-1)!,
+      perpendicularIdentity: "COL_ID_A",
       rowIds: sourceRowIds,
       columnIds: Object.freeze(["COL_ID_A"]) as readonly [string],
       canonicalTexts: Object.freeze(

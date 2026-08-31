@@ -1,10 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  BRUNO_TABLE_DRAG_FILL_MAX_CELLS,
   createBrunoTableDragFillActor,
   formatBrunoTableDragFillRejectionReason,
+  isBrunoTableDragFillCellCountAllowed,
   type BrunoTableDragFillRejectionReason,
 } from "./drag-fill";
+
+describe("BrunoTable Drag Fill bounds", () => {
+  it("admits the exact transaction limit and rejects the next cell", () => {
+    expect(isBrunoTableDragFillCellCountAllowed(BRUNO_TABLE_DRAG_FILL_MAX_CELLS)).toBe(true);
+    expect(isBrunoTableDragFillCellCountAllowed(BRUNO_TABLE_DRAG_FILL_MAX_CELLS + 1)).toBe(false);
+  });
+});
 
 const rejectionMessageByReason = {
   "structure-changed": "The fill destination changed before release.",
@@ -169,6 +178,33 @@ describe("BrunoTable Drag Fill workflow", () => {
       kind: "rejected",
       reason: "temporarily-unavailable",
     });
+    actor.stop();
+  });
+
+  it("maps a preflight exception to one temporarily-unavailable rejection", () => {
+    const apply = vi.fn(() => ({ kind: "accepted" as const }));
+    const settle = vi.fn();
+    const release = vi.fn();
+    const actor = createBrunoTableDragFillActor();
+    actor.start();
+    actor.send({ type: "START", resources: { acquire: () => undefined, release } });
+
+    actor.send({
+      type: "RELEASE",
+      preflight: () => {
+        throw new Error("preflight boundary failed");
+      },
+      apply,
+      settle,
+    });
+
+    expect(actor.getSnapshot().value).toBe("rejected");
+    expect(apply).not.toHaveBeenCalled();
+    expect(settle).toHaveBeenCalledWith({
+      kind: "rejected",
+      reason: "temporarily-unavailable",
+    });
+    expect(release).toHaveBeenCalledOnce();
     actor.stop();
   });
 

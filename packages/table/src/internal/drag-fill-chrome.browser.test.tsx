@@ -28,6 +28,10 @@ describe("BrunoTable Drag Fill notification chrome", () => {
         Object.freeze({
           shapeIdentity: sourceShapeIdentity,
           axis: "horizontal" as const,
+          sourceCellCount: 1,
+          sourceFirstIdentity: "COL_ID_SOURCE",
+          sourceLastIdentity: "COL_ID_SOURCE",
+          perpendicularIdentity: "ROW_ID_1",
           rowIds: Object.freeze(["ROW_ID_1"]) as readonly [string],
           columnIds: Object.freeze(["COL_ID_SOURCE"]) as readonly [string],
           canonicalTexts: Object.freeze(["source"]) as readonly [string],
@@ -103,6 +107,10 @@ describe("BrunoTable Drag Fill notification chrome", () => {
         Object.freeze({
           shapeIdentity: sourceShapeIdentity,
           axis: "horizontal" as const,
+          sourceCellCount: 1,
+          sourceFirstIdentity: "COL_ID_SOURCE",
+          sourceLastIdentity: "COL_ID_SOURCE",
+          perpendicularIdentity: "ROW_ID_1",
           rowIds: Object.freeze(["ROW_ID_1"]) as readonly [string],
           columnIds: Object.freeze(["COL_ID_SOURCE"]) as readonly [string],
           canonicalTexts: Object.freeze(["source"]) as readonly [string],

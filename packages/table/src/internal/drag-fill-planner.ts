@@ -147,7 +147,6 @@ export function materializeBrunoTableDragFillCandidates({
   const affectedStartIndex = Math.min(gesture.source.startIndex, preview.extension.startIndex);
   const affectedEndIndex = Math.max(gesture.source.endIndex, preview.extension.endIndex);
   if (
-    identities.length !== gesture.identities.length ||
     !hasCoherentIdentitySpan(
       gesture.identities,
       identities,
@@ -160,7 +159,7 @@ export function materializeBrunoTableDragFillCandidates({
   }
   const candidates: BrunoTableDragFillCandidate[] = [];
   for (let index = preview.extension.startIndex; index <= preview.extension.endIndex; index += 1) {
-    const identity = identities[index];
+    const identity = gesture.identities[index];
     const sourceIndex = euclideanModulo(index - gesture.source.startIndex, gesture.source.length);
     const canonicalText = gesture.sourceCanonicalTexts[sourceIndex];
     if (identity === undefined || canonicalText === undefined) return undefined;
@@ -175,6 +174,29 @@ export function materializeBrunoTableDragFillCandidates({
       ]);
 }
 
+/** Revalidate only the source and current preview span against a new structure. */
+export function isBrunoTableDragFillGestureCoherent({
+  gesture,
+  identities,
+  indexById,
+  preview,
+}: Readonly<{
+  readonly gesture: BrunoTableDragFillGesture;
+  readonly identities: readonly string[];
+  readonly indexById: ReadonlyMap<string, number>;
+  readonly preview: BrunoTableDragFillPreview | undefined;
+}>): boolean {
+  const startIndex =
+    preview === undefined
+      ? gesture.source.startIndex
+      : Math.min(gesture.source.startIndex, preview.extension.startIndex);
+  const endIndex =
+    preview === undefined
+      ? gesture.source.endIndex
+      : Math.max(gesture.source.endIndex, preview.extension.endIndex);
+  return hasCoherentIdentitySpan(gesture.identities, identities, indexById, startIndex, endIndex);
+}
+
 function hasCoherentIdentitySpan(
   capturedIdentities: readonly string[],
   currentIdentities: readonly string[],
@@ -182,12 +204,24 @@ function hasCoherentIdentitySpan(
   startIndex: number,
   endIndex: number,
 ): boolean {
-  for (let index = startIndex; index <= endIndex; index += 1) {
-    const capturedIdentity = capturedIdentities[index];
+  const capturedFirst = capturedIdentities[startIndex];
+  const capturedLast = capturedIdentities[endIndex];
+  if (capturedFirst === undefined || capturedLast === undefined) return false;
+  const currentStartIndex = currentIndexById.get(capturedFirst);
+  const currentEndIndex = currentIndexById.get(capturedLast);
+  if (
+    currentStartIndex === undefined ||
+    currentEndIndex === undefined ||
+    currentEndIndex - currentStartIndex !== endIndex - startIndex
+  ) {
+    return false;
+  }
+  for (let offset = 0; offset <= endIndex - startIndex; offset += 1) {
+    const capturedIdentity = capturedIdentities[startIndex + offset];
     if (
       capturedIdentity === undefined ||
-      currentIdentities[index] !== capturedIdentity ||
-      currentIndexById.get(capturedIdentity) !== index
+      currentIdentities[currentStartIndex + offset] !== capturedIdentity ||
+      currentIndexById.get(capturedIdentity) !== currentStartIndex + offset
     ) {
       return false;
     }
