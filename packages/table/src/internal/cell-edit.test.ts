@@ -8078,9 +8078,9 @@ describe("BrunoTable Cell Edit Session", () => {
         conflict: { server: 5, serverVersion: row.quantity + 1n },
       });
       expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 1 });
-      expect(reviewObservations.every((count) => count === 1)).toBe(true);
-      expect(activityObservations.every((count) => count === 1)).toBe(true);
-      expect(cellObservations.every(Boolean)).toBe(true);
+      expect(reviewObservations).not.toContain(0);
+      expect(activityObservations).not.toContain(0);
+      expect(cellObservations).not.toContain(false);
     } finally {
       unsubscribeReview();
       unsubscribeActivity();
@@ -10096,8 +10096,8 @@ describe("BrunoTable Cell Edit Session", () => {
       expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
       expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBeUndefined();
       expect(runtime.getDraftSnapshot(row.id, "COL_ID_QUANTITY")).toBeUndefined();
-      expect(scoreDraftObservations.every((hasDraft) => !hasDraft)).toBe(true);
-      expect(quantityDraftObservations.every((hasDraft) => !hasDraft)).toBe(true);
+      expect(scoreDraftObservations).not.toContain(true);
+      expect(quantityDraftObservations).not.toContain(true);
     } finally {
       unsubscribeScore();
       unsubscribeQuantity();

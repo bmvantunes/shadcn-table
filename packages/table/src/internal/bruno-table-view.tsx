@@ -229,6 +229,39 @@ import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_SELECTION_COLUMN_WIDTH = 40;
+type BrunoTableCellCommandReader = ReturnType<BrunoTableRuntimeView["captureCellCommandReader"]>;
+type BrunoTableEditValueCommandReader = ReturnType<
+  BrunoTableCellEditRuntime["captureEditValueCommandReader"]
+>;
+
+function readBrunoTableEffectiveCanonicalCell(
+  readCell: BrunoTableCellCommandReader,
+  readEditValue: BrunoTableEditValueCommandReader | undefined,
+  rowId: string,
+  columnId: string,
+):
+  | Readonly<{
+      readonly value: unknown;
+      readonly formatCanonicalText: (value: unknown) => string;
+    }>
+  | undefined {
+  const cell = readCell(rowId, columnId);
+  if (cell.kind !== "available" || !cell.rowPresent || cell.column === undefined) {
+    return undefined;
+  }
+  const editValue = readEditValue?.(rowId, columnId);
+  const effectiveValue = editValue?.hasEditValue === true ? editValue.value : cell.value;
+  if (isBrunoTableInvalidCellValue(effectiveValue)) return undefined;
+  const editPresentationColumn =
+    editValue?.hasEditValue === true ? editValue.presentationColumn : undefined;
+  return Object.freeze({
+    value: effectiveValue,
+    formatCanonicalText:
+      editPresentationColumn?.semantics.formatCanonicalText ??
+      cell.column.semantics.formatCanonicalText,
+  });
+}
+
 const EMPTY_DRAG_FILL_INTERACTION_GEOMETRY: BrunoTableDragFillInteractionGeometry = Object.freeze({
   bodyTop: 0,
   bodyBottom: 1,
@@ -2721,26 +2754,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     try {
       const readCell = runtime.captureCellCommandReader();
       const readEditValue = cellEdit?.captureEditValueCommandReader();
-      snapshot = captureBrunoTableClipboardSnapshot(target, ({ rowId, columnId }) => {
-        const cell = readCell(rowId, columnId);
-        if (
-          cell.kind !== "available" ||
-          !cell.rowPresent ||
-          cell.column === undefined ||
-          isBrunoTableInvalidCellValue(cell.value)
-        ) {
-          return undefined;
-        }
-        const editValue = readEditValue?.(rowId, columnId);
-        const editPresentationColumn =
-          editValue?.hasEditValue === true ? editValue.presentationColumn : undefined;
-        return {
-          value: editValue?.hasEditValue === true ? editValue.value : cell.value,
-          formatCanonicalText:
-            editPresentationColumn?.semantics.formatCanonicalText ??
-            cell.column.semantics.formatCanonicalText,
-        };
-      });
+      snapshot = captureBrunoTableClipboardSnapshot(target, ({ rowId, columnId }) =>
+        readBrunoTableEffectiveCanonicalCell(readCell, readEditValue, rowId, columnId),
+      );
     } catch {
       announceCopy("Copy failed: a selected value could not be serialized");
       return;
@@ -3080,25 +3096,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             })
           : clipboardTargetFromRange(currentShape.range);
       const snapshot = captureBrunoTableClipboardSnapshot(target, ({ rowId, columnId }) => {
-        const cell = readCell(rowId, columnId);
-        if (
-          cell.kind !== "available" ||
-          !cell.rowPresent ||
-          cell.column === undefined ||
-          isBrunoTableInvalidCellValue(cell.value)
-        ) {
-          return undefined;
-        }
-        const editValue = readEditValue(rowId, columnId);
-        const editPresentationColumn = editValue.hasEditValue
-          ? editValue.presentationColumn
-          : undefined;
-        return Object.freeze({
-          value: editValue.hasEditValue ? editValue.value : cell.value,
-          formatCanonicalText:
-            editPresentationColumn?.semantics.formatCanonicalText ??
-            cell.column.semantics.formatCanonicalText,
-        });
+        return readBrunoTableEffectiveCanonicalCell(readCell, readEditValue, rowId, columnId);
       });
       return snapshot === undefined
         ? undefined

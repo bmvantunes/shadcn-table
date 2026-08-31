@@ -390,6 +390,12 @@ describe("BrunoTable Drag Fill acceptance", () => {
       .toHaveTextContent("1 Immediate save accepted · waiting for live confirmation");
     await expect.element(cell(grid, "overlay")).toBeVisible();
 
+    const invalidOverlayRows = [
+      { ...rows[0]!, first: Number.NaN },
+    ] as unknown as readonly FillRow[];
+    await screen.rerender(clientTable(tableId, onSaveEdits, invalidOverlayRows, 2));
+    await expect.element(cell(grid, "overlay")).toBeVisible();
+
     await dragTo(grid.element(), cell(grid, "beta"), 211);
 
     await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledTimes(2));
