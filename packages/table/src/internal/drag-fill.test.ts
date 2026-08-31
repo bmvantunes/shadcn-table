@@ -28,7 +28,6 @@ const rejectionMessageByReason = {
   "read-only": "This destination cell is read-only.",
   "invalid-value": "A repeated value is invalid for its destination.",
   empty: "The fill target is empty.",
-  unchanged: "The repeated values did not change the table.",
 } as const satisfies Readonly<Record<BrunoTableDragFillRejectionReason, string>>;
 const rejectionMessages = Object.entries(rejectionMessageByReason) as Array<
   [BrunoTableDragFillRejectionReason, string]
@@ -79,6 +78,31 @@ describe("BrunoTable Drag Fill workflow", () => {
       { rowId: "row-a", columnId: "score-3", canonicalText: "3" },
     ]);
     expect(settle).toHaveBeenCalledWith({ kind: "accepted" });
+    actor.stop();
+  });
+
+  it("settles a fully unchanged release as a silent no-op", () => {
+    const release = vi.fn();
+    const apply = vi.fn(() => ({ kind: "unchanged" as const }));
+    const settle = vi.fn();
+    const actor = createBrunoTableDragFillActor();
+    actor.start();
+    actor.send({ type: "START", resources: { acquire: () => undefined, release } });
+
+    actor.send({
+      type: "RELEASE",
+      preflight: () => ({
+        kind: "ready",
+        cells: [{ rowId: "row-a", columnId: "score-3", canonicalText: "3" }],
+      }),
+      apply,
+      settle,
+    });
+
+    expect(actor.getSnapshot().value).toBe("unchanged");
+    expect(apply).toHaveBeenCalledOnce();
+    expect(settle).toHaveBeenCalledWith({ kind: "unchanged" });
+    expect(release).toHaveBeenCalledOnce();
     actor.stop();
   });
 

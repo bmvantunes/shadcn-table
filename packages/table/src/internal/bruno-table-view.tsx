@@ -3118,7 +3118,17 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       getSourceShape: getDragFillSourceShape,
       captureSource: captureDragFillSource,
       getStructure: () => latestDragFillStructure.current,
-      apply: (cells) => cellEdit.applyCanonicalTextGesture(cells),
+      apply: (cells) => {
+        const result = cellEdit.applyCanonicalTextGesture(cells);
+        if (result.kind === "accepted") return result;
+        if (result.reason === "unchanged") {
+          return Object.freeze({ kind: "unchanged" as const });
+        }
+        return Object.freeze({
+          ...result,
+          reason: result.reason,
+        });
+      },
       interactionGeometry: () =>
         dragFillLayout.current?.interactionGeometry ?? EMPTY_DRAG_FILL_INTERACTION_GEOMETRY,
       scrollHorizontalByPhysical: (delta) =>

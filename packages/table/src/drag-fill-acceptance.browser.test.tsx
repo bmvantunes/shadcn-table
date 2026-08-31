@@ -410,6 +410,28 @@ describe("BrunoTable Drag Fill acceptance", () => {
     ]);
   });
 
+  test("completes a fully unchanged Drag Fill silently", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_UNCHANGED";
+    const unchangedRows = [{ ...rows[0]!, second: rows[0]!.first }] as const;
+    const screen = await render(clientTable(tableId, onSaveEdits, unchangedRows));
+    const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+    const destination = grid
+      .element()
+      .querySelector<HTMLElement>(
+        '[data-bruno-row-id="row-1"][data-bruno-column-id="COL_ID_SECOND"]',
+      );
+    if (destination === null) throw new Error("Expected the unchanged fill destination.");
+
+    await dragTo(grid.element(), destination, 212);
+    await settleBrunoTableBrowserFrames();
+
+    expect(onSaveEdits).not.toHaveBeenCalled();
+    await expect
+      .element(screen.getByRole("region", { name: "Notifications", exact: true }))
+      .toHaveTextContent(/^$/);
+  });
+
   test("completes a production Drag Fill onto a pinned destination cell", async () => {
     const onSaveEdits = vi.fn(() => Promise.resolve());
     const tableId = "TABLE_ID_DRAG_FILL_PINNED_DESTINATION";

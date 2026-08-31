@@ -72,11 +72,11 @@ export type BrunoTableDragFillRejectionReason =
   | "invalid-source"
   | "read-only"
   | "invalid-value"
-  | "empty"
-  | "unchanged";
+  | "empty";
 
 export type BrunoTableDragFillApplyResult =
   | Readonly<{ readonly kind: "accepted" }>
+  | Readonly<{ readonly kind: "unchanged" }>
   | Readonly<{
       readonly kind: "rejected";
       readonly reason: BrunoTableDragFillRejectionReason;
@@ -113,7 +113,7 @@ type DragFillReleasePreflight =
     }>
   | Readonly<{
       readonly kind: "rejected";
-      readonly rejection: Exclude<BrunoTableDragFillApplyResult, { readonly kind: "accepted" }>;
+      readonly rejection: Extract<BrunoTableDragFillApplyResult, { readonly kind: "rejected" }>;
     }>;
 type DragFillReleaseOutcome =
   | BrunoTableDragFillApplyResult
@@ -200,9 +200,22 @@ const dragFillMachine = createMachine(
       },
       applying: {
         entry: "runApply",
-        always: [{ guard: "applyAccepted", target: "accepted" }, { target: "rejected" }],
+        always: [
+          { guard: "applyAccepted", target: "accepted" },
+          { guard: "applyUnchanged", target: "unchanged" },
+          { target: "rejected" },
+        ],
       },
       accepted: {
+        entry: ["releaseResources", "settle", "clear"],
+        on: {
+          START: {
+            target: "armed",
+            actions: [assign({ resources: ({ event }) => event.resources }), "acquireResources"],
+          },
+        },
+      },
+      unchanged: {
         entry: ["releaseResources", "settle", "clear"],
         on: {
           START: {
@@ -304,6 +317,7 @@ const dragFillMachine = createMachine(
       preflightCancelled: ({ context }) => context.preflight?.kind === "cancelled",
       preflightReady: ({ context }) => context.preflight?.kind === "ready",
       applyAccepted: ({ context }) => context.outcome?.kind === "accepted",
+      applyUnchanged: ({ context }) => context.outcome?.kind === "unchanged",
     },
   },
 );
@@ -314,6 +328,7 @@ type DragFillState =
   | "preflighting"
   | "applying"
   | "accepted"
+  | "unchanged"
   | "rejected"
   | "cancelled";
 
@@ -343,6 +358,7 @@ export function createBrunoTableDragFillActor(): DragFillActor {
       value !== "preflighting" &&
       value !== "applying" &&
       value !== "accepted" &&
+      value !== "unchanged" &&
       value !== "rejected" &&
       value !== "cancelled"
     ) {
@@ -704,8 +720,9 @@ export class BrunoTableDragFillRuntime {
       apply: pointer.registration.apply,
       settle: (outcome) => {
         this.clearPreview();
-        if (outcome.kind === "accepted") this.clearNotification();
-        else if (outcome.kind === "rejected") {
+        if (outcome.kind === "accepted") {
+          this.clearNotification();
+        } else if (outcome.kind === "rejected") {
           this.notify(outcome, pointer.registration.describeCoordinate);
         }
         this.scheduleReconcile();
@@ -878,7 +895,7 @@ export class BrunoTableDragFillRuntime {
   };
 
   private readonly notify = (
-    rejection: Exclude<BrunoTableDragFillApplyResult, { readonly kind: "accepted" }>,
+    rejection: Extract<BrunoTableDragFillApplyResult, { readonly kind: "rejected" }>,
     describeCoordinate?: (coordinate: BrunoTableCellCoordinate) => string,
   ): void => {
     const coordinate =
@@ -1192,8 +1209,6 @@ export function formatBrunoTableDragFillRejectionReason(
       return "A repeated value is invalid for its destination.";
     case "empty":
       return "The fill target is empty.";
-    case "unchanged":
-      return "The repeated values did not change the table.";
   }
 }
 

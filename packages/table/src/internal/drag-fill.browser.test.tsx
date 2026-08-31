@@ -471,6 +471,45 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     await vi.waitFor(() => expect(runtime.getNotificationSnapshot().message).toBe(""));
   });
 
+  test("preserves a persistent rejection after a fully unchanged fill", async () => {
+    const columns = ["COL_ID_A", "COL_ID_B"];
+    const { grid, structure } = createGrid(columns);
+    const apply = vi
+      .fn()
+      .mockReturnValueOnce(
+        Object.freeze({ kind: "rejected" as const, reason: "invalid-value" as const }),
+      )
+      .mockReturnValueOnce(Object.freeze({ kind: "unchanged" as const }));
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      apply,
+      scrollHorizontalByPhysical: () => false,
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_B"]')!;
+
+    handle.dispatchEvent(pointer("pointerdown", 145, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 145, centerOf(target)));
+    await nextFrame();
+    window.dispatchEvent(pointer("pointerup", 145, centerOf(target)));
+    const rejection = runtime.getNotificationSnapshot();
+    await nextFrame();
+
+    const nextHandle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    nextHandle.dispatchEvent(pointer("pointerdown", 146, centerOf(nextHandle)));
+    window.dispatchEvent(pointer("pointermove", 146, centerOf(target)));
+    await nextFrame();
+    window.dispatchEvent(pointer("pointerup", 146, centerOf(target)));
+
+    expect(apply).toHaveBeenCalledTimes(2);
+    expect(runtime.getNotificationSnapshot()).toBe(rejection);
+  });
+
   test("keeps preview motion-free and autoscroll parallel-only", async () => {
     const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
     const { grid, structure } = createGrid(columns);
