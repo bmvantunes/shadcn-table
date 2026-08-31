@@ -2766,6 +2766,45 @@ export class BrunoTableCellEditRuntime {
     };
   };
 
+  public readonly captureEditValueCommandReader = (): ((
+    rowId: string,
+    columnId: string,
+  ) =>
+    | Readonly<{
+        readonly hasEditValue: false;
+      }>
+    | Readonly<{
+        readonly hasEditValue: true;
+        readonly value: unknown;
+        readonly presentationColumn?: CompiledFieldColumn;
+      }>) => {
+    const drafts = this.draftStore.get();
+    const acceptedOverlays = this.acceptedOverlays;
+    return (rowId, columnId) => {
+      const key = cellKey(rowId, columnId);
+      const acceptedOverlay = acceptedOverlays.get(key);
+      if (acceptedOverlay !== undefined) {
+        return Object.freeze({
+          hasEditValue: true,
+          value: acceptedOverlay.after,
+          ...(acceptedOverlay.valueAuthority.presentationColumn === undefined
+            ? {}
+            : { presentationColumn: acceptedOverlay.valueAuthority.presentationColumn }),
+        });
+      }
+      const draft = drafts.get(key);
+      return draft === undefined
+        ? Object.freeze({ hasEditValue: false })
+        : Object.freeze({
+            hasEditValue: true,
+            value: draft.mine,
+            ...(draft.presentationColumn === undefined
+              ? {}
+              : { presentationColumn: draft.presentationColumn }),
+          });
+    };
+  };
+
   public readonly getActiveCandidateSnapshot = (): ActiveCandidateSnapshot =>
     this.candidateStore.get();
 
@@ -2845,11 +2884,21 @@ export class BrunoTableCellEditRuntime {
   public readonly applyCanonicalTextGesture = (
     cells: BrunoTableCellEditCanonicalTextGesture,
   ): BrunoTableCellEditCanonicalTextGestureResult => {
+    if (this.batchSaveLockOperationId !== undefined) {
+      const first = cells[0];
+      const additionalInvalidCount = cells.length - 1;
+      return Object.freeze({
+        kind: "rejected",
+        reason: "save-locked",
+        rowId: first.rowId,
+        columnId: first.columnId,
+        ...(additionalInvalidCount === 0 ? {} : { additionalInvalidCount }),
+      });
+    }
     if (
       !this.saveOperationCapacityAvailable ||
       this.getSessionSnapshot().kind === "editing" ||
-      (!this.batchHistoryEnabled && !this.isSourceAuthoritative()) ||
-      this.batchSaveLockOperationId !== undefined
+      (!this.batchHistoryEnabled && !this.isSourceAuthoritative())
     ) {
       return Object.freeze({ kind: "rejected", reason: "temporarily-unavailable" });
     }
@@ -3152,9 +3201,13 @@ export class BrunoTableCellEditRuntime {
       }
       this.publishActivitySnapshot();
       if (firstCommittedChange !== undefined) {
-        admissionResult.value = this.onCommitGesture(
-          Object.freeze([firstCommittedChange, ...remainingCommittedChanges]),
-        );
+        try {
+          admissionResult.value = this.onCommitGesture(
+            Object.freeze([firstCommittedChange, ...remainingCommittedChanges]),
+          );
+        } catch {
+          admissionResult.value = "rejected";
+        }
         if (admissionResult.value === false || admissionResult.value === "rejected") {
           for (const key of historyPatches.keys()) {
             this.syncBlockedDraftKey(key, previousDrafts.get(key));
@@ -3459,12 +3512,15 @@ export class BrunoTableCellEditRuntime {
         if (this.cellStores.size > 0) this.publishCell(patch.cellKey, nextDrafts);
       }
       this.publishActivitySnapshot();
-      admissionResult.value =
-        firstCommittedChange === undefined
-          ? undefined
-          : this.onCommitGesture(
-              Object.freeze([firstCommittedChange, ...remainingCommittedChanges]),
-            );
+      if (firstCommittedChange !== undefined) {
+        try {
+          admissionResult.value = this.onCommitGesture(
+            Object.freeze([firstCommittedChange, ...remainingCommittedChanges]),
+          );
+        } catch {
+          admissionResult.value = "rejected";
+        }
+      }
       if (admissionResult.value === false || admissionResult.value === "rejected") {
         for (const key of historyPatches.keys()) {
           this.syncBlockedDraftKey(key, previousDrafts.get(key));

@@ -38,6 +38,22 @@ type ColumnGestureFrameEvent = Readonly<{
 }> &
   ColumnGestureFrame;
 type ColumnGestureFrameListener = (event: ColumnGestureFrameEvent) => void;
+export type BrunoTableDragFillFrame =
+  | Readonly<{
+      readonly phase: "scheduled" | "cancelled";
+      readonly frameId: number;
+    }>
+  | Readonly<{
+      readonly phase: "ran";
+      readonly frameId: number;
+      readonly durationMs: number;
+    }>;
+export type BrunoTableDragFillFrameEvent = Readonly<{
+  readonly tableId: string;
+  readonly diagnosticBuildContract: typeof BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_SENTINEL;
+}> &
+  BrunoTableDragFillFrame;
+type DragFillFrameListener = (event: BrunoTableDragFillFrameEvent) => void;
 
 let clientGridSurfaceRenderListener: Listener | undefined;
 let clientHeaderRenderListener: Listener | undefined;
@@ -52,8 +68,10 @@ let clientColumnReorderFrameListener: Listener | undefined;
 let clientColumnPreviewStyleWriteListener: ColumnPreviewStyleWriteListener | undefined;
 let clientColumnGestureListenerCount = 0;
 let clientColumnGestureFrameListenerCount = 0;
+let clientDragFillFrameListenerCount = 0;
 const clientColumnGestureListeners = new Map<string, Set<ColumnGestureListener>>();
 const clientColumnGestureFrameListeners = new Map<string, Set<ColumnGestureFrameListener>>();
+const clientDragFillFrameListeners = new Map<string, Set<DragFillFrameListener>>();
 const clientRowOrderPlanningListeners = new Set<RowOrderPlanningListener>();
 const clientTableRowOrderPlanningListeners = new Map<string, Set<() => void>>();
 const clientTableCellRenderListeners = new Map<string, Set<CellListener>>();
@@ -152,6 +170,46 @@ export function installBrunoTableClientColumnGestureFrameListener(
     },
     () => {
       clientColumnGestureFrameListenerCount -= 1;
+    },
+  );
+}
+
+export function recordBrunoTableClientDragFillFrame(
+  tableId: string,
+  event: BrunoTableDragFillFrame,
+): void {
+  if (clientDragFillFrameListenerCount === 0) return;
+  const listeners = clientDragFillFrameListeners.get(tableId);
+  if (listeners === undefined) return;
+  notifySafely(listeners, (listener) =>
+    listener({
+      tableId,
+      diagnosticBuildContract: BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_SENTINEL,
+      ...event,
+    }),
+  );
+}
+
+export function hasBrunoTableClientDragFillFrameListener(tableId: string): boolean {
+  return (
+    clientDragFillFrameListenerCount > 0 &&
+    (clientDragFillFrameListeners.get(tableId)?.size ?? 0) > 0
+  );
+}
+
+export function installBrunoTableClientDragFillFrameListener(
+  tableId: string,
+  listener: DragFillFrameListener,
+): () => void {
+  return installTableScopedListener(
+    clientDragFillFrameListeners,
+    tableId,
+    listener,
+    () => {
+      clientDragFillFrameListenerCount += 1;
+    },
+    () => {
+      clientDragFillFrameListenerCount -= 1;
     },
   );
 }

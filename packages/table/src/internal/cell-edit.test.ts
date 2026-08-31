@@ -5018,6 +5018,63 @@ describe("BrunoTable Cell Edit Session", () => {
     });
   });
 
+  it("captures visible Accepted Overlay values ahead of drafts for edit commands", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("5")).toBe(true);
+    runtime.acceptSave(
+      "operation-1",
+      [
+        {
+          rowId: row.id,
+          baseRow: row,
+          expectedVersion: 1n,
+          changes: [
+            {
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: row.score,
+              after: 7,
+            },
+          ],
+        },
+      ],
+      false,
+    );
+    const firstCommand = runtime.captureEditValueCommandReader();
+
+    runtime.acceptSave(
+      "operation-2",
+      [
+        {
+          rowId: row.id,
+          baseRow: row,
+          expectedVersion: 1n,
+          changes: [
+            {
+              columnId: "COL_ID_SCORE",
+              field: "score",
+              before: row.score,
+              after: 8,
+            },
+          ],
+        },
+      ],
+      false,
+    );
+
+    expect(firstCommand("row-1", "COL_ID_SCORE")).toEqual({
+      hasEditValue: true,
+      value: 7,
+      presentationColumn: columns.find((column) => column.columnId === "COL_ID_SCORE"),
+    });
+    expect(runtime.captureEditValueCommandReader()("row-1", "COL_ID_SCORE")).toEqual({
+      hasEditValue: true,
+      value: 8,
+      presentationColumn: columns.find((column) => column.columnId === "COL_ID_SCORE"),
+    });
+  });
+
   it("preserves compatible drafts across recompiles and prunes a changed value domain", () => {
     const compileTextColumns = () =>
       compileColumns([
@@ -7962,6 +8019,75 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(runtime.getDraftReviewSnapshot()).toHaveLength(0);
   });
 
+  it("rolls back an Immediate Mine resolution when save admission throws", () => {
+    let current = row;
+    let throwOnResolution = false;
+    const onCommitGesture = vi.fn(() => {
+      if (throwOnResolution) throw new Error("save admission failed");
+      return "admitted" as const;
+    });
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => current,
+      getRowVersion: (candidate) => (candidate as Row).quantity,
+      onCommitGesture,
+    });
+    expect(
+      runtime.applyAcceptedDraftGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_SCORE",
+          field: "score",
+          baseRow: row,
+          expectedVersion: row.quantity,
+          base: row.score,
+          mine: 7,
+        },
+      ]),
+    ).toBe(true);
+    current = Object.freeze({ ...row, score: 5, quantity: row.quantity + 1n });
+    runtime.reconcileSourceRows(new Set([row.id]));
+    const conflict = runtime.getDraftReviewSnapshot()[0]!;
+    const reviewObservations: number[] = [];
+    const activityObservations: number[] = [];
+    const cellObservations: boolean[] = [];
+    const unsubscribeReview = runtime.subscribeDraftReview(() => {
+      reviewObservations.push(runtime.getDraftReviewSnapshot()[0]?.conflict === undefined ? 0 : 1);
+    });
+    const unsubscribeActivity = runtime.subscribeActivity(() => {
+      activityObservations.push(runtime.getActivitySnapshot().conflictCount);
+    });
+    const unsubscribeCell = runtime.subscribeCell(row.id, "COL_ID_SCORE", () => {
+      cellObservations.push(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").conflicted === true);
+    });
+    throwOnResolution = true;
+
+    try {
+      expect(
+        runtime.resolveDraftConflicts([
+          {
+            id: conflict.id,
+            resolution: "mine",
+            reviewedServer: conflict.conflict!.server,
+            reviewedServerVersion: conflict.conflict!.serverVersion,
+          },
+        ]),
+      ).toBe(false);
+      expect(runtime.getDraftReviewSnapshot()[0]).toMatchObject({
+        mine: 7,
+        conflict: { server: 5, serverVersion: row.quantity + 1n },
+      });
+      expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, conflictCount: 1 });
+      expect(reviewObservations).not.toContain(0);
+      expect(activityObservations).not.toContain(0);
+      expect(cellObservations).not.toContain(false);
+    } finally {
+      unsubscribeReview();
+      unsubscribeActivity();
+      unsubscribeCell();
+    }
+  });
+
   it("rolls back a scalar Immediate commit when save admission is rejected", () => {
     const runtime = new BrunoTableCellEditRuntime({
       columns,
@@ -9920,6 +10046,46 @@ describe("BrunoTable Cell Edit Session", () => {
     }
   });
 
+  it("reports every destination as save-locked during an active Batch Save without mutating edit state", () => {
+    const onCommitGesture = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    expect(runtime.beginSaveOperation("batch-lock", changeSet!, true)).toBe(true);
+    const activityBefore = runtime.getActivitySnapshot();
+    const draftsBefore = runtime.getDraftMemorySnapshot();
+
+    expect(
+      runtime.applyCanonicalTextGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_QUANTITY",
+          canonicalText: "9007199254740994",
+        },
+        { rowId: row.id, columnId: "COL_ID_SCORE", canonicalText: "8" },
+      ]),
+    ).toEqual({
+      kind: "rejected",
+      reason: "save-locked",
+      rowId: row.id,
+      columnId: "COL_ID_QUANTITY",
+      additionalInvalidCount: 1,
+    });
+    expect(runtime.getActivitySnapshot()).toBe(activityBefore);
+    expect(runtime.getDraftMemorySnapshot()).toBe(draftsBefore);
+    expect(runtime.hasSaveCellProjection(row.id, "COL_ID_QUANTITY")).toBe(false);
+    expect(runtime.hasSaveCellProjection(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(onCommitGesture).not.toHaveBeenCalled();
+  });
+
   it("reports a refused Immediate Paste admission as temporarily unavailable", () => {
     const onCommitGesture = vi.fn(() => "rejected" as const);
     const runtime = new BrunoTableCellEditRuntime({
@@ -9936,5 +10102,45 @@ describe("BrunoTable Cell Edit Session", () => {
     ).toEqual({ kind: "rejected", reason: "temporarily-unavailable" });
     expect(onCommitGesture).toHaveBeenCalledOnce();
     expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
+  });
+
+  it("rolls back an Immediate Paste when save admission throws", () => {
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture: () => {
+        throw new Error("save admission failed");
+      },
+    });
+    const scoreDraftObservations: boolean[] = [];
+    const quantityDraftObservations: boolean[] = [];
+    const unsubscribeScore = runtime.subscribeCell(row.id, "COL_ID_SCORE", () => {
+      scoreDraftObservations.push(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").hasDraft);
+    });
+    const unsubscribeQuantity = runtime.subscribeCell(row.id, "COL_ID_QUANTITY", () => {
+      quantityDraftObservations.push(runtime.getCellSnapshot(row.id, "COL_ID_QUANTITY").hasDraft);
+    });
+
+    try {
+      expect(
+        runtime.applyCanonicalTextGesture([
+          { rowId: row.id, columnId: "COL_ID_SCORE", canonicalText: "7" },
+          {
+            rowId: row.id,
+            columnId: "COL_ID_QUANTITY",
+            canonicalText: "9007199254740994",
+          },
+        ]),
+      ).toEqual({ kind: "rejected", reason: "temporarily-unavailable" });
+      expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
+      expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBeUndefined();
+      expect(runtime.getDraftSnapshot(row.id, "COL_ID_QUANTITY")).toBeUndefined();
+      expect(scoreDraftObservations).not.toContain(true);
+      expect(quantityDraftObservations).not.toContain(true);
+    } finally {
+      unsubscribeScore();
+      unsubscribeQuantity();
+    }
   });
 });

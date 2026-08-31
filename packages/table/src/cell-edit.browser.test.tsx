@@ -3440,6 +3440,54 @@ test("copies one immutable source-plus-draft projection for active cells and ran
   }
 });
 
+test("copies a visible Immediate Accepted Overlay when the live value becomes invalid", async () => {
+  const writes: string[] = [];
+  const restoreClipboard = installClipboard((text) => {
+    writes.push(text);
+    return Promise.resolve();
+  });
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const renderTable = (sourceRows: readonly Row[], version: number) => (
+    <BrunoTableClient
+      tableId="TABLE_ID_COPY_ACCEPTED_OVERLAY_INVALID_LIVE_VALUE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+      clientSource={{
+        rows: sourceRows,
+        totalRows: sourceRows.length,
+        version,
+        status: "ready",
+      }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />
+  );
+  try {
+    const screen = await render(renderTable(rows, 1));
+    await userEvent.click(screen.getByRole("gridcell", { name: "4", exact: true }));
+    await userEvent.keyboard("{F2}");
+    await userEvent.fill(screen.getByRole("spinbutton", { name: "Edit Score" }), "5");
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+    await expect
+      .element(screen.getByRole("region", { name: "Edit safety" }))
+      .toHaveTextContent("1 Immediate save accepted · waiting for live confirmation");
+
+    const invalidRows = [{ ...rows[0]!, score: Number.NaN }, rows[1]!] satisfies readonly Row[];
+    await screen.rerender(renderTable(invalidRows, 2));
+    const overlay = screen.getByRole("gridcell", { name: "5", exact: true });
+    await expect.element(overlay).toBeVisible();
+
+    await userEvent.click(overlay);
+    await userEvent.keyboard(copyGesture());
+    await vi.waitFor(() => expect(writes).toEqual(["5"]));
+  } finally {
+    restoreClipboard();
+  }
+});
+
 test("ordinary Enter moves exactly one row even when that destination is not editable", async () => {
   type EligibilityRow = Readonly<{ readonly id: string; readonly score: number }>;
   const eligibilityRows: readonly EligibilityRow[] = [
