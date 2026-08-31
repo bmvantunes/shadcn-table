@@ -63,6 +63,7 @@ export type BrunoTableGridHotkeyCommands = Readonly<{
   shiftTab: (event: BrunoTableHotkeyGesture) => void;
   headerMenu: (event: BrunoTableHotkeyGesture) => void;
   copy: (event: BrunoTableHotkeyGesture) => void;
+  paste?: ((event: BrunoTableHotkeyGesture) => void) | undefined;
   undo?: ((event: BrunoTableHotkeyGesture) => void) | undefined;
   redo?: ((event: BrunoTableHotkeyGesture) => void) | undefined;
   selectAll?: ((event: BrunoTableHotkeyGesture) => void) | undefined;
@@ -151,6 +152,9 @@ function createBrunoTableGridHotkeyBindings(
     { hotkey: "Shift+F10", onTrigger: commands.headerMenu },
     { hotkey: BRUNO_TABLE_CONTEXT_MENU_HOTKEY, onTrigger: commands.headerMenu },
     { hotkey: "Mod+C", onTrigger: commands.copy },
+    ...(commands.paste === undefined
+      ? []
+      : ([{ hotkey: "Mod+V", allowInTextInput: false, onTrigger: commands.paste }] as const)),
     ...(commands.undo === undefined
       ? []
       : ([{ hotkey: "Mod+Z", onTrigger: commands.undo }] as const)),
@@ -384,6 +388,7 @@ export const BRUNO_TABLE_FILTER_WORKFLOW_HOTKEY_REGISTRATION_COUNT: number = 1;
 export const BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT: number = 2;
 export const BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT: number = 5;
 export const BRUNO_TABLE_EDIT_MEMORY_HOTKEY_REGISTRATION_COUNT: number = 3;
+export const BRUNO_TABLE_PASTE_HOTKEY_REGISTRATION_COUNT: number = 1;
 
 const BRUNO_TABLE_WORKFLOW_ACTIONS = new WeakMap<HTMLElement, () => void>();
 
@@ -439,6 +444,7 @@ export function brunoTableHotkeyRegistrationBound(
   grouping = false,
   activeEditor = false,
   editMemory = false,
+  paste = false,
 ): number {
   return (
     BRUNO_TABLE_BASE_HOTKEY_REGISTRATION_COUNT +
@@ -446,7 +452,8 @@ export function brunoTableHotkeyRegistrationBound(
     (rowSelection ? BRUNO_TABLE_ROW_SELECTION_HOTKEY_REGISTRATION_COUNT : 0) +
     (grouping ? BRUNO_TABLE_GROUP_BY_HOTKEY_REGISTRATION_COUNT : 0) +
     (activeEditor ? BRUNO_TABLE_CELL_EDITOR_HOTKEY_REGISTRATION_COUNT : 0) +
-    (editMemory ? BRUNO_TABLE_EDIT_MEMORY_HOTKEY_REGISTRATION_COUNT : 0)
+    (editMemory ? BRUNO_TABLE_EDIT_MEMORY_HOTKEY_REGISTRATION_COUNT : 0) +
+    (paste ? BRUNO_TABLE_PASTE_HOTKEY_REGISTRATION_COUNT : 0)
   );
 }
 
@@ -539,7 +546,7 @@ export function useBrunoTableGridHotkeys(
   const bindings = createBrunoTableGridHotkeyBindings(commands);
   const ownerScopedBindings = bindings.map((binding, index) => ({
     ...binding,
-    allowInTextInput: true,
+    allowInTextInput: binding.allowInTextInput ?? true,
     onTrigger: (event: BrunoTableHotkeyGesture) => {
       if (event.defaultPrevented) return;
       const ownsTarget = ownsBrunoTableHotkeyTarget(target.current, event.target);

@@ -1207,7 +1207,16 @@ export function serializeBrunoTableClipboardSnapshot(
   snapshot: BrunoTableClipboardSnapshot,
 ): string {
   const separator = snapshot.axis === "horizontal" ? "\t" : "\n";
-  return snapshot.canonicalTexts.map(escapeTsvCell).join(separator);
+  return snapshot.canonicalTexts
+    .map((value, index) =>
+      escapeTsvCell(
+        value,
+        snapshot.axis === "vertical" &&
+          index === snapshot.canonicalTexts.length - 1 &&
+          value.length === 0,
+      ),
+    )
+    .join(separator);
 }
 
 export function clipboardTargetFromRange(range: BrunoTableCellRange): BrunoTableClipboardTarget {
@@ -1544,8 +1553,8 @@ function sameSnapshot(
   );
 }
 
-function escapeTsvCell(value: string): string {
-  return /[\t\r\n"]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+function escapeTsvCell(value: string, forceQuote = false): string {
+  return forceQuote || /[\t\r\n"]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
 
 function resolvePointerHit(

@@ -198,6 +198,20 @@ import {
 import { BrunoTableCellEditBoundary } from "./cell-edit-boundary";
 import { BrunoTableCellEditGeometryController } from "./cell-edit-geometry";
 import {
+  BrunoTablePasteRuntime,
+  brunoTablePasteDiagnosticFromCellEdit,
+  createBrunoTablePasteDiagnostic,
+  createBrunoTablePasteCoordinateEvidence,
+  createBrunoTablePasteGesture,
+  isBrunoTablePasteTargetCurrent,
+  planBrunoTablePaste,
+  projectBrunoTablePasteTarget,
+  sameBrunoTablePasteTarget,
+  type BrunoTablePasteConfirmation,
+  type BrunoTablePasteDiagnostic,
+} from "./cell-paste";
+import { BrunoTablePasteChrome } from "./cell-paste-chrome";
+import {
   BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY,
   BrunoTableEditSafetyFooter,
   type BrunoTableBlockedReviewRenderer,
@@ -459,17 +473,20 @@ export type BrunoTableViewProps<
 
 function getBrunoTableGridAriaKeyShortcuts({
   copyEnabled,
+  pasteEnabled,
   redoEnabled,
   rowSelectionEnabled,
   undoEnabled,
 }: Readonly<{
   readonly copyEnabled: boolean;
+  readonly pasteEnabled: boolean;
   readonly redoEnabled: boolean;
   readonly rowSelectionEnabled: boolean;
   readonly undoEnabled: boolean;
 }>): string {
   const shortcuts = ["Alt+ArrowLeft", "Alt+ArrowRight", "Shift+F10", "ContextMenu"];
   if (copyEnabled) shortcuts.push("Control+C", "Meta+C");
+  if (pasteEnabled) shortcuts.push("Control+V", "Meta+V");
   if (rowSelectionEnabled) {
     shortcuts.push("Space", "Shift+Space", "Control+A", "Meta+A");
   }
@@ -1114,9 +1131,14 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   rowSelection,
   cellRange,
 }: BrunoTableGridBodyProps<TRuntime, TAdapter>) {
+  const cellEdit = useContext(BrunoTableCellEditContext);
   const [navigation] = useState(() => new BrunoTableNavigationRuntime());
   const [focusHandoff] = useState(() => new BrunoTableBodyFocusHandoff());
   const [interactionAnnouncer] = useState(() => new BrunoTableInteractionAnnouncer());
+  const [pasteRuntime] = useState(() =>
+    cellEdit === undefined ? undefined : new BrunoTablePasteRuntime(focusFallback),
+  );
+  useEffect(() => () => pasteRuntime?.dispose(), [pasteRuntime]);
   const body = useSyncExternalStore(
     runtime.subscribeBody,
     runtime.getBodySnapshot,
@@ -1149,17 +1171,20 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   }, [body.kind, cellRange, emptyCellRangeStructure]);
   if (body.kind === "loading") {
     return (
-      <LoadingRows
-        runtime={runtime}
-        totalRows={body.totalRows}
-        ariaRowCount={body.ariaRowCount ?? body.totalRows}
-        compiledColumns={loadingColumns}
-        structuralColumns={installedGroupingStructure.columns}
-        focusFallback={focusFallback}
-        focusHandoff={focusHandoff}
-        tableId={tableId}
-        rowSelection={loadingRowSelection}
-      />
+      <>
+        <LoadingRows
+          runtime={runtime}
+          totalRows={body.totalRows}
+          ariaRowCount={body.ariaRowCount ?? body.totalRows}
+          compiledColumns={loadingColumns}
+          structuralColumns={installedGroupingStructure.columns}
+          focusFallback={focusFallback}
+          focusHandoff={focusHandoff}
+          tableId={tableId}
+          rowSelection={loadingRowSelection}
+        />
+        {pasteRuntime === undefined ? null : <BrunoTablePasteChrome runtime={pasteRuntime} />}
+      </>
     );
   }
   const rowPipeline = (
@@ -1205,6 +1230,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
             rowSelection={rowSelection}
             cellRange={cellRange}
             interactionAnnouncer={interactionAnnouncer}
+            pasteRuntime={pasteRuntime}
           />
         )
       }
@@ -1216,6 +1242,7 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
         <EmptySourceBody key="empty-source" runtime={runtime} focusFallback={focusFallback} />
       ) : null}
       {rowPipeline}
+      {pasteRuntime === undefined ? null : <BrunoTablePasteChrome runtime={pasteRuntime} />}
     </>
   );
 }
@@ -1390,6 +1417,7 @@ type BrunoTableViewportAdapterProps = {
   readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
   readonly interactionAnnouncer: BrunoTableInteractionAnnouncer;
+  readonly pasteRuntime?: BrunoTablePasteRuntime | undefined;
 };
 
 export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportAdapterProps> = memo(
@@ -1411,6 +1439,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
     rowSelection,
     cellRange,
     interactionAnnouncer,
+    pasteRuntime,
   }: BrunoTableViewportAdapterProps): ReactElement {
     const cellEdit = useContext(BrunoTableCellEditContext);
     const installedProjection = useSyncExternalStore(
@@ -1512,6 +1541,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             enableActiveCellCopy={enableActiveCellCopy}
             rowSelection={projectedRowSelection}
             cellRange={cellRange}
+            pasteRuntime={pasteRuntime}
           />
         )}
       </BrunoTableViewportAdapterBoundary>
@@ -1554,6 +1584,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   enableActiveCellCopy,
   rowSelection,
   cellRange,
+  pasteRuntime,
 }: {
   readonly announce: (message: string) => void;
   readonly announcementMessage: string;
@@ -1595,6 +1626,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly enableActiveCellCopy: boolean;
   readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
+  readonly pasteRuntime?: BrunoTablePasteRuntime | undefined;
 }) {
   const cellEdit = useContext(BrunoTableCellEditContext);
   const editMemory = useContext(BrunoTableEditMemoryContext);
@@ -2634,6 +2666,210 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       () => announceCopy("Copy failed: the browser rejected the clipboard write"),
     );
   };
+  const latestPasteStructure = useRef(cellRangeStructure);
+  const latestPasteColumnLabels = useRef<ReadonlyMap<string, string> | undefined>(
+    new Map(logicalColumns.map((column) => [column.columnId, column.headerName])),
+  );
+  const describePasteCoordinate = useCallback(
+    (coordinate: { readonly rowId: string; readonly columnId: string }) => {
+      const currentRow = latestPasteStructure.current?.rowIndexById.get(coordinate.rowId);
+      return createBrunoTablePasteCoordinateEvidence(
+        latestPasteColumnLabels.current?.get(coordinate.columnId) ?? coordinate.columnId,
+        currentRow === undefined ? coordinate.rowId : String(currentRow + 1),
+      );
+    },
+    [],
+  );
+  const rejectDirectPaste = useCallback(
+    (diagnostic: BrunoTablePasteDiagnostic): void => {
+      pasteRuntime?.notify(diagnostic);
+    },
+    [pasteRuntime],
+  );
+  const pasteReadSequence = useRef(0);
+  const pasteReadPending = useRef(false);
+  useLayoutEffect(() => {
+    latestPasteStructure.current = cellRangeStructure;
+    latestPasteColumnLabels.current = new Map(
+      logicalColumns.map((column) => [column.columnId, column.headerName]),
+    );
+  }, [cellRangeStructure, logicalColumns]);
+  useEffect(
+    () => () => {
+      pasteReadSequence.current += 1;
+      pasteReadPending.current = false;
+      latestPasteStructure.current = undefined;
+      latestPasteColumnLabels.current = undefined;
+    },
+    [],
+  );
+  const runPaste = (event: BrunoTableHotkeyGesture): void => {
+    if (
+      cellEdit === undefined ||
+      cellRange === undefined ||
+      cellRangeStructure === undefined ||
+      pasteRuntime === undefined ||
+      !ownsGridSurface(event)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (pasteReadPending.current) return;
+    const readSequence = ++pasteReadSequence.current;
+    const clipboard = navigator.clipboard;
+    if (clipboard?.readText === undefined) {
+      rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-unavailable"));
+      return;
+    }
+    const active = navigation.getSnapshot();
+    const activeCoordinate =
+      active?.region === "body" && active.rowId !== undefined
+        ? { rowId: active.rowId, columnId: active.columnId }
+        : undefined;
+    cellRange.reconcile(cellRangeStructure);
+    if (cellRange.consumeStructuralInvalidation()) {
+      rejectDirectPaste(createBrunoTablePasteDiagnostic("structure-changed"));
+      return;
+    }
+    const selection = cellRange.getSnapshot();
+    const target = clipboardTargetFromSelection(selection, activeCoordinate);
+    if (target === undefined) {
+      rejectDirectPaste(createBrunoTablePasteDiagnostic("no-target"));
+      return;
+    }
+    let read: Promise<string>;
+    try {
+      pasteReadPending.current = true;
+      read = clipboard.readText();
+    } catch {
+      pasteReadPending.current = false;
+      rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-rejected"));
+      return;
+    }
+    void read.then(
+      (text) => {
+        if (pasteReadSequence.current !== readSequence) return;
+        pasteReadPending.current = false;
+        const currentStructure = latestPasteStructure.current;
+        if (
+          currentStructure === undefined ||
+          !isBrunoTablePasteTargetCurrent(target, currentStructure)
+        ) {
+          rejectDirectPaste(createBrunoTablePasteDiagnostic("structure-changed"));
+          return;
+        }
+        const plan = planBrunoTablePaste(text, target, currentStructure);
+        if (plan.kind === "rejected") {
+          rejectDirectPaste(plan.diagnostic);
+          return;
+        }
+        if (plan.kind === "direct") {
+          const result = cellEdit.applyCanonicalTextGesture(plan.gesture);
+          if (result.kind === "rejected") {
+            rejectDirectPaste(brunoTablePasteDiagnosticFromCellEdit(result));
+          } else {
+            pasteRuntime.clearNotification();
+            setAnnouncement(
+              `${String(plan.gesture.length)} ${plan.gesture.length === 1 ? "cell" : "cells"} pasted`,
+            );
+          }
+          return;
+        }
+        const copiedLength = plan.paste.canonicalTexts.length;
+        const selectedLength =
+          plan.selected.axis === "horizontal"
+            ? plan.selected.columnIds.length
+            : plan.selected.rowIds.length;
+        const rowIndex = currentStructure.rowIndexById.get(plan.start.rowId) ?? 0;
+        const columnIndex = currentStructure.columnIndexById.get(plan.start.columnId) ?? 0;
+        const proposedEndCoordinate =
+          plan.proposed === undefined
+            ? plan.paste.axis === "horizontal"
+              ? createBrunoTablePasteCoordinateEvidence(
+                  `column ${String(columnIndex + copiedLength)}`,
+                  String(rowIndex + 1),
+                )
+              : createBrunoTablePasteCoordinateEvidence(
+                  logicalColumns.find((column) => column.columnId === plan.start.columnId)
+                    ?.headerName ?? plan.start.columnId,
+                  String(rowIndex + copiedLength),
+                )
+            : describePasteCoordinate({
+                rowId: plan.proposed.rowIds.at(-1)!,
+                columnId: plan.proposed.columnIds.at(-1)!,
+              });
+        pasteRuntime.open(
+          Object.freeze({
+            paste: plan.paste,
+            selected: plan.selected,
+            start: plan.start,
+            proposed: plan.proposed,
+            copiedDescription: `${String(copiedLength)}-cell ${plan.paste.axis} line`,
+            selectedDescription: `${String(selectedLength)}-cell ${plan.selected.axis} line`,
+            proposedDescription: `${String(copiedLength)}-cell ${plan.paste.axis} line`,
+            startCoordinate: describePasteCoordinate(plan.start),
+            endCoordinate: proposedEndCoordinate,
+          }),
+        );
+      },
+      () => {
+        if (pasteReadSequence.current !== readSequence) return;
+        pasteReadPending.current = false;
+        rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-rejected"));
+      },
+    );
+  };
+  useEffect(() => {
+    if (pasteRuntime === undefined || cellEdit === undefined) return;
+    return pasteRuntime.register(
+      (confirmation: BrunoTablePasteConfirmation) => {
+        const currentStructure = latestPasteStructure.current;
+        if (currentStructure === undefined) {
+          return Object.freeze({
+            kind: "rejected" as const,
+            diagnostic: createBrunoTablePasteDiagnostic("destination-unavailable"),
+          });
+        }
+        const target = projectBrunoTablePasteTarget(
+          confirmation.paste,
+          confirmation.start,
+          currentStructure,
+        );
+        if (confirmation.proposed === undefined) {
+          return Object.freeze({
+            kind: "rejected" as const,
+            diagnostic: createBrunoTablePasteDiagnostic("out-of-bounds"),
+          });
+        }
+        if (target === undefined || !sameBrunoTablePasteTarget(target, confirmation.proposed)) {
+          return Object.freeze({
+            kind: "rejected" as const,
+            diagnostic: createBrunoTablePasteDiagnostic("confirmation-changed"),
+          });
+        }
+        const gesture = createBrunoTablePasteGesture(
+          confirmation.paste,
+          confirmation.proposed,
+          currentStructure,
+        );
+        if (gesture === undefined) {
+          return Object.freeze({
+            kind: "rejected" as const,
+            diagnostic: createBrunoTablePasteDiagnostic("destination-unavailable"),
+          });
+        }
+        const result = cellEdit.applyCanonicalTextGesture(gesture);
+        return result.kind === "accepted"
+          ? result
+          : Object.freeze({
+              kind: "rejected" as const,
+              diagnostic: brunoTablePasteDiagnosticFromCellEdit(result),
+            });
+      },
+      () => gridElement.current?.focus({ preventScroll: true }),
+      describePasteCoordinate,
+    );
+  }, [cellEdit, describePasteCoordinate, pasteRuntime]);
 
   const runCellRangePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (cellRange === undefined || cellRangeStructure === undefined) return;
@@ -2921,6 +3157,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         "aria-keyshortcuts",
         getBrunoTableGridAriaKeyShortcuts({
           copyEnabled,
+          pasteEnabled: cellEdit !== undefined,
           redoEnabled: availability.redo,
           rowSelectionEnabled: rowSelection !== undefined,
           undoEnabled: availability.undo,
@@ -2929,7 +3166,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     };
     reconcile();
     return editMemory.subscribeHotkeyAvailability(reconcile);
-  }, [copyEnabled, editMemory, rowSelection]);
+  }, [cellEdit, copyEnabled, editMemory, rowSelection]);
   useLayoutEffect(() => {
     if (cellEdit === undefined) return;
     const reconcileAndScheduleTraversal = () => {
@@ -3050,6 +3287,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     },
     headerMenu: runHeaderMenu,
     copy: runCopy,
+    ...(cellEdit === undefined ? {} : { paste: runPaste }),
     ...(editMemory === undefined
       ? {}
       : {
@@ -3101,6 +3339,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           editMemory === undefined
             ? getBrunoTableGridAriaKeyShortcuts({
                 copyEnabled,
+                pasteEnabled: cellEdit !== undefined,
                 redoEnabled: false,
                 rowSelectionEnabled: rowSelection !== undefined,
                 undoEnabled: false,
