@@ -335,6 +335,49 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     );
   });
 
+  test("reports captured destination evidence when the affected identity span changes at release", async () => {
+    const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C", "COL_ID_D"];
+    const { grid, structure } = createGrid(columns);
+    grid.style.width = "320px";
+    let currentStructure = structure;
+    const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+    const describeCoordinate = vi.fn(
+      ({ rowId, columnId }: Readonly<{ readonly rowId: string; readonly columnId: string }>) =>
+        `${rowId}/${columnId}`,
+    );
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => currentStructure,
+      apply,
+      scrollHorizontalByPhysical: () => false,
+      describeCoordinate,
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_D"]')!;
+    handle.dispatchEvent(pointer("pointerdown", 151, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 151, centerOf(target)));
+    await nextFrame();
+
+    currentStructure = createBrunoTableCellRangeStructure(
+      ["ROW_ID_1"],
+      ["COL_ID_A", "COL_ID_REPLACED", "COL_ID_C", "COL_ID_D"],
+    );
+    window.dispatchEvent(pointer("pointerup", 151, centerOf(target)));
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(describeCoordinate).toHaveBeenCalledWith({
+      rowId: "ROW_ID_1",
+      columnId: "COL_ID_B",
+    });
+    expect(runtime.getNotificationSnapshot().message).toBe(
+      "ROW_ID_1/COL_ID_B: The fill destination changed before release. (+2 more) Nothing was applied.",
+    );
+  });
+
   test("preserves a fill when a structure change is outside the affected span", async () => {
     const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
     const { grid, structure } = createGrid(columns);

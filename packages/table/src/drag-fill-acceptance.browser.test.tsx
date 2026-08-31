@@ -5,6 +5,7 @@ import { detectPlatform } from "@tanstack/react-hotkeys";
 import { Schema } from "effect";
 import { ViewServerId, defineViewServerConfig } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
+import { StrictMode } from "react";
 
 import { BrunoTableClient, BrunoTableServer } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
@@ -91,6 +92,16 @@ const pinnedEditableColumns = [
   editableColumns[1],
   editableColumns[2],
   { ...editableColumns[3], pinned: "end" as const },
+] as const satisfies BrunoTableColumns<FillRow>;
+
+const permissionEditableColumns = [
+  {
+    ...editableColumns[0],
+    isEditable: ({ row }: { readonly row: FillRow }) => row.fourth !== "locked",
+  },
+  editableColumns[1],
+  editableColumns[2],
+  editableColumns[3],
 ] as const satisfies BrunoTableColumns<FillRow>;
 
 const dragFillViewportReact = createViewServerReact(
@@ -203,12 +214,13 @@ function clientTable(
   onSaveEdits: (changes: unknown) => PromiseLike<void>,
   clientRows: readonly FillRow[] = rows,
   version = 1,
+  columns: BrunoTableColumns<FillRow> = editableColumns,
 ) {
   return (
     <div style={{ width: 480 }}>
       <BrunoTableClient
         tableId={tableId}
-        columns={editableColumns}
+        columns={columns}
         initialOrderBy={[{ columnId: "COL_ID_FIRST", direction: "asc" }]}
         clientSource={{ rows: clientRows, totalRows: clientRows.length, version, status: "ready" }}
         getRowId={(row) => row.id}
@@ -253,6 +265,46 @@ afterEach(async () => {
 });
 
 describe("BrunoTable Drag Fill acceptance", () => {
+  test("keeps Drag Fill interactive through Strict Mode effect rehearsal and cleans up", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_STRICT_MODE";
+    const screen = await render(<StrictMode>{clientTable(tableId, onSaveEdits)}</StrictMode>);
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+
+    const target = cell(grid, "delta");
+    const handle = dragHandle(grid.element());
+    handle.dispatchEvent(pointer("pointerdown", 223, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 223, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+    await userEvent.keyboard("{F2}");
+    await expect
+      .element(screen.getByRole("textbox", { name: "Edit Second" }))
+      .not.toBeInTheDocument();
+
+    target.dispatchEvent(pointer("pointerup", 223, centerOf(target)));
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+    expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+
+    await settleBrunoTableBrowserFrames();
+    const secondHandle = dragHandle(grid.element());
+    secondHandle.dispatchEvent(pointer("pointerdown", 224, centerOf(secondHandle)));
+    target.dispatchEvent(pointer("pointermove", 224, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+
+    await screen.unmount();
+    window.dispatchEvent(pointer("pointermove", 224, centerOf(target)));
+    window.dispatchEvent(pointer("pointerup", 224, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(onSaveEdits).toHaveBeenCalledOnce();
+  });
+
   test("keeps Drag Fill unavailable while Cell Range owns a pointer", async () => {
     const onSaveEdits = vi.fn(() => Promise.resolve());
     const tableId = "TABLE_ID_DRAG_FILL_RANGE_POINTER_OWNER";
@@ -665,6 +717,89 @@ describe("BrunoTable Drag Fill acceptance", () => {
     expect(onSaveEdits).not.toHaveBeenCalled();
     await expect.element(grid.getByRole("gridcell", { name: "gamma", exact: true })).toBeVisible();
     await expect.element(grid.getByRole("gridcell", { name: "delta", exact: true })).toBeVisible();
+  });
+
+  test("cancels an armed Drag Fill before Reset Review takes modal ownership", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_RESET_REVIEW";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit First" }), "local");
+    await userEvent.keyboard("{Enter}");
+    await selectTwoCellSource(grid.element());
+
+    const target = cell(grid, "delta");
+    const handle = dragHandle(grid.element());
+    handle.dispatchEvent(pointer("pointerdown", 221, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 221, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "Reset edits" }));
+    await expect.element(screen.getByRole("alertdialog", { name: "Reset Review" })).toBeVisible();
+    expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+    expect(grid.element().querySelector("[data-bruno-drag-fill-handle]")).toBeNull();
+
+    await userEvent.keyboard("{Escape}");
+    await expect
+      .element(screen.getByRole("alertdialog", { name: "Reset Review" }))
+      .not.toBeInTheDocument();
+    target.dispatchEvent(pointer("pointerup", 221, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+
+    expect(onSaveEdits).not.toHaveBeenCalled();
+    await expect.element(grid.getByRole("gridcell", { name: "gamma", exact: true })).toBeVisible();
+    await expect.element(grid.getByRole("gridcell", { name: "delta", exact: true })).toBeVisible();
+    expect(dragHandle(grid.element())).toBeVisible();
+  });
+
+  test("cancels an armed Drag Fill before Blocked Changes Review takes modal ownership", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_BLOCKED_REVIEW";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    grid.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.fill(screen.getByRole("textbox", { name: "Edit First" }), "local");
+    await userEvent.keyboard("{Enter}");
+    const lockedRows = [{ ...rows[0]!, fourth: "locked", revision: 2n }] as const;
+    await screen.rerender(
+      clientTable(tableId, onSaveEdits, lockedRows, 2, permissionEditableColumns),
+    );
+    await selectTwoCellSource(grid.element());
+
+    const target = cell(grid, "gamma");
+    const handle = dragHandle(grid.element());
+    handle.dispatchEvent(pointer("pointerdown", 222, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 222, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "1 blocked change" }));
+    await expect
+      .element(screen.getByRole("alertdialog", { name: "Blocked Changes Review" }))
+      .toBeVisible();
+    expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+    expect(grid.element().querySelector("[data-bruno-drag-fill-handle]")).toBeNull();
+
+    await userEvent.keyboard("{Escape}");
+    await expect
+      .element(screen.getByRole("alertdialog", { name: "Blocked Changes Review" }))
+      .not.toBeInTheDocument();
+    target.dispatchEvent(pointer("pointerup", 222, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+
+    expect(onSaveEdits).not.toHaveBeenCalled();
+    await expect.element(grid.getByRole("gridcell", { name: "gamma", exact: true })).toBeVisible();
+    expect(dragHandle(grid.element())).toBeVisible();
   });
 
   test("never exposes the fill handle for a read-only Client capability", async () => {

@@ -335,6 +335,7 @@ type DragFillState =
 type DragFillActorSnapshot = Readonly<{
   readonly value: DragFillState;
   readonly context: DragFillContext;
+  readonly status: "active" | "done" | "error" | "stopped";
 }>;
 
 type DragFillActor = Readonly<{
@@ -364,7 +365,7 @@ export function createBrunoTableDragFillActor(): DragFillActor {
     ) {
       throw new Error("Unexpected Drag Fill workflow state");
     }
-    return Object.freeze({ value, context: snapshot.context });
+    return Object.freeze({ value, context: snapshot.context, status: snapshot.status });
   };
   return Object.freeze({
     start: () => {
@@ -431,7 +432,8 @@ const EMPTY_NOTIFICATION: BrunoTableDragFillNotification = Object.freeze({
 });
 
 export class BrunoTableDragFillRuntime {
-  private readonly actor = createBrunoTableDragFillActor();
+  private actor = createBrunoTableDragFillActor();
+  private actorActive = false;
   private readonly projectionStore = new Store<BrunoTableDragFillProjection>(EMPTY_PROJECTION);
   private readonly notificationStore = new Store<BrunoTableDragFillNotification>(
     EMPTY_NOTIFICATION,
@@ -445,6 +447,14 @@ export class BrunoTableDragFillRuntime {
   private readonly previewCells = new Set<HTMLElement>();
 
   public constructor(private readonly tableId?: string) {
+    this.activateActor();
+  }
+
+  private readonly activateActor = (): void => {
+    if (this.actorActive) return;
+    if (this.actor.getSnapshot().status === "stopped") {
+      this.actor = createBrunoTableDragFillActor();
+    }
     this.actor.subscribe((snapshot) => {
       const active = snapshot.value === "armed";
       const next = active
@@ -458,7 +468,8 @@ export class BrunoTableDragFillRuntime {
       }
     });
     this.actor.start();
-  }
+    this.actorActive = true;
+  };
 
   public readonly getSnapshot = (): BrunoTableDragFillProjection => this.projectionStore.get();
   public readonly subscribe = (listener: () => void): (() => void) => {
@@ -473,6 +484,7 @@ export class BrunoTableDragFillRuntime {
   };
 
   public readonly register = (registration: DragFillRegistration): (() => void) => {
+    this.activateActor();
     this.unregister();
     this.registration = registration;
     this.observer = new MutationObserver(() => this.scheduleReconcile());
@@ -531,7 +543,9 @@ export class BrunoTableDragFillRuntime {
 
   public readonly dispose = (): void => {
     this.unregister();
+    if (!this.actorActive) return;
     this.actor.stop();
+    this.actorActive = false;
   };
 
   private readonly start = (event: PointerEvent): void => {
@@ -650,25 +664,29 @@ export class BrunoTableDragFillRuntime {
       preflight: (): DragFillReleasePreflight => {
         const preview = pointer.preview;
         if (preview === undefined) return Object.freeze({ kind: "cancelled" as const });
+        const firstCoordinate =
+          preview.axis === "horizontal"
+            ? Object.freeze({
+                rowId: pointer.source.rowIds[0]!,
+                columnId: preview.extension.firstIdentity,
+              })
+            : Object.freeze({
+                rowId: preview.extension.firstIdentity,
+                columnId: pointer.source.columnIds[0]!,
+              });
+        const additionalInvalidCount = preview.extension.length - 1;
+        const capturedDestinationEvidence = Object.freeze({
+          ...firstCoordinate,
+          ...(additionalInvalidCount === 0 ? {} : { additionalInvalidCount }),
+        });
         if (!isBrunoTableDragFillCellCountAllowed(preview.extension.length)) {
-          const firstCoordinate =
-            preview.axis === "horizontal"
-              ? Object.freeze({
-                  rowId: pointer.source.rowIds[0]!,
-                  columnId: preview.extension.firstIdentity,
-                })
-              : Object.freeze({
-                  rowId: preview.extension.firstIdentity,
-                  columnId: pointer.source.columnIds[0]!,
-                });
           return Object.freeze({
             kind: "rejected" as const,
             rejection: Object.freeze({
               kind: "rejected" as const,
               reason: "invalid-target" as const,
               detail: `Fill destinations may contain at most ${String(BRUNO_TABLE_DRAG_FILL_MAX_CELLS)} cells`,
-              ...firstCoordinate,
-              additionalInvalidCount: preview.extension.length - 1,
+              ...capturedDestinationEvidence,
             }),
           });
         }
@@ -706,6 +724,7 @@ export class BrunoTableDragFillRuntime {
             rejection: Object.freeze({
               kind: "rejected" as const,
               reason: "structure-changed" as const,
+              ...capturedDestinationEvidence,
             }),
           });
         }

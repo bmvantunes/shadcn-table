@@ -3019,7 +3019,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       dragFillRuntime === undefined ||
       cellRange === undefined ||
       structure === undefined ||
-      editMemory?.getConflictReviewSnapshot().open === true
+      editMemory?.getConflictReviewSnapshot().open === true ||
+      editMemory?.getResetReviewSnapshot().open === true ||
+      editMemory?.getBlockedReviewSnapshot().open === true
     ) {
       dragFillShape.current = undefined;
       return;
@@ -3156,8 +3158,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const unsubscribeRange = cellRange?.subscribe(reconcile);
     const unsubscribeNavigation = navigation.subscribe(reconcile);
     const unsubscribeConflictReview = editMemory?.subscribeConflictReview(reconcile);
+    const unsubscribeResetReview = editMemory?.subscribeResetReview(reconcile);
+    const unsubscribeBlockedReview = editMemory?.subscribeBlockedReview(reconcile);
     reconcile();
     return () => {
+      unsubscribeBlockedReview?.();
+      unsubscribeResetReview?.();
       unsubscribeConflictReview?.();
       unsubscribeNavigation();
       unsubscribeRange?.();
