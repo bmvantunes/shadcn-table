@@ -179,6 +179,33 @@ function undoGesture(): string {
   return detectPlatform() === "mac" ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}";
 }
 
+function redoGesture(): string {
+  return detectPlatform() === "mac" ? "{Meta>}{Shift>}z{/Shift}{/Meta}" : "{Control>}y{/Control}";
+}
+
+function pasteGesture(): string {
+  return detectPlatform() === "mac" ? "{Meta>}v{/Meta}" : "{Control>}v{/Control}";
+}
+
+function installClipboard(readText: () => Promise<string>): {
+  readonly readText: ReturnType<typeof vi.fn>;
+  readonly restore: () => void;
+} {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const read = vi.fn(readText);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { readText: read },
+  });
+  return Object.freeze({
+    readText: read,
+    restore: () => {
+      if (descriptor === undefined) delete (navigator as { clipboard?: Clipboard }).clipboard;
+      else Object.defineProperty(navigator, "clipboard", descriptor);
+    },
+  });
+}
+
 function dragHandle(grid: Element): HTMLElement {
   const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]");
   if (handle === null) throw new Error("Expected the selected fill source to expose its handle.");
@@ -359,6 +386,144 @@ describe("BrunoTable Drag Fill acceptance", () => {
     await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
   });
 
+  test("keeps Drag Fill unavailable while Paste owns an asynchronous read or confirmation", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_PASTE_OWNER";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+    let resolveClipboard!: (text: string) => void;
+    const clipboardText = new Promise<string>((resolve) => {
+      resolveClipboard = resolve;
+    });
+    const clipboard = installClipboard(() => clipboardText);
+    try {
+      await userEvent.keyboard(pasteGesture());
+      await vi.waitFor(() => expect(clipboard.readText).toHaveBeenCalledOnce());
+
+      const pendingHandle = dragHandle(grid.element());
+      const target = cell(grid, "delta");
+      pendingHandle.dispatchEvent(pointer("pointerdown", 225, centerOf(pendingHandle)));
+      target.dispatchEvent(pointer("pointermove", 225, centerOf(target)));
+      await settleBrunoTableBrowserFrames();
+      expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+      window.dispatchEvent(pointer("pointercancel", 225, centerOf(target)));
+
+      resolveClipboard("left\nright");
+      await expect.element(screen.getByRole("alertdialog")).toBeVisible();
+      const confirmingHandle = dragHandle(grid.element());
+      confirmingHandle.dispatchEvent(pointer("pointerdown", 226, centerOf(confirmingHandle)));
+      target.dispatchEvent(pointer("pointermove", 226, centerOf(target)));
+      await settleBrunoTableBrowserFrames();
+      expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+      window.dispatchEvent(pointer("pointercancel", 226, centerOf(target)));
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    } finally {
+      clipboard.restore();
+    }
+    expect(onSaveEdits).not.toHaveBeenCalled();
+  });
+
+  test("consumes Paste and Batch history commands while Drag Fill owns the pointer", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_EDIT_COMMAND_OWNER";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    await userEvent.click(screen.getByRole("switch", { name: "Batch editing" }));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    grid.element().focus();
+    await userEvent.keyboard("{F2}");
+    const editor = screen.getByRole("textbox", { name: "Edit First" });
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "seed{Enter}");
+    await expect.element(grid.getByRole("gridcell", { name: "seed", exact: true })).toBeVisible();
+    grid.element().focus();
+    await userEvent.keyboard("{Home}");
+    await selectTwoCellSource(grid.element());
+
+    const clipboard = installClipboard(async () => "replacement");
+    try {
+      const target = cell(grid, "delta");
+      const handle = dragHandle(grid.element());
+      handle.dispatchEvent(pointer("pointerdown", 228, centerOf(handle)));
+      target.dispatchEvent(pointer("pointermove", 228, centerOf(target)));
+      await settleBrunoTableBrowserFrames();
+      expect(
+        grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+      ).toBeGreaterThan(0);
+
+      await userEvent.keyboard(`${pasteGesture()}${undoGesture()}`);
+      await settleBrunoTableBrowserFrames();
+      expect(clipboard.readText).not.toHaveBeenCalled();
+      await expect.element(grid.getByRole("gridcell", { name: "seed", exact: true })).toBeVisible();
+      expect(
+        grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+      ).toBeGreaterThan(0);
+      await userEvent.keyboard("{Escape}");
+      await userEvent.keyboard(undoGesture());
+      await expect
+        .element(grid.getByRole("gridcell", { name: "alpha", exact: true }))
+        .toBeVisible();
+
+      grid.element().focus();
+      await userEvent.keyboard("{Home}");
+      await selectTwoCellSource(grid.element());
+      const redoHandle = dragHandle(grid.element());
+      redoHandle.dispatchEvent(pointer("pointerdown", 233, centerOf(redoHandle)));
+      target.dispatchEvent(pointer("pointermove", 233, centerOf(target)));
+      await settleBrunoTableBrowserFrames();
+      await userEvent.keyboard(redoGesture());
+      await expect
+        .element(grid.getByRole("gridcell", { name: "alpha", exact: true }))
+        .toBeVisible();
+      expect(
+        grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+      ).toBeGreaterThan(0);
+      await userEvent.keyboard("{Escape}");
+    } finally {
+      clipboard.restore();
+    }
+    expect(onSaveEdits).not.toHaveBeenCalled();
+  });
+
+  test("keeps column resize and Drag Fill mutually exclusive in both admission orders", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_COLUMN_GESTURE_OWNER";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+    const resize = screen.getByRole("separator", { name: "Resize First" }).element();
+    const handleBeforeResize = dragHandle(grid.element());
+    const target = cell(grid, "delta");
+    const initialWidth = resize.getAttribute("aria-valuenow");
+
+    resize.dispatchEvent(pointer("pointerdown", 229, centerOf(resize)));
+    handleBeforeResize.dispatchEvent(pointer("pointerdown", 230, centerOf(handleBeforeResize)));
+    target.dispatchEvent(pointer("pointermove", 230, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+    window.dispatchEvent(pointer("pointercancel", 230, centerOf(target)));
+    window.dispatchEvent(pointer("pointercancel", 229, centerOf(resize)));
+    await settleBrunoTableBrowserFrames();
+
+    await selectTwoCellSource(grid.element());
+    const handle = dragHandle(grid.element());
+    handle.dispatchEvent(pointer("pointerdown", 231, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 231, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+    resize.dispatchEvent(pointer("pointerdown", 232, centerOf(resize)));
+    window.dispatchEvent(
+      pointer("pointermove", 232, { x: centerOf(resize).x + 40, y: centerOf(resize).y }),
+    );
+    window.dispatchEvent(pointer("pointerup", 232, centerOf(resize)));
+    await settleBrunoTableBrowserFrames();
+    expect(resize.getAttribute("aria-valuenow")).toBe(initialWidth);
+    target.dispatchEvent(pointer("pointerup", 231, centerOf(target)));
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+  });
+
   test("suppresses grid navigation while Drag Fill owns the pointer", async () => {
     const onSaveEdits = vi.fn(() => Promise.resolve());
     const tableId = "TABLE_ID_DRAG_FILL_NAVIGATION_OWNER";
@@ -406,6 +571,31 @@ describe("BrunoTable Drag Fill acceptance", () => {
     ).toBeGreaterThan(0);
     target.dispatchEvent(pointer("pointerup", 219, centerOf(target)));
     await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+  });
+
+  test("withdraws Drag Fill while a cell editor owns the interaction", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_EDITOR_OWNER";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+    const staleHandle = dragHandle(grid.element());
+
+    await userEvent.keyboard("{F2}");
+    await expect.element(screen.getByRole("textbox", { name: "Edit Second" })).toBeVisible();
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().querySelector("[data-bruno-drag-fill-handle]")).toBeNull();
+
+    const target = cell(grid, "delta");
+    staleHandle.dispatchEvent(pointer("pointerdown", 234, centerOf(staleHandle)));
+    target.dispatchEvent(pointer("pointermove", 234, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+
+    await userEvent.keyboard("{Escape}");
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().querySelector("[data-bruno-drag-fill-handle]")).not.toBeNull();
+    expect(onSaveEdits).not.toHaveBeenCalled();
   });
 
   test("suppresses produced-text edit activation while Drag Fill owns the pointer", async () => {

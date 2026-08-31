@@ -214,6 +214,7 @@ import {
 import { BrunoTablePasteChrome } from "./cell-paste-chrome";
 import {
   BrunoTableDragFillRuntime,
+  addBrunoTableDragFillRejectionEvidence,
   type BrunoTableDragFillInteractionGeometry,
   type BrunoTableDragFillSource,
   type BrunoTableDragFillSourceShape,
@@ -1698,10 +1699,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
 }) {
   const cellEdit = useContext(BrunoTableCellEditContext);
   const editMemory = useContext(BrunoTableEditMemoryContext);
+  const columnGesture = useRef<BrunoTableColumnGesture | undefined>(undefined);
   const isPointerInteractionActive = useCallback(
     (except?: "cell-range" | "drag-fill"): boolean =>
       (except !== "cell-range" && cellRange?.isPointerGestureActive() === true) ||
-      (except !== "drag-fill" && dragFillRuntime?.getSnapshot().active === true),
+      (except !== "drag-fill" && dragFillRuntime?.getSnapshot().active === true) ||
+      columnGesture.current !== undefined,
     [cellRange, dragFillRuntime],
   );
   const getActiveEditRowId = useCallback((): string | undefined => {
@@ -1799,7 +1802,6 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const copyCommandToken = useRef(0);
   const filterOpenRetry = useRef<() => void>(() => undefined);
   const columnFilterOpeners = useRef(new Map<string, () => void>());
-  const columnGesture = useRef<BrunoTableColumnGesture | undefined>(undefined);
   const gestureCancel = useRef<() => void>(() => undefined);
   const columnPointerDownHandler = useRef<BrunoTableColumnPointerDownHandler>(() => undefined);
   const [columnGestureActor] = useState<BrunoTableColumnGestureActor>(() =>
@@ -2226,6 +2228,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   ): void => {
     if (
       event.button !== 0 ||
+      isPointerInteractionActive() ||
       columnGesture.current !== undefined ||
       columnGestureActor.getSnapshot().status !== "active" ||
       columnGestureActor.getSnapshot().value !== "idle"
@@ -2838,6 +2841,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       return;
     }
     event.preventDefault();
+    if (isPointerInteractionActive()) return;
     if (pasteRuntime.isClipboardReadPending()) {
       rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-pending"));
       return;
@@ -3126,8 +3130,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (grid === null || dragFillRuntime === undefined || cellEdit === undefined) return;
     const unregister = dragFillRuntime.register({
       grid,
-      canStart: () => !isPointerInteractionActive("drag-fill"),
-      getSourceShape: getDragFillSourceShape,
+      canStart: () =>
+        !isPointerInteractionActive("drag-fill") &&
+        cellEdit.getSessionSnapshot().kind !== "editing" &&
+        pasteRuntime?.isClipboardReadPending() !== true &&
+        pasteRuntime?.getSnapshot().open !== true,
+      getSourceShape: () =>
+        cellEdit.getSessionSnapshot().kind === "editing" ? undefined : getDragFillSourceShape(),
       captureSource: captureDragFillSource,
       getStructure: () => latestDragFillStructure.current,
       apply: (cells) => {
@@ -3136,10 +3145,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         if (result.reason === "unchanged") {
           return Object.freeze({ kind: "unchanged" as const });
         }
-        return Object.freeze({
-          ...result,
-          reason: result.reason,
-        });
+        const reason = result.reason;
+        return addBrunoTableDragFillRejectionEvidence(cells, Object.freeze({ ...result, reason }));
       },
       interactionGeometry: () =>
         dragFillLayout.current?.interactionGeometry ?? EMPTY_DRAG_FILL_INTERACTION_GEOMETRY,
@@ -3157,6 +3164,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     };
     const unsubscribeRange = cellRange?.subscribe(reconcile);
     const unsubscribeNavigation = navigation.subscribe(reconcile);
+    const unsubscribeEditSession = cellEdit.subscribeSession(reconcile);
     const unsubscribeConflictReview = editMemory?.subscribeConflictReview(reconcile);
     const unsubscribeResetReview = editMemory?.subscribeResetReview(reconcile);
     const unsubscribeBlockedReview = editMemory?.subscribeBlockedReview(reconcile);
@@ -3165,6 +3173,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       unsubscribeBlockedReview?.();
       unsubscribeResetReview?.();
       unsubscribeConflictReview?.();
+      unsubscribeEditSession();
       unsubscribeNavigation();
       unsubscribeRange?.();
       unregister();
@@ -3180,6 +3189,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     getDragFillSourceShape,
     isPointerInteractionActive,
     navigation,
+    pasteRuntime,
     refreshDragFillSourceShape,
     scrollByLogical,
     scrollVerticalByLogical,
@@ -3632,11 +3642,19 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       : {
           undo: (event: BrunoTableHotkeyGesture) => {
             if (!ownsGridSurface(event)) return;
+            if (isPointerInteractionActive()) {
+              event.preventDefault();
+              return;
+            }
             if (!runtime.dispatchGridCommand({ type: "edits.undo" })) return;
             event.preventDefault();
           },
           redo: (event: BrunoTableHotkeyGesture) => {
             if (!ownsGridSurface(event)) return;
+            if (isPointerInteractionActive()) {
+              event.preventDefault();
+              return;
+            }
             if (!runtime.dispatchGridCommand({ type: "edits.redo" })) return;
             event.preventDefault();
           },

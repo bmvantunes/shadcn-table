@@ -93,7 +93,10 @@ describe("BrunoTable Drag Fill workflow", () => {
       type: "RELEASE",
       preflight: () => ({
         kind: "ready",
-        cells: [{ rowId: "row-a", columnId: "score-3", canonicalText: "3" }],
+        cells: [
+          { rowId: "row-a", columnId: "score-3", canonicalText: "3" },
+          { rowId: "row-a", columnId: "score-4", canonicalText: "4" },
+        ],
       }),
       apply,
       settle,
@@ -189,7 +192,10 @@ describe("BrunoTable Drag Fill workflow", () => {
       type: "RELEASE",
       preflight: () => ({
         kind: "ready",
-        cells: [{ rowId: "row-a", columnId: "score-3", canonicalText: "3" }],
+        cells: [
+          { rowId: "row-a", columnId: "score-3", canonicalText: "3" },
+          { rowId: "row-a", columnId: "score-4", canonicalText: "4" },
+        ],
       }),
       apply: () => {
         throw new Error("application boundary failed");
@@ -201,6 +207,9 @@ describe("BrunoTable Drag Fill workflow", () => {
     expect(settle).toHaveBeenCalledWith({
       kind: "rejected",
       reason: "temporarily-unavailable",
+      rowId: "row-a",
+      columnId: "score-3",
+      additionalInvalidCount: 1,
     });
     actor.stop();
   });
@@ -215,6 +224,11 @@ describe("BrunoTable Drag Fill workflow", () => {
 
     actor.send({
       type: "RELEASE",
+      rejectionEvidence: {
+        rowId: "row-a",
+        columnId: "score-3",
+        additionalInvalidCount: 1,
+      },
       preflight: () => {
         throw new Error("preflight boundary failed");
       },
@@ -227,6 +241,9 @@ describe("BrunoTable Drag Fill workflow", () => {
     expect(settle).toHaveBeenCalledWith({
       kind: "rejected",
       reason: "temporarily-unavailable",
+      rowId: "row-a",
+      columnId: "score-3",
+      additionalInvalidCount: 1,
     });
     expect(release).toHaveBeenCalledOnce();
     actor.stop();

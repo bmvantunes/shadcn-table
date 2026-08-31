@@ -86,6 +86,20 @@ export type BrunoTableDragFillApplyResult =
       readonly additionalInvalidCount?: number;
     }>;
 
+export function addBrunoTableDragFillRejectionEvidence(
+  cells: readonly [BrunoTableDragFillCell, ...BrunoTableDragFillCell[]],
+  rejection: Extract<BrunoTableDragFillApplyResult, { readonly kind: "rejected" }>,
+): Extract<BrunoTableDragFillApplyResult, { readonly kind: "rejected" }> {
+  if (rejection.rowId !== undefined && rejection.columnId !== undefined) return rejection;
+  const first = cells[0];
+  return Object.freeze({
+    ...rejection,
+    rowId: first.rowId,
+    columnId: first.columnId,
+    additionalInvalidCount: cells.length - 1,
+  });
+}
+
 export type BrunoTableDragFillNotification = Readonly<{
   readonly sequence: number;
   readonly message: string;
@@ -118,7 +132,13 @@ type DragFillReleasePreflight =
 type DragFillReleaseOutcome =
   | BrunoTableDragFillApplyResult
   | Readonly<{ readonly kind: "cancelled" }>;
+type DragFillRejectionEvidence = Readonly<{
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly additionalInvalidCount?: number;
+}>;
 type DragFillReleaseOperation = Readonly<{
+  readonly rejectionEvidence?: DragFillRejectionEvidence;
   readonly preflight: () => DragFillReleasePreflight;
   readonly apply: (
     cells: readonly [BrunoTableDragFillCell, ...BrunoTableDragFillCell[]],
@@ -252,6 +272,9 @@ const dragFillMachine = createMachine(
         release: ({ event }) =>
           event.type === "RELEASE"
             ? Object.freeze({
+                ...(event.rejectionEvidence === undefined
+                  ? {}
+                  : { rejectionEvidence: event.rejectionEvidence }),
                 preflight: event.preflight,
                 apply: event.apply,
                 settle: event.settle,
@@ -277,6 +300,7 @@ const dragFillMachine = createMachine(
               rejection: Object.freeze({
                 kind: "rejected" as const,
                 reason: "temporarily-unavailable" as const,
+                ...context.release.rejectionEvidence,
               }),
             });
           }
@@ -288,15 +312,19 @@ const dragFillMachine = createMachine(
             return Object.freeze({
               kind: "rejected" as const,
               reason: "temporarily-unavailable" as const,
+              ...context.release?.rejectionEvidence,
             });
           }
           try {
             return context.release.apply(context.preflight.cells);
           } catch {
-            return Object.freeze({
-              kind: "rejected" as const,
-              reason: "temporarily-unavailable" as const,
-            });
+            return addBrunoTableDragFillRejectionEvidence(
+              context.preflight.cells,
+              Object.freeze({
+                kind: "rejected" as const,
+                reason: "temporarily-unavailable" as const,
+              }),
+            );
           }
         },
       }),
@@ -659,26 +687,29 @@ export class BrunoTableDragFillRuntime {
     pointer.clientY = event.clientY;
     pointer.eventTarget = event.target;
     this.applyPointerFrame(pointer, false);
+    const preview = pointer.preview;
+    const rejectionEvidence =
+      preview === undefined
+        ? undefined
+        : Object.freeze({
+            ...(preview.axis === "horizontal"
+              ? {
+                  rowId: pointer.source.rowIds[0]!,
+                  columnId: preview.extension.firstIdentity,
+                }
+              : {
+                  rowId: preview.extension.firstIdentity,
+                  columnId: pointer.source.columnIds[0]!,
+                }),
+            ...(preview.extension.length === 1
+              ? {}
+              : { additionalInvalidCount: preview.extension.length - 1 }),
+          });
     this.actor.send({
       type: "RELEASE",
+      ...(rejectionEvidence === undefined ? {} : { rejectionEvidence }),
       preflight: (): DragFillReleasePreflight => {
-        const preview = pointer.preview;
         if (preview === undefined) return Object.freeze({ kind: "cancelled" as const });
-        const firstCoordinate =
-          preview.axis === "horizontal"
-            ? Object.freeze({
-                rowId: pointer.source.rowIds[0]!,
-                columnId: preview.extension.firstIdentity,
-              })
-            : Object.freeze({
-                rowId: preview.extension.firstIdentity,
-                columnId: pointer.source.columnIds[0]!,
-              });
-        const additionalInvalidCount = preview.extension.length - 1;
-        const capturedDestinationEvidence = Object.freeze({
-          ...firstCoordinate,
-          ...(additionalInvalidCount === 0 ? {} : { additionalInvalidCount }),
-        });
         if (!isBrunoTableDragFillCellCountAllowed(preview.extension.length)) {
           return Object.freeze({
             kind: "rejected" as const,
@@ -686,7 +717,7 @@ export class BrunoTableDragFillRuntime {
               kind: "rejected" as const,
               reason: "invalid-target" as const,
               detail: `Fill destinations may contain at most ${String(BRUNO_TABLE_DRAG_FILL_MAX_CELLS)} cells`,
-              ...capturedDestinationEvidence,
+              ...rejectionEvidence,
             }),
           });
         }
@@ -724,7 +755,7 @@ export class BrunoTableDragFillRuntime {
             rejection: Object.freeze({
               kind: "rejected" as const,
               reason: "structure-changed" as const,
-              ...capturedDestinationEvidence,
+              ...rejectionEvidence,
             }),
           });
         }
@@ -868,21 +899,31 @@ export class BrunoTableDragFillRuntime {
     if (this.handleHost === host && this.handle !== undefined) return;
     this.removeHandle();
     const handle = registration.grid.ownerDocument.createElement("span");
+    const visual = registration.grid.ownerDocument.createElement("span");
     handle.dataset["brunoDragFillHandle"] = "";
     handle.setAttribute("aria-hidden", "true");
     Object.assign(handle.style, {
-      background: "Highlight",
-      blockSize: "8px",
-      border: "1px solid Canvas",
-      boxSizing: "border-box",
+      blockSize: "24px",
       cursor: "crosshair",
       insetBlockEnd: "0",
       insetInlineEnd: "0",
-      inlineSize: "8px",
+      inlineSize: "24px",
       position: "absolute",
       touchAction: "none",
       zIndex: "12",
     });
+    Object.assign(visual.style, {
+      background: "Highlight",
+      blockSize: "8px",
+      border: "1px solid Canvas",
+      boxSizing: "border-box",
+      insetBlockEnd: "0",
+      insetInlineEnd: "0",
+      inlineSize: "8px",
+      pointerEvents: "none",
+      position: "absolute",
+    });
+    handle.append(visual);
     handle.addEventListener("pointerdown", this.start);
     host.append(handle);
     this.handle = handle;
@@ -989,7 +1030,19 @@ export class BrunoTableDragFillRuntime {
       identities: identitiesForAxis(structure, gesture.axis),
       indexById: indexForAxis(structure, gesture.axis),
     });
-    if (coherent) pointer.structure = structure;
+    if (coherent) {
+      const rebasedGesture = captureGesture(pointer.source, structure, gesture.axis);
+      if (rebasedGesture === undefined) return false;
+      pointer.gesture = rebasedGesture;
+      pointer.preview =
+        pointer.projectedTargetIdentity === undefined
+          ? undefined
+          : projectBrunoTableDragFillPreview({
+              gesture: rebasedGesture,
+              targetIdentity: pointer.projectedTargetIdentity,
+            });
+      pointer.structure = structure;
+    }
     return coherent;
   };
 

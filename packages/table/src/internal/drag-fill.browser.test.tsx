@@ -7,6 +7,7 @@ import { BrunoTableDragFillChrome } from "./drag-fill-chrome";
 import {
   BRUNO_TABLE_DRAG_FILL_MAX_CELLS,
   BrunoTableDragFillRuntime,
+  addBrunoTableDragFillRejectionEvidence,
   type BrunoTableDragFillSource,
 } from "./drag-fill";
 import {
@@ -198,6 +199,121 @@ describe("BrunoTable Drag Fill browser runtime", () => {
       { rowId: "ROW_ID_1", columnId: "COL_ID_D", canonicalText: "stable" },
     ]);
     expect(grid.querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+  });
+
+  test("adds the first coordinate and affected count to a global rejection", async () => {
+    const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
+    const { grid, structure } = createGrid(columns);
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      apply: (cells) =>
+        addBrunoTableDragFillRejectionEvidence(
+          cells,
+          Object.freeze({ kind: "rejected" as const, reason: "temporarily-unavailable" as const }),
+        ),
+      scrollHorizontalByPhysical: () => false,
+      describeCoordinate: ({ rowId, columnId }) => `${rowId}/${columnId}`,
+    });
+    await nextFrame();
+
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_C"]')!;
+    handle.dispatchEvent(pointer("pointerdown", 165, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 165, centerOf(target)));
+    await nextFrame();
+    window.dispatchEvent(pointer("pointerup", 165, centerOf(target)));
+
+    expect(runtime.getNotificationSnapshot().message).toContain("ROW_ID_1/COL_ID_B:");
+    expect(runtime.getNotificationSnapshot().message).toContain("(+1 more)");
+    expect(runtime.getNotificationSnapshot().message).toContain("Nothing was applied");
+  });
+
+  test("retains destination evidence when application throws", async () => {
+    const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
+    const { grid, structure } = createGrid(columns);
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      apply: () => {
+        throw new Error("application boundary failed");
+      },
+      scrollHorizontalByPhysical: () => false,
+      describeCoordinate: ({ rowId, columnId }) => `${rowId}/${columnId}`,
+    });
+    await nextFrame();
+
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_C"]')!;
+    handle.dispatchEvent(pointer("pointerdown", 166, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 166, centerOf(target)));
+    await nextFrame();
+    window.dispatchEvent(pointer("pointerup", 166, centerOf(target)));
+
+    expect(runtime.getNotificationSnapshot().message).toContain("ROW_ID_1/COL_ID_B:");
+    expect(runtime.getNotificationSnapshot().message).toContain("(+1 more)");
+    expect(runtime.getNotificationSnapshot().message).toContain("Nothing was applied");
+  });
+
+  test("retains destination evidence when release preflight throws", async () => {
+    const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
+    const { grid, structure } = createGrid(columns);
+    const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+    let throwOnRelease = false;
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => {
+        if (throwOnRelease) throw new Error("source boundary failed");
+        return source(["COL_ID_A"], ["stable"]);
+      },
+      getStructure: () => structure,
+      apply,
+      scrollHorizontalByPhysical: () => false,
+      describeCoordinate: ({ rowId, columnId }) => `${rowId}/${columnId}`,
+    });
+    await nextFrame();
+
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_C"]')!;
+    handle.dispatchEvent(pointer("pointerdown", 167, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 167, centerOf(target)));
+    await nextFrame();
+    throwOnRelease = true;
+    window.dispatchEvent(pointer("pointerup", 167, centerOf(target)));
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(runtime.getNotificationSnapshot().message).toContain("ROW_ID_1/COL_ID_B:");
+    expect(runtime.getNotificationSnapshot().message).toContain("(+1 more)");
+    expect(runtime.getNotificationSnapshot().message).toContain("Nothing was applied");
+  });
+
+  test("keeps an 8-pixel visual handle inside a 24-pixel pointer target", async () => {
+    const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B"]);
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      apply: () => Object.freeze({ kind: "accepted" as const }),
+      scrollHorizontalByPhysical: () => false,
+    });
+    await nextFrame();
+
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const visual = handle.firstElementChild as HTMLElement | null;
+    expect(handle.style.inlineSize).toBe("24px");
+    expect(handle.style.blockSize).toBe("24px");
+    expect(visual?.style.inlineSize).toBe("8px");
+    expect(visual?.style.blockSize).toBe("8px");
   });
 
   test("preserves non-aligned reverse cyclic phase across a pinned source", async () => {
@@ -410,6 +526,46 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     expect(apply).toHaveBeenCalledWith([
       { rowId: "ROW_ID_1", columnId: "COL_ID_B", canonicalText: "stable" },
       { rowId: "ROW_ID_1", columnId: "COL_ID_C", canonicalText: "stable" },
+    ]);
+  });
+
+  test("rebases an active fill so an appended identity can become its destination", async () => {
+    const initialColumns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
+    const { grid, structure } = createGrid(initialColumns, [...initialColumns, "COL_ID_D"]);
+    grid.style.width = "320px";
+    let currentStructure = structure;
+    const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => currentStructure,
+      apply,
+      scrollHorizontalByPhysical: () => false,
+    });
+    await nextFrame();
+
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const firstTarget = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_C"]')!;
+    const appendedTarget = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_D"]')!;
+    handle.dispatchEvent(pointer("pointerdown", 164, centerOf(handle)));
+    window.dispatchEvent(pointer("pointermove", 164, centerOf(firstTarget)));
+    await nextFrame();
+
+    currentStructure = createBrunoTableCellRangeStructure(
+      ["ROW_ID_1"],
+      [...initialColumns, "COL_ID_D"],
+    );
+    runtime.reconcile();
+    window.dispatchEvent(pointer("pointermove", 164, centerOf(appendedTarget)));
+    await nextFrame();
+    window.dispatchEvent(pointer("pointerup", 164, centerOf(appendedTarget)));
+
+    expect(apply).toHaveBeenCalledWith([
+      { rowId: "ROW_ID_1", columnId: "COL_ID_B", canonicalText: "stable" },
+      { rowId: "ROW_ID_1", columnId: "COL_ID_C", canonicalText: "stable" },
+      { rowId: "ROW_ID_1", columnId: "COL_ID_D", canonicalText: "stable" },
     ]);
   });
 
