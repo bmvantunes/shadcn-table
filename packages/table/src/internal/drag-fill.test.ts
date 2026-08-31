@@ -6,21 +6,24 @@ import {
   type BrunoTableDragFillRejectionReason,
 } from "./drag-fill";
 
-const rejectionMessages = [
-  ["structure-changed", "The fill destination changed before release."],
-  ["temporarily-unavailable", "Editing is temporarily unavailable."],
-  ["invalid-target", "The fill target is invalid."],
-  ["save-locked", "This destination cell is saving."],
-  ["unavailable", "This destination cell is unavailable."],
-  ["stale", "Resolve this cell's stale conflict before filling."],
-  ["blocked", "Resolve this cell's blocked edit before filling."],
-  ["row-version", "This destination row has no usable Row Version."],
-  ["invalid-source", "The source value is invalid."],
-  ["read-only", "This destination cell is read-only."],
-  ["invalid-value", "A repeated value is invalid for its destination."],
-  ["empty", "The fill target is empty."],
-  ["unchanged", "The repeated values did not change the table."],
-] as const satisfies readonly (readonly [BrunoTableDragFillRejectionReason, string])[];
+const rejectionMessageByReason = {
+  "structure-changed": "The fill destination changed before release.",
+  "temporarily-unavailable": "Editing is temporarily unavailable.",
+  "invalid-target": "The fill target is invalid.",
+  "save-locked": "This destination cell is saving.",
+  unavailable: "This destination cell is unavailable.",
+  stale: "Resolve this cell's stale conflict before filling.",
+  blocked: "Resolve this cell's blocked edit before filling.",
+  "row-version": "This destination row has no usable Row Version.",
+  "invalid-source": "The source value is invalid.",
+  "read-only": "This destination cell is read-only.",
+  "invalid-value": "A repeated value is invalid for its destination.",
+  empty: "The fill target is empty.",
+  unchanged: "The repeated values did not change the table.",
+} as const satisfies Readonly<Record<BrunoTableDragFillRejectionReason, string>>;
+const rejectionMessages = Object.entries(rejectionMessageByReason) as Array<
+  [BrunoTableDragFillRejectionReason, string]
+>;
 
 describe("BrunoTable Drag Fill rejection diagnostics", () => {
   it.each(rejectionMessages)("maps %s to an exact Fill reason", (reason, message) => {

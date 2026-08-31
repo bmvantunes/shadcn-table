@@ -12,6 +12,7 @@ import {
   installBrunoTableClientGridSurfaceRenderListenerForTable,
   installBrunoTableClientRowRenderListenerForTable,
   installBrunoTableClientViewRenderListenerForTable,
+  type BrunoTableDragFillFrame,
 } from "./internal/render-instrumentation";
 
 type PerformanceRow = Readonly<{
@@ -70,17 +71,6 @@ const largeFillRow = Object.freeze({
     ]),
   ),
 }) as LargeFillRow;
-
-type DragFillFrameDiagnostic =
-  | Readonly<{
-      readonly phase: "scheduled" | "cancelled";
-      readonly frameId: number;
-    }>
-  | Readonly<{
-      readonly phase: "ran";
-      readonly frameId: number;
-      readonly durationMs: number;
-    }>;
 
 type ClearableMock = Readonly<{ mockClear: () => unknown }>;
 
@@ -282,7 +272,7 @@ function mountedRowIds(grid: HTMLElement): readonly string[] {
   ];
 }
 
-function assertDragFillFrameBudget(name: string, frames: readonly DragFillFrameDiagnostic[]): void {
+function assertDragFillFrameBudget(name: string, frames: readonly BrunoTableDragFillFrame[]): void {
   const durations = frames.flatMap((frame) => (frame.phase === "ran" ? [frame.durationMs] : []));
   const requiredSampleCount = DRAG_FILL_FRAME_WARMUP_SAMPLES + DRAG_FILL_FRAME_MEASURED_SAMPLES;
   expect(durations.length).toBeGreaterThanOrEqual(requiredSampleCount);
@@ -295,7 +285,7 @@ function assertDragFillFrameBudget(name: string, frames: readonly DragFillFrameD
 }
 
 function resetDragFillInstrumentation(
-  frames: DragFillFrameDiagnostic[],
+  frames: BrunoTableDragFillFrame[],
   ...renderMocks: readonly ClearableMock[]
 ): void {
   frames.length = 0;
@@ -303,8 +293,8 @@ function resetDragFillInstrumentation(
 }
 
 async function assertNoAutoscrollFramesAfterCancel(
-  frames: readonly DragFillFrameDiagnostic[],
-  snapshot: readonly DragFillFrameDiagnostic[],
+  frames: readonly BrunoTableDragFillFrame[],
+  snapshot: readonly BrunoTableDragFillFrame[],
 ): Promise<void> {
   await settleBrunoTableBrowserFrames(3);
   const laterFrames = frames.slice(snapshot.length);
@@ -322,7 +312,7 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
   test("fills five thousand virtualized cells through a pinned destination as one bounded Immediate gesture", async () => {
     const tableId = "TABLE_ID_DRAG_FILL_LARGE_ATOMIC";
     const onSaveEdits = vi.fn((_changes: unknown) => Promise.resolve());
-    const frames: DragFillFrameDiagnostic[] = [];
+    const frames: BrunoTableDragFillFrame[] = [];
     const viewRenders = vi.fn();
     const gridSurfaceRenders = vi.fn();
     const rowRenders = vi.fn();
@@ -477,7 +467,7 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
     "keeps %s stationary preview off React and bounds virtual work during physical edge autoscroll",
     async (direction) => {
       const tableId = `TABLE_ID_DRAG_FILL_PERFORMANCE_${direction.toUpperCase()}`;
-      const frames: DragFillFrameDiagnostic[] = [];
+      const frames: BrunoTableDragFillFrame[] = [];
       const viewRenders = vi.fn();
       const gridSurfaceRenders = vi.fn();
       const rowRenders = vi.fn();

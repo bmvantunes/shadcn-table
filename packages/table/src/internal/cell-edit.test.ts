@@ -9937,4 +9937,44 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(onCommitGesture).toHaveBeenCalledOnce();
     expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
   });
+
+  it("rolls back an Immediate Paste when save admission throws", () => {
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture: () => {
+        throw new Error("save admission failed");
+      },
+    });
+    const scoreDraftObservations: boolean[] = [];
+    const quantityDraftObservations: boolean[] = [];
+    const unsubscribeScore = runtime.subscribeCell(row.id, "COL_ID_SCORE", () => {
+      scoreDraftObservations.push(runtime.getCellSnapshot(row.id, "COL_ID_SCORE").hasDraft);
+    });
+    const unsubscribeQuantity = runtime.subscribeCell(row.id, "COL_ID_QUANTITY", () => {
+      quantityDraftObservations.push(runtime.getCellSnapshot(row.id, "COL_ID_QUANTITY").hasDraft);
+    });
+
+    try {
+      expect(
+        runtime.applyCanonicalTextGesture([
+          { rowId: row.id, columnId: "COL_ID_SCORE", canonicalText: "7" },
+          {
+            rowId: row.id,
+            columnId: "COL_ID_QUANTITY",
+            canonicalText: "9007199254740994",
+          },
+        ]),
+      ).toEqual({ kind: "rejected", reason: "temporarily-unavailable" });
+      expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 0, undoCount: 0 });
+      expect(runtime.getDraftSnapshot(row.id, "COL_ID_SCORE")).toBeUndefined();
+      expect(runtime.getDraftSnapshot(row.id, "COL_ID_QUANTITY")).toBeUndefined();
+      expect(scoreDraftObservations.every((hasDraft) => !hasDraft)).toBe(true);
+      expect(quantityDraftObservations.every((hasDraft) => !hasDraft)).toBe(true);
+    } finally {
+      unsubscribeScore();
+      unsubscribeQuantity();
+    }
+  });
 });

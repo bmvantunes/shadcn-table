@@ -38,7 +38,7 @@ type ColumnGestureFrameEvent = Readonly<{
 }> &
   ColumnGestureFrame;
 type ColumnGestureFrameListener = (event: ColumnGestureFrameEvent) => void;
-type DragFillFrame =
+export type BrunoTableDragFillFrame =
   | Readonly<{
       readonly phase: "scheduled" | "cancelled";
       readonly frameId: number;
@@ -48,12 +48,12 @@ type DragFillFrame =
       readonly frameId: number;
       readonly durationMs: number;
     }>;
-type DragFillFrameEvent = Readonly<{
+export type BrunoTableDragFillFrameEvent = Readonly<{
   readonly tableId: string;
   readonly diagnosticBuildContract: typeof BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_SENTINEL;
 }> &
-  DragFillFrame;
-type DragFillFrameListener = (event: DragFillFrameEvent) => void;
+  BrunoTableDragFillFrame;
+type DragFillFrameListener = (event: BrunoTableDragFillFrameEvent) => void;
 
 let clientGridSurfaceRenderListener: Listener | undefined;
 let clientHeaderRenderListener: Listener | undefined;
@@ -174,7 +174,10 @@ export function installBrunoTableClientColumnGestureFrameListener(
   );
 }
 
-export function recordBrunoTableClientDragFillFrame(tableId: string, event: DragFillFrame): void {
+export function recordBrunoTableClientDragFillFrame(
+  tableId: string,
+  event: BrunoTableDragFillFrame,
+): void {
   if (clientDragFillFrameListenerCount === 0) return;
   const listeners = clientDragFillFrameListeners.get(tableId);
   if (listeners === undefined) return;

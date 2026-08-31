@@ -1265,30 +1265,33 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     const disposeDiagnostics = installBrunoTableClientDragFillFrameListener("orders", (event) => {
       frames.push(event);
     });
-    const runtime = new BrunoTableDragFillRuntime("orders");
-    ownedRuntimes.add(runtime);
-    runtime.register({
-      grid,
-      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
-      getStructure: () => structure,
-      apply: () => Object.freeze({ kind: "accepted" as const }),
-      scrollHorizontalByPhysical: () => false,
-    });
-    await nextFrame();
-    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
-    const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_B"]')!;
-    handle.dispatchEvent(pointer("pointerdown", 53, centerOf(handle)));
-    window.dispatchEvent(pointer("pointermove", 53, centerOf(target)));
-    await nextFrame();
-    window.dispatchEvent(pointer("pointermove", 53, centerOf(target)));
-    window.dispatchEvent(pointer("pointercancel", 53, centerOf(target)));
+    try {
+      const runtime = new BrunoTableDragFillRuntime("orders");
+      ownedRuntimes.add(runtime);
+      runtime.register({
+        grid,
+        getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+        getStructure: () => structure,
+        apply: () => Object.freeze({ kind: "accepted" as const }),
+        scrollHorizontalByPhysical: () => false,
+      });
+      await nextFrame();
+      const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+      const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_B"]')!;
+      handle.dispatchEvent(pointer("pointerdown", 53, centerOf(handle)));
+      window.dispatchEvent(pointer("pointermove", 53, centerOf(target)));
+      await nextFrame();
+      window.dispatchEvent(pointer("pointermove", 53, centerOf(target)));
+      window.dispatchEvent(pointer("pointercancel", 53, centerOf(target)));
 
-    expect(frames.map((frame) => frame.phase)).toEqual([
-      "scheduled",
-      "ran",
-      "scheduled",
-      "cancelled",
-    ]);
-    disposeDiagnostics();
+      expect(frames.map((frame) => frame.phase)).toEqual([
+        "scheduled",
+        "ran",
+        "scheduled",
+        "cancelled",
+      ]);
+    } finally {
+      disposeDiagnostics();
+    }
   });
 });
