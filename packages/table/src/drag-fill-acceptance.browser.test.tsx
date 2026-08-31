@@ -118,6 +118,10 @@ type ObservedSaveChangeSet = readonly [
   }>,
 ];
 
+type SaveMock = Readonly<{
+  readonly mock: Readonly<{ readonly calls: readonly unknown[] }>;
+}>;
+
 const groupingColumns = [
   {
     ...readOnlyColumns[0],
@@ -185,6 +189,12 @@ async function dragTo(grid: Element, target: HTMLElement, pointerId: number): Pr
   target.dispatchEvent(pointer("pointermove", pointerId, centerOf(target)));
   await settleBrunoTableBrowserFrames();
   target.dispatchEvent(pointer("pointerup", pointerId, centerOf(target)));
+}
+
+function observedSaveChangeSet(onSaveEdits: SaveMock): ObservedSaveChangeSet {
+  const call = onSaveEdits.mock.calls[0] as readonly [ObservedSaveChangeSet] | undefined;
+  if (call === undefined) throw new Error("Expected one observed Save Change Set.");
+  return call[0];
 }
 
 function clientTable(
@@ -258,9 +268,7 @@ describe("BrunoTable Drag Fill acceptance", () => {
     await settleBrunoTableBrowserFrames();
 
     await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
-    const changeSet = (
-      onSaveEdits.mock.calls as unknown as readonly [readonly [ObservedSaveChangeSet]]
-    )[0][0];
+    const changeSet = observedSaveChangeSet(onSaveEdits);
     expect(changeSet[0].changes).toEqual(
       expect.arrayContaining([
         { columnId: "COL_ID_THIRD", field: "third", before: "gamma", after: "alpha" },
@@ -280,9 +288,7 @@ describe("BrunoTable Drag Fill acceptance", () => {
     await dragTo(grid.element(), cell(grid, "delta"), 201);
 
     await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
-    const changeSet = (
-      onSaveEdits.mock.calls as unknown as readonly [readonly [ObservedSaveChangeSet]]
-    )[0][0];
+    const changeSet = observedSaveChangeSet(onSaveEdits);
     expect(changeSet[0]).toMatchObject({ rowId: "row-1", expectedVersion: 1n });
     expect(changeSet[0].changes).toEqual(
       expect.arrayContaining([
@@ -318,9 +324,7 @@ describe("BrunoTable Drag Fill acceptance", () => {
     await settleBrunoTableBrowserFrames();
 
     await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
-    const changeSet = (
-      onSaveEdits.mock.calls as unknown as readonly [readonly [ObservedSaveChangeSet]]
-    )[0][0];
+    const changeSet = observedSaveChangeSet(onSaveEdits);
     expect(changeSet[0].changes).toEqual(
       expect.arrayContaining([
         { columnId: "COL_ID_THIRD", field: "third", before: "gamma", after: "alpha" },
@@ -362,9 +366,7 @@ describe("BrunoTable Drag Fill acceptance", () => {
     await dragTo(grid.element(), cell(grid, "alpha"), 203);
 
     await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
-    const changeSet = (
-      onSaveEdits.mock.calls as unknown as readonly [readonly [ObservedSaveChangeSet]]
-    )[0][0];
+    const changeSet = observedSaveChangeSet(onSaveEdits);
     expect(changeSet[0].changes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ columnId: "COL_ID_FIRST", after: "gamma" }),
@@ -404,8 +406,8 @@ describe("BrunoTable Drag Fill acceptance", () => {
     await expect.element(grid.getByRole("gridcell", { name: "delta", exact: true })).toBeVisible();
   });
 
-  test("never exposes the fill handle for read-only, grouped, or Server capabilities", async () => {
-    const readOnly = await render(
+  test("never exposes the fill handle for a read-only Client capability", async () => {
+    const screen = await render(
       <BrunoTableClient
         tableId="TABLE_ID_DRAG_FILL_READ_ONLY"
         columns={readOnlyColumns}
@@ -414,12 +416,14 @@ describe("BrunoTable Drag Fill acceptance", () => {
         getRowId={(row) => row.id}
       />,
     );
-    const readOnlyGrid = readOnly.getByRole("grid", {
+    const grid = screen.getByRole("grid", {
       name: "Data for TABLE_ID_DRAG_FILL_READ_ONLY",
     });
-    expect(readOnlyGrid.element().querySelector("[data-bruno-drag-fill-handle]")).toBeNull();
+    expect(grid.element().querySelector("[data-bruno-drag-fill-handle]")).toBeNull();
+  });
 
-    await readOnly.rerender(
+  test("never exposes the fill handle for a grouped Client capability", async () => {
+    await render(
       <BrunoTableClient
         tableId="TABLE_ID_DRAG_FILL_GROUPED"
         columns={groupingColumns}
@@ -437,7 +441,9 @@ describe("BrunoTable Drag Fill acceptance", () => {
         .element()
         .querySelector("[data-bruno-drag-fill-handle]"),
     ).toBeNull();
+  });
 
+  test("never exposes the fill handle for a Server capability", async () => {
     const viewport = {
       semanticKey: () => "drag-fill-server",
       replace: () => ({ setWindow: () => undefined, release: () => undefined }),
@@ -450,7 +456,7 @@ describe("BrunoTable Drag Fill acceptance", () => {
       version: 1,
       status: "ready" as const,
     } as unknown as DragFillViewportSource;
-    await readOnly.rerender(
+    await render(
       <BrunoTableServer
         tableId="TABLE_ID_DRAG_FILL_SERVER"
         columns={readOnlyColumns}
@@ -511,5 +517,62 @@ describe("BrunoTable Drag Fill acceptance", () => {
 
     expect(onSaveEdits).not.toHaveBeenCalled();
     expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+  });
+
+  test("retains an active Drag Fill across value-only publications with the same identity order", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_VALUE_PUBLICATION";
+    const sourceRows = [
+      rows[0]!,
+      {
+        id: "row-2",
+        first: "omega",
+        second: "sigma",
+        third: "theta",
+        fourth: "zeta",
+        revision: 1n,
+      },
+    ] satisfies readonly FillRow[];
+    const screen = await render(clientTable(tableId, onSaveEdits, sourceRows, 1));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+    const target = cell(grid, "delta");
+    const handle = dragHandle(grid.element());
+    handle.dispatchEvent(pointer("pointerdown", 207, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 207, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+
+    await screen.rerender(
+      clientTable(
+        tableId,
+        onSaveEdits,
+        [{ ...sourceRows[0]!, first: "aardvark", revision: 2n }, sourceRows[1]!],
+        2,
+      ),
+    );
+    await settleBrunoTableBrowserFrames();
+    target.dispatchEvent(pointer("pointerup", 207, centerOf(target)));
+
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+    expect(observedSaveChangeSet(onSaveEdits)[0].changes).toEqual(
+      expect.arrayContaining([
+        { columnId: "COL_ID_THIRD", field: "third", before: "gamma", after: "alpha" },
+        { columnId: "COL_ID_FOURTH", field: "fourth", before: "delta", after: "beta" },
+      ]),
+    );
+  });
+
+  test("moves a single-cell fill source with Active Cell-only edit traversal", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_ACTIVE_CELL_TRAVERSAL";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    grid.element().focus();
+    expect(dragHandle(grid.element()).closest('[role="gridcell"]')).toBe(cell(grid, "alpha"));
+
+    await userEvent.keyboard("{F2}{Tab}");
+    await settleBrunoTableBrowserFrames();
+
+    expect(dragHandle(grid.element()).closest('[role="gridcell"]')).toBe(cell(grid, "beta"));
   });
 });

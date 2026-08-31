@@ -702,7 +702,8 @@ export class BrunoTableDragFillRuntime {
     pointer.gesture ??= captureGesture(pointer.source, pointer.structure, axis);
     if (pointer.gesture === undefined) return false;
     if (lockedAxis === undefined) this.actor.send({ type: "LOCK_AXIS", axis });
-    const hit = hitAtPointer(pointer);
+    const gridBounds = pointer.grid.getBoundingClientRect();
+    const hit = hitAtPointer(pointer, gridBounds);
     if (hit !== undefined) {
       const targetIdentity = axis === "horizontal" ? hit.columnId : hit.rowId;
       if (pointer.projectedAxis !== axis || pointer.projectedTargetIdentity !== targetIdentity) {
@@ -720,12 +721,24 @@ export class BrunoTableDragFillRuntime {
       this.clearPreview();
     }
     if (!allowAutoscroll) return false;
-    const geometry = readInteractionGeometry(pointer.registration, pointer.grid);
+    const geometry = readInteractionGeometry(pointer.registration, gridBounds);
     if (axis === "horizontal") {
-      const delta = edgeDelta(pointer.clientX, geometry.centreLeft, geometry.centreRight);
+      const delta = edgeDelta(
+        pointer.clientX,
+        geometry.centreLeft,
+        geometry.centreRight,
+        gridBounds.left,
+        gridBounds.right,
+      );
       return delta !== 0 && pointer.registration.scrollHorizontalByPhysical(delta);
     }
-    const delta = edgeDelta(pointer.clientY, geometry.bodyTop, geometry.bodyBottom);
+    const delta = edgeDelta(
+      pointer.clientY,
+      geometry.bodyTop,
+      geometry.bodyBottom,
+      gridBounds.top,
+      gridBounds.bottom,
+    );
     if (delta === 0) return false;
     return pointer.registration.scrollVerticalByLogical?.(delta) === true;
   };
@@ -941,8 +954,7 @@ function sameProjection(
   return left.active === right.active && left.axis === right.axis;
 }
 
-function hitAtPointer(pointer: PointerGesture) {
-  const bounds = pointer.grid.getBoundingClientRect();
+function hitAtPointer(pointer: PointerGesture, bounds: DOMRectReadOnly) {
   if (
     pointer.clientX < bounds.left ||
     pointer.clientX > bounds.right ||
@@ -957,8 +969,16 @@ function hitAtPointer(pointer: PointerGesture) {
   return brunoTableCellRangePointerHit(target, pointer.grid);
 }
 
-function edgeDelta(position: number, start: number, end: number): number {
-  if (end <= start || position < start || position > end) return 0;
+function edgeDelta(
+  position: number,
+  start: number,
+  end: number,
+  outerStart: number,
+  outerEnd: number,
+): number {
+  if (end <= start) return 0;
+  if (position < start) return position < outerStart ? -DRAG_FILL_AUTOSCROLL_STEP : 0;
+  if (position > end) return position > outerEnd ? DRAG_FILL_AUTOSCROLL_STEP : 0;
   return position < start + DRAG_FILL_AUTOSCROLL_ZONE
     ? -DRAG_FILL_AUTOSCROLL_STEP
     : position > end - DRAG_FILL_AUTOSCROLL_ZONE
@@ -968,7 +988,7 @@ function edgeDelta(position: number, start: number, end: number): number {
 
 function readInteractionGeometry(
   registration: DragFillRegistration,
-  grid: HTMLElement,
+  fallback: DOMRectReadOnly,
 ): BrunoTableDragFillInteractionGeometry {
   const geometry = registration.interactionGeometry?.();
   if (
@@ -982,7 +1002,6 @@ function readInteractionGeometry(
   ) {
     return geometry;
   }
-  const fallback = grid.getBoundingClientRect();
   return Object.freeze({
     bodyTop: fallback.top,
     bodyBottom: fallback.bottom,

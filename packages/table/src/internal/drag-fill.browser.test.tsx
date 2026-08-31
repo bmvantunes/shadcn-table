@@ -1169,11 +1169,18 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     window.dispatchEvent(pointer("pointercancel", 51, centerOf(handle)));
   });
 
-  test("autoscrolls only inside the production-provided centre body lane", async () => {
+  test("continues outside-grid autoscroll without activating in excluded overlays", async () => {
     const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B", "COL_ID_C"]);
     grid.style.height = "120px";
-    const horizontalScroll = vi.fn(() => true);
-    const verticalScroll = vi.fn(() => true);
+    const bounds = grid.getBoundingClientRect();
+    const geometry = {
+      bodyTop: bounds.top + 8,
+      bodyBottom: bounds.bottom - 8,
+      centreLeft: bounds.left + 20,
+      centreRight: bounds.right - 20,
+    };
+    const horizontalScroll = vi.fn(() => false);
+    const verticalScroll = vi.fn(() => false);
     const runtime = new BrunoTableDragFillRuntime();
     ownedRuntimes.add(runtime);
     runtime.register({
@@ -1181,12 +1188,7 @@ describe("BrunoTable Drag Fill browser runtime", () => {
       getSourceShape: () => source(["COL_ID_A"], ["stable"]),
       getStructure: () => structure,
       apply: () => Object.freeze({ kind: "accepted" as const }),
-      interactionGeometry: () => ({
-        bodyTop: 40,
-        bodyBottom: 100,
-        centreLeft: 10,
-        centreRight: 100,
-      }),
+      interactionGeometry: () => geometry,
       scrollHorizontalByPhysical: horizontalScroll,
       scrollVerticalByLogical: verticalScroll,
     });
@@ -1194,28 +1196,66 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
     handle.dispatchEvent(pointer("pointerdown", 52, centerOf(handle)));
 
-    window.dispatchEvent(pointer("pointermove", 52, { x: 1, y: 12 }));
+    window.dispatchEvent(
+      pointer("pointermove", 52, {
+        x: (geometry.centreLeft + geometry.centreRight) / 2,
+        y: bounds.top + 4,
+      }),
+    );
     await nextFrame();
     expect(horizontalScroll).not.toHaveBeenCalled();
     expect(verticalScroll).not.toHaveBeenCalled();
 
-    window.dispatchEvent(pointer("pointermove", 52, { x: 11, y: 12 }));
+    window.dispatchEvent(pointer("pointermove", 52, { x: bounds.left + 4, y: bounds.top + 4 }));
+    await nextFrame();
+    expect(horizontalScroll).not.toHaveBeenCalled();
+    expect(verticalScroll).not.toHaveBeenCalled();
+
+    window.dispatchEvent(pointer("pointermove", 52, { x: bounds.left - 4, y: bounds.top + 4 }));
     await nextFrame();
     expect(horizontalScroll).toHaveBeenCalledWith(-12);
     expect(verticalScroll).not.toHaveBeenCalled();
+
+    horizontalScroll.mockClear();
+    window.dispatchEvent(pointer("pointermove", 52, { x: bounds.right - 4, y: bounds.top + 4 }));
+    await nextFrame();
+    expect(horizontalScroll).not.toHaveBeenCalled();
+
+    window.dispatchEvent(pointer("pointermove", 52, { x: bounds.right + 4, y: bounds.top + 4 }));
+    await nextFrame();
+    expect(horizontalScroll).toHaveBeenCalledWith(12);
     window.dispatchEvent(pointer("pointercancel", 52, centerOf(handle)));
     await nextFrame();
 
     const verticalHandle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
     const verticalStart = centerOf(verticalHandle);
     verticalHandle.dispatchEvent(pointer("pointerdown", 54, verticalStart));
-    window.dispatchEvent(pointer("pointermove", 54, { x: verticalStart.x, y: 20 }));
+
+    window.dispatchEvent(
+      pointer("pointermove", 54, {
+        x: verticalStart.x,
+        y: (geometry.bodyTop + geometry.bodyBottom) / 2,
+      }),
+    );
     await nextFrame();
     expect(verticalScroll).not.toHaveBeenCalled();
 
-    window.dispatchEvent(pointer("pointermove", 54, { x: verticalStart.x, y: 41 }));
+    window.dispatchEvent(pointer("pointermove", 54, { x: verticalStart.x, y: bounds.top + 4 }));
+    await nextFrame();
+    expect(verticalScroll).not.toHaveBeenCalled();
+
+    window.dispatchEvent(pointer("pointermove", 54, { x: verticalStart.x, y: bounds.top - 4 }));
     await nextFrame();
     expect(verticalScroll).toHaveBeenCalledWith(-12);
+
+    verticalScroll.mockClear();
+    window.dispatchEvent(pointer("pointermove", 54, { x: verticalStart.x, y: bounds.bottom - 4 }));
+    await nextFrame();
+    expect(verticalScroll).not.toHaveBeenCalled();
+
+    window.dispatchEvent(pointer("pointermove", 54, { x: verticalStart.x, y: bounds.bottom + 4 }));
+    await nextFrame();
+    expect(verticalScroll).toHaveBeenCalledWith(12);
     window.dispatchEvent(pointer("pointercancel", 54, centerOf(verticalHandle)));
   });
 

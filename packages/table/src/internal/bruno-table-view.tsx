@@ -2762,6 +2762,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     );
   };
   const latestPasteStructure = useRef(cellRangeStructure);
+  const latestDragFillStructure = useRef(cellRangeStructure);
   const latestPasteColumnLabels = useRef<ReadonlyMap<string, string> | undefined>(
     new Map(logicalColumns.map((column) => [column.columnId, column.headerName])),
   );
@@ -2783,6 +2784,14 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   );
   useLayoutEffect(() => {
     latestPasteStructure.current = cellRangeStructure;
+    const previousDragFillStructure = latestDragFillStructure.current;
+    latestDragFillStructure.current =
+      previousDragFillStructure !== undefined &&
+      cellRangeStructure !== undefined &&
+      sameStringSequence(previousDragFillStructure.rowIds, cellRangeStructure.rowIds) &&
+      sameStringSequence(previousDragFillStructure.columnIds, cellRangeStructure.columnIds)
+        ? previousDragFillStructure
+        : cellRangeStructure;
     latestPasteColumnLabels.current = new Map(
       logicalColumns.map((column) => [column.columnId, column.headerName]),
     );
@@ -2790,6 +2799,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   useEffect(
     () => () => {
       latestPasteStructure.current = undefined;
+      latestDragFillStructure.current = undefined;
       latestPasteColumnLabels.current = undefined;
     },
     [],
@@ -2978,8 +2988,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     | undefined
   >(undefined);
   const refreshDragFillSourceShape = useCallback((): void => {
-    const structure = latestPasteStructure.current;
-    if (dragFillRuntime === undefined || cellRange === undefined || structure === undefined) {
+    const structure = latestDragFillStructure.current;
+    if (
+      dragFillRuntime === undefined ||
+      cellRange === undefined ||
+      structure === undefined ||
+      editMemory?.getConflictReviewSnapshot().open === true
+    ) {
       dragFillShape.current = undefined;
       return;
     }
@@ -3022,7 +3037,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       identity,
       source,
     });
-  }, [cellRange, dragFillRuntime, navigation]);
+  }, [cellRange, dragFillRuntime, editMemory, navigation]);
   const getDragFillSourceShape = useCallback(
     (): BrunoTableDragFillSourceShape | undefined => dragFillShape.current?.source,
     [],
@@ -3076,7 +3091,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       grid,
       getSourceShape: getDragFillSourceShape,
       captureSource: captureDragFillSource,
-      getStructure: () => latestPasteStructure.current,
+      getStructure: () => latestDragFillStructure.current,
       apply: (cells) => cellEdit.applyCanonicalTextGesture(cells),
       interactionGeometry: () =>
         dragFillLayout.current?.interactionGeometry ?? EMPTY_DRAG_FILL_INTERACTION_GEOMETRY,
@@ -3093,8 +3108,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       dragFillRuntime.reconcile();
     };
     const unsubscribeRange = cellRange?.subscribe(reconcile);
+    const unsubscribeNavigation = navigation.subscribe(reconcile);
+    const unsubscribeConflictReview = editMemory?.subscribeConflictReview(reconcile);
     reconcile();
     return () => {
+      unsubscribeConflictReview?.();
+      unsubscribeNavigation();
       unsubscribeRange?.();
       unregister();
       dragFillShape.current = undefined;
@@ -3105,7 +3124,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     cellRange,
     describePasteCoordinate,
     dragFillRuntime,
+    editMemory,
     getDragFillSourceShape,
+    navigation,
     refreshDragFillSourceShape,
     scrollByLogical,
     scrollVerticalByLogical,

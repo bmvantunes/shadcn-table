@@ -288,7 +288,7 @@ describe("BrunoTable Drag Fill planner", () => {
     expect(identityReads).toBeLessThanOrEqual(8);
   });
 
-  it("rejects an incomplete or changed interior span only during release materialization", () => {
+  it("rejects an incomplete span only during release materialization", () => {
     const identities = [
       "COL_ID_A",
       "COL_ID_B",
@@ -301,6 +301,39 @@ describe("BrunoTable Drag Fill planner", () => {
       ["COL_ID_D", 3],
     ]);
 
+    const gesture = captureBrunoTableDragFillGesture({
+      axis: "horizontal",
+      identities: orderedColumnIds,
+      indexById: columnIndexById,
+      sourceCanonicalTexts: ["stable"],
+      sourceFirstIdentity: "COL_ID_A",
+      sourceLastIdentity: "COL_ID_A",
+    });
+    const preview = gesture === undefined ? undefined : project(gesture, "COL_ID_D");
+
+    expect(preview).toBeDefined();
+    expect(
+      gesture === undefined || preview === undefined
+        ? undefined
+        : materializeBrunoTableDragFillCandidates({
+            gesture,
+            preview,
+            identities,
+            indexById,
+          }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a same-length interior identity move during release materialization", () => {
+    const identities = Object.freeze([
+      "COL_ID_A",
+      "COL_ID_C",
+      "COL_ID_B",
+      "COL_ID_D",
+      "COL_ID_E",
+      "COL_ID_F",
+    ]);
+    const indexById = new Map(identities.map((columnId, index) => [columnId, index] as const));
     const gesture = captureBrunoTableDragFillGesture({
       axis: "horizontal",
       identities: orderedColumnIds,
