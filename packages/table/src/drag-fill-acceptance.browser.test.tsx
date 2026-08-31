@@ -253,6 +253,133 @@ afterEach(async () => {
 });
 
 describe("BrunoTable Drag Fill acceptance", () => {
+  test("keeps Drag Fill unavailable while Cell Range owns a pointer", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_RANGE_POINTER_OWNER";
+    await render(clientTable(tableId, onSaveEdits));
+    const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+
+    const rangeOrigin = cell(grid, "alpha");
+    rangeOrigin.dispatchEvent(pointer("pointerdown", 213, centerOf(rangeOrigin)));
+    await settleBrunoTableBrowserFrames();
+
+    const blockedHandle = dragHandle(grid.element());
+    const target = cell(grid, "delta");
+    blockedHandle.dispatchEvent(pointer("pointerdown", 214, centerOf(blockedHandle)));
+    target.dispatchEvent(pointer("pointermove", 214, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+
+    expect(grid.element().querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+    window.dispatchEvent(pointer("pointercancel", 214, centerOf(target)));
+    window.dispatchEvent(pointer("pointercancel", 213, centerOf(rangeOrigin)));
+    await settleBrunoTableBrowserFrames();
+
+    await dragTo(grid.element(), target, 215);
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+  });
+
+  test("keeps Cell Range unavailable while Drag Fill owns a pointer", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_POINTER_OWNER";
+    await render(clientTable(tableId, onSaveEdits));
+    const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+
+    const handle = dragHandle(grid.element());
+    const target = cell(grid, "delta");
+    handle.dispatchEvent(pointer("pointerdown", 216, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 216, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+
+    const competingRangeOrigin = cell(grid, "gamma");
+    competingRangeOrigin.dispatchEvent(pointer("pointerdown", 217, centerOf(competingRangeOrigin)));
+    await settleBrunoTableBrowserFrames();
+
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+    window.dispatchEvent(pointer("pointercancel", 217, centerOf(competingRangeOrigin)));
+    target.dispatchEvent(pointer("pointerup", 216, centerOf(target)));
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+  });
+
+  test("suppresses grid navigation while Drag Fill owns the pointer", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_NAVIGATION_OWNER";
+    await render(clientTable(tableId, onSaveEdits));
+    const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+
+    const handle = dragHandle(grid.element());
+    const target = cell(grid, "delta");
+    handle.dispatchEvent(pointer("pointerdown", 218, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 218, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+
+    for (const gesture of ["{ArrowRight}", "{PageDown}", "{Tab}"]) {
+      await userEvent.keyboard(gesture);
+      await settleBrunoTableBrowserFrames();
+      expect(
+        grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+      ).toBeGreaterThan(0);
+    }
+
+    target.dispatchEvent(pointer("pointerup", 218, centerOf(target)));
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+  });
+
+  test("suppresses F2 edit activation while Drag Fill owns the pointer", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_F2_OWNER";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+
+    const handle = dragHandle(grid.element());
+    const target = cell(grid, "delta");
+    handle.dispatchEvent(pointer("pointerdown", 219, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 219, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+
+    await userEvent.keyboard("{F2}");
+    await settleBrunoTableBrowserFrames();
+
+    await expect.element(screen.getByRole("textbox", { name: /^Edit / })).not.toBeInTheDocument();
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+    target.dispatchEvent(pointer("pointerup", 219, centerOf(target)));
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+  });
+
+  test("suppresses produced-text edit activation while Drag Fill owns the pointer", async () => {
+    const onSaveEdits = vi.fn(() => Promise.resolve());
+    const tableId = "TABLE_ID_DRAG_FILL_PRODUCED_TEXT_OWNER";
+    const screen = await render(clientTable(tableId, onSaveEdits));
+    const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+    await selectTwoCellSource(grid.element());
+
+    const handle = dragHandle(grid.element());
+    const target = cell(grid, "delta");
+    handle.dispatchEvent(pointer("pointerdown", 220, centerOf(handle)));
+    target.dispatchEvent(pointer("pointermove", 220, centerOf(target)));
+    await settleBrunoTableBrowserFrames();
+
+    await userEvent.keyboard("x");
+    await settleBrunoTableBrowserFrames();
+
+    await expect.element(screen.getByRole("textbox", { name: /^Edit / })).not.toBeInTheDocument();
+    expect(
+      grid.element().querySelectorAll("[data-bruno-drag-fill-preview]").length,
+    ).toBeGreaterThan(0);
+    target.dispatchEvent(pointer("pointerup", 220, centerOf(target)));
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledOnce());
+  });
+
   test("keeps range source identity compact until an admitted handle press", async () => {
     const tableId = "TABLE_ID_DRAG_FILL_COMPACT_SOURCE";
     let materializations = 0;

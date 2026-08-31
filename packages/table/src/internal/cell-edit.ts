@@ -2884,11 +2884,21 @@ export class BrunoTableCellEditRuntime {
   public readonly applyCanonicalTextGesture = (
     cells: BrunoTableCellEditCanonicalTextGesture,
   ): BrunoTableCellEditCanonicalTextGestureResult => {
+    if (this.batchSaveLockOperationId !== undefined) {
+      const first = cells[0];
+      const additionalInvalidCount = cells.length - 1;
+      return Object.freeze({
+        kind: "rejected",
+        reason: "save-locked",
+        rowId: first.rowId,
+        columnId: first.columnId,
+        ...(additionalInvalidCount === 0 ? {} : { additionalInvalidCount }),
+      });
+    }
     if (
       !this.saveOperationCapacityAvailable ||
       this.getSessionSnapshot().kind === "editing" ||
-      (!this.batchHistoryEnabled && !this.isSourceAuthoritative()) ||
-      this.batchSaveLockOperationId !== undefined
+      (!this.batchHistoryEnabled && !this.isSourceAuthoritative())
     ) {
       return Object.freeze({ kind: "rejected", reason: "temporarily-unavailable" });
     }

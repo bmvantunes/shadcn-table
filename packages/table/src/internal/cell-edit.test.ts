@@ -10046,6 +10046,46 @@ describe("BrunoTable Cell Edit Session", () => {
     }
   });
 
+  it("reports every destination as save-locked during an active Batch Save without mutating edit state", () => {
+    const onCommitGesture = vi.fn();
+    const runtime = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: () => row,
+      getRowVersion: () => 1n,
+      onCommitGesture,
+    });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    const changeSet = runtime.createBatchSaveChangeSet();
+    expect(changeSet).toBeDefined();
+    expect(runtime.beginSaveOperation("batch-lock", changeSet!, true)).toBe(true);
+    const activityBefore = runtime.getActivitySnapshot();
+    const draftsBefore = runtime.getDraftMemorySnapshot();
+
+    expect(
+      runtime.applyCanonicalTextGesture([
+        {
+          rowId: row.id,
+          columnId: "COL_ID_QUANTITY",
+          canonicalText: "9007199254740994",
+        },
+        { rowId: row.id, columnId: "COL_ID_SCORE", canonicalText: "8" },
+      ]),
+    ).toEqual({
+      kind: "rejected",
+      reason: "save-locked",
+      rowId: row.id,
+      columnId: "COL_ID_QUANTITY",
+      additionalInvalidCount: 1,
+    });
+    expect(runtime.getActivitySnapshot()).toBe(activityBefore);
+    expect(runtime.getDraftMemorySnapshot()).toBe(draftsBefore);
+    expect(runtime.hasSaveCellProjection(row.id, "COL_ID_QUANTITY")).toBe(false);
+    expect(runtime.hasSaveCellProjection(row.id, "COL_ID_SCORE")).toBe(true);
+    expect(onCommitGesture).not.toHaveBeenCalled();
+  });
+
   it("reports a refused Immediate Paste admission as temporarily unavailable", () => {
     const onCommitGesture = vi.fn(() => "rejected" as const);
     const runtime = new BrunoTableCellEditRuntime({

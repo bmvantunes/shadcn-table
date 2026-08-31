@@ -1174,14 +1174,20 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     );
     const { grid, structure } = createGrid(columnIds, [columnIds[0]!, columnIds.at(-1)!]);
     const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+    const getStructure = vi.fn(() => structure);
+    const describeCoordinate = vi.fn(
+      ({ rowId, columnId }: Readonly<{ readonly rowId: string; readonly columnId: string }>) =>
+        `${rowId}/${columnId}`,
+    );
     const runtime = new BrunoTableDragFillRuntime();
     ownedRuntimes.add(runtime);
     runtime.register({
       grid,
       getSourceShape: () => source([columnIds[0]!], ["stable"]),
-      getStructure: () => structure,
+      getStructure,
       apply,
       scrollHorizontalByPhysical: () => false,
+      describeCoordinate,
     });
     await nextFrame();
     const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
@@ -1191,10 +1197,18 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     handle.dispatchEvent(pointer("pointerdown", 66, centerOf(handle)));
     window.dispatchEvent(pointer("pointermove", 66, centerOf(target)));
     await nextFrame();
+    getStructure.mockClear();
     window.dispatchEvent(pointer("pointerup", 66, centerOf(target)));
 
     expect(apply).not.toHaveBeenCalled();
-    expect(runtime.getNotificationSnapshot().message).toContain("at most 16384 cells.");
+    expect(getStructure).not.toHaveBeenCalled();
+    expect(describeCoordinate).toHaveBeenCalledWith({
+      rowId: "ROW_ID_1",
+      columnId: "COL_ID_1",
+    });
+    expect(runtime.getNotificationSnapshot().message).toBe(
+      "ROW_ID_1/COL_ID_1: Fill destinations may contain at most 16384 cells. (+16384 more) Nothing was applied.",
+    );
   });
 
   test("extends the preview through cells revealed by outside-grid autoscroll", async () => {

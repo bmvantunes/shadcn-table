@@ -386,6 +386,7 @@ export function createBrunoTableDragFillActor(): DragFillActor {
 
 type DragFillRegistration = Readonly<{
   readonly grid: HTMLElement;
+  readonly canStart?: (() => boolean) | undefined;
   /** Cheap shape-only read used by DOM reconciliation and release invalidation. */
   readonly getSourceShape: () => BrunoTableDragFillSourceShape | undefined;
   /** One immutable canonical capture, invoked only for an admitted pointerdown. */
@@ -535,7 +536,7 @@ export class BrunoTableDragFillRuntime {
 
   private readonly start = (event: PointerEvent): void => {
     const registration = this.registration;
-    if (registration === undefined) return;
+    if (registration === undefined || registration.canStart?.() === false) return;
     const sourceShape = registration.getSourceShape();
     const structure = registration.getStructure();
     const view = registration.grid.ownerDocument.defaultView;
@@ -650,12 +651,24 @@ export class BrunoTableDragFillRuntime {
         const preview = pointer.preview;
         if (preview === undefined) return Object.freeze({ kind: "cancelled" as const });
         if (!isBrunoTableDragFillCellCountAllowed(preview.extension.length)) {
+          const firstCoordinate =
+            preview.axis === "horizontal"
+              ? Object.freeze({
+                  rowId: pointer.source.rowIds[0]!,
+                  columnId: preview.extension.firstIdentity,
+                })
+              : Object.freeze({
+                  rowId: preview.extension.firstIdentity,
+                  columnId: pointer.source.columnIds[0]!,
+                });
           return Object.freeze({
             kind: "rejected" as const,
             rejection: Object.freeze({
               kind: "rejected" as const,
               reason: "invalid-target" as const,
               detail: `Fill destinations may contain at most ${String(BRUNO_TABLE_DRAG_FILL_MAX_CELLS)} cells`,
+              ...firstCoordinate,
+              additionalInvalidCount: preview.extension.length - 1,
             }),
           });
         }

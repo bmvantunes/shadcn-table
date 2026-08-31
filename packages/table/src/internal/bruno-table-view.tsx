@@ -1237,6 +1237,9 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
           rowSelection={loadingRowSelection}
         />
         {pasteRuntime === undefined ? null : <BrunoTablePasteChrome runtime={pasteRuntime} />}
+        {dragFillRuntime === undefined ? null : (
+          <BrunoTableDragFillChrome runtime={dragFillRuntime} />
+        )}
       </>
     );
   }
@@ -1695,6 +1698,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
 }) {
   const cellEdit = useContext(BrunoTableCellEditContext);
   const editMemory = useContext(BrunoTableEditMemoryContext);
+  const isPointerInteractionActive = useCallback(
+    (except?: "cell-range" | "drag-fill"): boolean =>
+      (except !== "cell-range" && cellRange?.isPointerGestureActive() === true) ||
+      (except !== "drag-fill" && dragFillRuntime?.getSnapshot().active === true),
+    [cellRange, dragFillRuntime],
+  );
   const getActiveEditRowId = useCallback((): string | undefined => {
     const session = cellEdit?.getSessionSnapshot();
     return session?.kind === "editing" ? session.rowId : undefined;
@@ -2643,7 +2652,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   ): void => {
     if (!ownsGridSurface(event)) return;
     event.preventDefault();
-    if (cellRange?.isPointerGestureActive() === true) return;
+    if (isPointerInteractionActive()) return;
     const currentRange = cellRange?.getSnapshot().range;
     const extendingRange = extendCellRange && cellRange !== undefined;
     if (extendingRange && currentRange !== undefined && cellRangeStructure !== undefined) {
@@ -3115,6 +3124,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (grid === null || dragFillRuntime === undefined || cellEdit === undefined) return;
     const unregister = dragFillRuntime.register({
       grid,
+      canStart: () => !isPointerInteractionActive("drag-fill"),
       getSourceShape: getDragFillSourceShape,
       captureSource: captureDragFillSource,
       getStructure: () => latestDragFillStructure.current,
@@ -3162,6 +3172,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     dragFillRuntime,
     editMemory,
     getDragFillSourceShape,
+    isPointerInteractionActive,
     navigation,
     refreshDragFillSourceShape,
     scrollByLogical,
@@ -3173,7 +3184,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   }, [cellRangeStructure, dragFillRuntime, refreshDragFillSourceShape]);
 
   const runCellRangePointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (cellRange === undefined || cellRangeStructure === undefined) return;
+    if (
+      cellRange === undefined ||
+      cellRangeStructure === undefined ||
+      isPointerInteractionActive("cell-range")
+    ) {
+      return;
+    }
     const grid = event.currentTarget;
     const hit = brunoTableCellRangePointerHit(event.target, grid);
     if (hit === undefined) return;
@@ -3292,6 +3309,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     shift: boolean,
   ): void => {
     if (!ownsGridSurface(event)) return;
+    if (isPointerInteractionActive()) {
+      event.preventDefault();
+      return;
+    }
     navigation.activateForFocus();
     const active = navigation.getSnapshot();
     if (
@@ -3393,6 +3414,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     if (cellEdit === undefined || !ownsGridSurface(event)) {
       return;
     }
+    if (isPointerInteractionActive()) {
+      event.preventDefault();
+      return;
+    }
     if (!cellEdit.isTraversalReady()) {
       event.preventDefault();
       return;
@@ -3414,7 +3439,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     revealCell(destination.rowIndex, destination.columnId, "body", destination.rowId);
   };
   const startReplaceFromProducedText = (producedText: string): boolean => {
-    if (cellEdit === undefined || producedText.length === 0) return false;
+    if (cellEdit === undefined || producedText.length === 0 || isPointerInteractionActive()) {
+      return false;
+    }
     const active = navigation.getSnapshot();
     const column = logicalColumns.find((candidate) => candidate.columnId === active?.columnId);
     if (

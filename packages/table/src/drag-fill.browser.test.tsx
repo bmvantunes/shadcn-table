@@ -48,6 +48,17 @@ const columns = [
     width: 80,
     isEditable: true,
   },
+] as const satisfies BrunoTableColumns<Row>;
+
+const rejectionColumns = [
+  columns[0],
+  {
+    ...columns[1],
+    validate: ({ value }: { readonly value: string }) =>
+      value === "alpha" ? "Second cannot repeat alpha." : undefined,
+  },
+  columns[2],
+  columns[3],
 ] satisfies BrunoTableColumns<Row>;
 
 const rows = [
@@ -174,4 +185,56 @@ test("keeps Drag Fill layout reads out of the hot pointer frame", async () => {
     ),
   ).toBe(false);
   expect(directionRead).not.toHaveBeenCalled();
+});
+
+test("retains a Drag Fill rejection across ready and loading body transitions", async () => {
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const renderTable = (status: "loading" | "ready", version: number) => (
+    <div style={{ width: 480 }}>
+      <BrunoTableClient
+        tableId="TABLE_ID_DRAG_FILL_PERSISTENT_REJECTION"
+        columns={rejectionColumns}
+        initialOrderBy={[{ columnId: "COL_ID_FIRST", direction: "asc" }]}
+        clientSource={{
+          rows: status === "ready" ? rows : [],
+          totalRows: rows.length,
+          version,
+          status,
+        }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={onSaveEdits}
+      />
+    </div>
+  );
+  const screen = await render(renderTable("ready", 1));
+  const grid = screen.getByRole("grid", {
+    name: "Data for TABLE_ID_DRAG_FILL_PERSISTENT_REJECTION",
+  });
+  const source = grid.getByRole("gridcell", { name: "alpha", exact: true }).element();
+  const destination = grid.getByRole("gridcell", { name: "beta", exact: true }).element();
+  source.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  await settleBrunoTableBrowserFrames();
+  const handle = grid.element().querySelector<HTMLElement>("[data-bruno-drag-fill-handle]");
+  if (handle === null) throw new Error("Expected an active-cell Drag Fill handle.");
+  handle.dispatchEvent(pointer("pointerdown", 93, centerOf(handle)));
+  destination.dispatchEvent(pointer("pointermove", 93, centerOf(destination)));
+  await settleBrunoTableBrowserFrames();
+  destination.dispatchEvent(pointer("pointerup", 93, centerOf(destination)));
+  const rejectionIsVisible = () =>
+    screen
+      .getByRole("region", { name: "Notifications", exact: true })
+      .all()
+      .some((region) => region.element().textContent?.includes("Second cannot repeat alpha."));
+  await vi.waitFor(() => expect(rejectionIsVisible()).toBe(true));
+
+  await screen.rerender(renderTable("loading", 2));
+  await vi.waitFor(() => expect(rejectionIsVisible()).toBe(true));
+  await expect
+    .element(screen.getByRole("button", { name: "Close toast", exact: true }))
+    .toBeVisible();
+  await screen.rerender(renderTable("ready", 3));
+  await vi.waitFor(() => expect(rejectionIsVisible()).toBe(true));
+  expect(onSaveEdits).not.toHaveBeenCalled();
 });
