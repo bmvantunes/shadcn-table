@@ -46,7 +46,7 @@ describe("BrunoTable Cell Paste", () => {
     });
   });
 
-  test("round-trips an explicit final blank in a vertical clipboard snapshot", () => {
+  test("round-trips final blanks in vertical and horizontal clipboard snapshots", () => {
     const serialized = serializeBrunoTableClipboardSnapshot({
       axis: "vertical",
       rowIds: ["row-a", "row-b"],
@@ -59,10 +59,28 @@ describe("BrunoTable Cell Paste", () => {
       kind: "accepted",
       paste: { axis: "vertical", canonicalTexts: ["value", ""] },
     });
+
+    const horizontal = serializeBrunoTableClipboardSnapshot({
+      axis: "horizontal",
+      rowIds: ["row-a"],
+      columnIds: ["name", "note"],
+      canonicalTexts: ["value", ""],
+    });
+    expect(horizontal).toBe("value\t");
+    expect(parseBrunoTablePaste(horizontal)).toEqual({
+      kind: "accepted",
+      paste: { axis: "horizontal", canonicalTexts: ["value", ""] },
+    });
   });
 
   test("rejects rectangles, ragged TSV, and malformed quoting", () => {
-    expect(parseBrunoTablePaste("a\tb\nc\td")).toMatchObject({ kind: "rejected" });
+    expect(parseBrunoTablePaste("a\tb\nc\td")).toEqual({
+      kind: "rejected",
+      diagnostic: {
+        code: "unsupported-shape",
+        detail: "Copied 2×2. BrunoTable accepts only one row or one column.",
+      },
+    });
     expect(parseBrunoTablePaste("a\tb\nc")).toMatchObject({ kind: "rejected" });
     expect(parseBrunoTablePaste('"unfinished')).toMatchObject({ kind: "rejected" });
   });
@@ -176,6 +194,11 @@ describe("BrunoTable Cell Paste", () => {
     ]);
     expect(createBrunoTablePasteGesture(horizontal.paste, selected, structure)).toHaveLength(2);
     expect(createBrunoTablePasteGesture(vertical.paste, selected, structure)).toBeUndefined();
+    const longerHorizontal = parseBrunoTablePaste("9\tnine\tten");
+    if (longerHorizontal.kind !== "accepted") throw new Error("fixture must parse");
+    expect(
+      createBrunoTablePasteGesture(longerHorizontal.paste, selected, structure),
+    ).toBeUndefined();
   });
 
   test("projects a mismatch from its exact identity start without clipping", () => {
@@ -294,7 +317,7 @@ describe("BrunoTable Cell Paste", () => {
 
     actor.send({ type: "OPEN", confirmation });
     actor.send({ type: "CONFIRM", attempt: () => ({ kind: "accepted" }) });
-    expect(actor.getSnapshot().value).toBe("applied");
+    expect(actor.getSnapshot().matches("applied")).toBe(true);
     expect(actor.getSnapshot().context).toEqual({
       confirmation: undefined,
       error: undefined,
@@ -303,7 +326,7 @@ describe("BrunoTable Cell Paste", () => {
 
     actor.send({ type: "OPEN", confirmation });
     actor.send({ type: "CANCEL" });
-    expect(actor.getSnapshot().value).toBe("idle");
+    expect(actor.getSnapshot().matches("idle")).toBe(true);
     expect(actor.getSnapshot().context).toEqual({
       confirmation: undefined,
       error: undefined,

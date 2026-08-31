@@ -9696,6 +9696,7 @@ describe("BrunoTable Cell Edit Session", () => {
       ]),
     ).toMatchObject({
       kind: "rejected",
+      reason: "unavailable",
       rowId: "missing-row",
       columnId: "COL_ID_SCORE",
     });
@@ -9732,10 +9733,12 @@ describe("BrunoTable Cell Edit Session", () => {
           { rowId: choiceRow.id, columnId: "COL_ID_CHOICE", canonicalText: "" },
         ]),
       ).toEqual({ kind: "accepted" });
-      expect(runtime.getCellSnapshot(choiceRow.id, "COL_ID_CHOICE")).toMatchObject({
+      const snapshot = runtime.getCellSnapshot(choiceRow.id, "COL_ID_CHOICE");
+      expect(snapshot).toMatchObject({
         hasDraft: true,
         draft: blankValue,
       });
+      expect(Object.hasOwn(snapshot, "draft")).toBe(true);
       expect(runtime.getActivitySnapshot()).toMatchObject({ draftCount: 1, undoCount: 1 });
     }
   });

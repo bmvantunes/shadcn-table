@@ -1211,6 +1211,8 @@ export function serializeBrunoTableClipboardSnapshot(
     .map((value, index) =>
       escapeTsvCell(
         value,
+        // A final vertical blank would otherwise look like an implicit terminal row.
+        // Horizontal TSV preserves a trailing blank after its final tab without quoting.
         snapshot.axis === "vertical" &&
           index === snapshot.canonicalTexts.length - 1 &&
           value.length === 0,

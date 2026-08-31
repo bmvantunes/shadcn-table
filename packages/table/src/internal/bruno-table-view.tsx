@@ -2714,7 +2714,10 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       return;
     }
     event.preventDefault();
-    if (pasteReadPending.current) return;
+    if (pasteReadPending.current) {
+      rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-pending"));
+      return;
+    }
     const readSequence = ++pasteReadSequence.current;
     const clipboard = navigator.clipboard;
     if (clipboard?.readText === undefined) {

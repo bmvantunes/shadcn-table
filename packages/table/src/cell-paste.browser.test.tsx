@@ -284,7 +284,7 @@ test("rejects a copied rectangle with one bounded toast and no edit", async () =
           .filter((region) =>
             region
               .element()
-              .textContent?.includes("Paste supports one row or one column at a time."),
+              .textContent?.includes("Copied 2×2. BrunoTable accepts only one row or one column."),
           ),
       ).toHaveLength(1),
     );
@@ -297,7 +297,7 @@ test("rejects a copied rectangle with one bounded toast and no edit", async () =
           .some((region) =>
             region
               .element()
-              .textContent?.includes("Paste supports one row or one column at a time."),
+              .textContent?.includes("Copied 2×2. BrunoTable accepts only one row or one column."),
           ),
       ).toBe(false),
     );
@@ -339,7 +339,9 @@ test("retains a Paste rejection across ready and loading body transitions", asyn
         .getByRole("region", { name: "Notifications" })
         .all()
         .some((region) =>
-          region.element().textContent?.includes("Paste supports one row or one column at a time."),
+          region
+            .element()
+            .textContent?.includes("Copied 2×2. BrunoTable accepts only one row or one column."),
         );
     await vi.waitFor(() => expect(rejectionIsVisible()).toBe(true));
 
@@ -984,6 +986,16 @@ test("allows only one clipboard read in flight and ignores its completion after 
     await userEvent.keyboard(pasteGesture());
     await userEvent.keyboard(pasteGesture());
     expect(readClipboard).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(
+        page
+          .getByRole("region", { name: "Notifications" })
+          .all()
+          .some((region) =>
+            region.element().textContent?.includes("A clipboard read is already in progress."),
+          ),
+      ).toBe(true),
+    );
 
     await cleanup();
     resolveClipboard("Updated");

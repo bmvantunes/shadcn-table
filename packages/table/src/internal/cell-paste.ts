@@ -26,6 +26,7 @@ export type BrunoTablePasteDiagnosticCode =
   | "invalid-tsv"
   | "unsupported-shape"
   | "clipboard-unavailable"
+  | "clipboard-read-pending"
   | "clipboard-read-rejected"
   | "no-target"
   | "structure-changed"
@@ -144,9 +145,11 @@ export function formatBrunoTablePasteDiagnostic(
       case "invalid-tsv":
         return "The clipboard contains invalid TSV.";
       case "unsupported-shape":
-        return "Paste supports one row or one column at a time.";
+        return diagnostic.detail ?? "Paste supports one row or one column at a time.";
       case "clipboard-unavailable":
         return "Clipboard access is unavailable.";
+      case "clipboard-read-pending":
+        return "A clipboard read is already in progress.";
       case "clipboard-read-rejected":
         return "The browser rejected clipboard access.";
       case "no-target":
@@ -365,9 +368,11 @@ function createBrunoTablePasteMachine() {
   });
 }
 
+type BrunoTablePasteState = "idle" | "confirming" | "applying" | "blocked" | "applied";
+
 type BrunoTablePasteActorSnapshot = Readonly<{
-  readonly value: unknown;
   readonly context: PasteContext;
+  readonly matches: (state: BrunoTablePasteState) => boolean;
 }>;
 
 type BrunoTablePasteActor = Readonly<{
@@ -416,9 +421,9 @@ export class BrunoTablePasteRuntime {
     this.actor.subscribe((snapshot) => {
       const confirmation = snapshot.context.confirmation;
       this.store.setState(() =>
-        (snapshot.value === "confirming" ||
-          snapshot.value === "blocked" ||
-          snapshot.value === "applying") &&
+        (snapshot.matches("confirming") ||
+          snapshot.matches("blocked") ||
+          snapshot.matches("applying")) &&
         confirmation !== undefined
           ? Object.freeze({
               open: true,
@@ -497,7 +502,7 @@ export class BrunoTablePasteRuntime {
             diagnostic: createBrunoTablePasteDiagnostic("destination-unavailable"),
           })),
     });
-    if (this.actor.getSnapshot().value !== "applied") return;
+    if (!this.actor.getSnapshot().matches("applied")) return;
     this.clearNotification();
     this.restoreFocus();
   };
@@ -516,7 +521,7 @@ export function parseBrunoTablePaste(text: string): BrunoTablePasteParseResult {
       diagnostic: createBrunoTablePasteDiagnostic("input-budget-text"),
     });
   }
-  const rows: Array<Array<Readonly<{ readonly value: string; readonly explicit: boolean }>>> = [[]];
+  const rows: string[][] = [[]];
   let cell = "";
   let quoted = false;
   let afterQuote = false;
@@ -529,7 +534,7 @@ export function parseBrunoTablePaste(text: string): BrunoTablePasteParseResult {
     });
   const finishCell = (): boolean => {
     if (cellCount >= BRUNO_TABLE_PASTE_MAX_LINEAR_CELLS) return false;
-    rows.at(-1)!.push(Object.freeze({ value: cell, explicit: explicitlyQuoted }));
+    rows.at(-1)!.push(cell);
     cellCount += 1;
     cell = "";
     afterQuote = false;
@@ -602,12 +607,15 @@ export function parseBrunoTablePaste(text: string): BrunoTablePasteParseResult {
   if (rows.length > 1 && width > 1) {
     return Object.freeze({
       kind: "rejected",
-      diagnostic: createBrunoTablePasteDiagnostic("unsupported-shape"),
+      diagnostic: createBrunoTablePasteDiagnostic("unsupported-shape", {
+        detail: `Copied ${String(rows.length)}×${String(width)}. BrunoTable accepts only one row or one column.`,
+      }),
     });
   }
-  const canonicalTexts = (
-    rows.length === 1 ? rows[0]!.map(({ value }) => value) : rows.map((row) => row[0]!.value)
-  ) as [string, ...string[]];
+  const canonicalTexts = (rows.length === 1 ? [...rows[0]!] : rows.map((row) => row[0]!)) as [
+    string,
+    ...string[],
+  ];
   return Object.freeze({
     kind: "accepted",
     paste: Object.freeze({
@@ -646,16 +654,7 @@ export function createBrunoTablePasteGesture(
   const selectedLength =
     selected.axis === "horizontal" ? selected.columnIds.length : selected.rowIds.length;
   if (!isBroadcast && (selected.axis !== paste.axis || selectedLength !== length)) return undefined;
-  const rowIds = isBroadcast
-    ? selected.rowIds
-    : paste.axis === "vertical"
-      ? selected.rowIds
-      : selected.rowIds;
-  const columnIds = isBroadcast
-    ? selected.columnIds
-    : paste.axis === "horizontal"
-      ? selected.columnIds
-      : selected.columnIds;
+  const { rowIds, columnIds } = selected;
   const cells: Array<{ rowId: string; columnId: string; canonicalText: string }> = [];
   if (isBroadcast) {
     if (selected.axis === "horizontal") {
