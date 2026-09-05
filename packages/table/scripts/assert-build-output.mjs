@@ -228,6 +228,7 @@ const rootAmbientDeclarationKinds = await collectAmbientDeclarationKinds(
 );
 const testDiagnosticSentinels = [
   "BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_V1",
+  "BRUNO_TABLE_CELL_RANGE_FRAME_TIMING_DIAGNOSTIC_V1",
   "BRUNO_TABLE_GESTURE_TIMING_DIAGNOSTIC_V1",
   "BRUNO_TABLE_TEST_LISTENER_DIAGNOSTIC_V1",
 ];
@@ -466,7 +467,7 @@ if (
     (sentinel) => rootRuntime.includes(sentinel) || effectRuntime.includes(sentinel),
   ) ||
   /__BRUNO_TABLE_TEST_DIAGNOSTICS__/u.test(rootRuntime) ||
-  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription|ReviewCellSubscription|Toolbar(?:Subscription|Lifetime))/u.test(
+  /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|EditFooterRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription|ReviewCellSubscription|Toolbar(?:Subscription|Lifetime))/u.test(
     `${rootRuntime}\n${effectRuntime}`,
   ) ||
   /installTableScopedListener/u.test(rootRuntime)
@@ -476,18 +477,76 @@ if (
   );
 }
 
-if (
-  !layoutEffectCallbacks.some((callback) => syntaxTreeContains(callback, isRowAcceptanceCall)) ||
-  !layoutEffectCallbacks.some(
-    (callback) =>
-      syntaxTreeContains(callback, isMutationObserverConstruction) &&
-      syntaxTreeContains(callback, isMutationObserverObserveCall) &&
-      syntaxTreeContains(callback, isInertBoundaryRemovalCall),
-  )
-) {
-  throw new Error(
-    "The production package lost required commit-phase row reconciliation or DOM ownership effects.",
-  );
+if (!layoutEffectCallbacks.some((callback) => syntaxTreeContains(callback, isRowAcceptanceCall))) {
+  throw new Error("The production package lost required commit-phase row reconciliation effects.");
+}
+assertNonTabbableDomOwnership(rootRuntimeAst);
+
+const domOwnershipSmoke = `
+import { useEffect } from "react";
+function NonTabbableCellContent() {
+  useEffect(() => {
+    const manager = createNonTabbableGridManager(grid);
+    return manager.register(root);
+  }, []);
+  return jsx("span", { inert: true, "data-bruno-nontabbable-cell-content": "" });
+}
+function createNonTabbableGridManager(grid) {
+  const observer = new MutationObserver(() => {});
+  observer.observe(grid, { subtree: true });
+  grid.addEventListener("focusin", trackFocusedCandidate);
+  return { register: (root) => {
+    reconcileRoot(root);
+    root.removeAttribute("inert");
+    return () => {
+      roots.delete(root);
+      observer.disconnect();
+      grid.removeEventListener("focusin", trackFocusedCandidate);
+      nonTabbableGridManagers.delete(grid);
+    };
+  } };
+}`;
+assertNonTabbableDomOwnership(await parseAstAsync(domOwnershipSmoke, { lang: "js" }));
+for (const [before, after] of [
+  ["createNonTabbableGridManager(grid);", "unrelatedManager(grid);"],
+  ["return manager.register(root);", "manager.register(root);"],
+  ["return manager.register(root);", "return () => {};"],
+  ["inert: true", "inert: false"],
+  ['"data-bruno-nontabbable-cell-content": ""', '"data-bruno-unrelated-cell-content": ""'],
+  ["reconcileRoot(root);", ""],
+  ['root.removeAttribute("inert");', ""],
+  ["const observer = new MutationObserver(() => {});", "const observer = unrelatedObserver;"],
+  ["observer.observe(grid, { subtree: true });", ""],
+  [
+    'grid.addEventListener("focusin", trackFocusedCandidate);',
+    'grid.addEventListener("focusin", unrelatedListener);',
+  ],
+  ["observer.disconnect();", ""],
+  ["roots.delete(root);", ""],
+  ['grid.removeEventListener("focusin", trackFocusedCandidate);', ""],
+  [
+    'grid.removeEventListener("focusin", trackFocusedCandidate);',
+    'grid.removeEventListener("focusin", unrelatedListener);',
+  ],
+  ["nonTabbableGridManagers.delete(grid);", ""],
+  [
+    'reconcileRoot(root);\n    root.removeAttribute("inert");',
+    'root.removeAttribute("inert");\n    reconcileRoot(root);',
+  ],
+  [
+    'root.removeAttribute("inert");\n    return () => {\n      roots.delete(root);\n      observer.disconnect();\n      grid.removeEventListener("focusin", trackFocusedCandidate);\n      nonTabbableGridManagers.delete(grid);\n    };',
+    'return () => {\n      roots.delete(root);\n      observer.disconnect();\n      grid.removeEventListener("focusin", trackFocusedCandidate);\n      nonTabbableGridManagers.delete(grid);\n    };\n    root.removeAttribute("inert");',
+  ],
+]) {
+  const mutated = domOwnershipSmoke.replace(before, after);
+  if (mutated === domOwnershipSmoke) throw new Error("DOM ownership smoke did not mutate.");
+  let rejected = false;
+  try {
+    assertNonTabbableDomOwnership(await parseAstAsync(mutated, { lang: "js" }));
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) throw new Error(`DOM ownership validator accepted removal of ${before}`);
 }
 
 if (/\bany\b/u.test(declarations)) {
@@ -1245,14 +1304,6 @@ function isMutationObserverConstruction(node) {
   );
 }
 
-function isMutationObserverObserveCall(node) {
-  return (
-    node.type === "CallExpression" &&
-    node.callee.type === "MemberExpression" &&
-    memberPropertyName(node.callee) === "observe"
-  );
-}
-
 function isInertBoundaryRemovalCall(node) {
   return (
     node.type === "CallExpression" &&
@@ -1261,6 +1312,120 @@ function isInertBoundaryRemovalCall(node) {
     node.arguments[0]?.type === "Literal" &&
     node.arguments[0].value === "inert"
   );
+}
+
+function assertNonTabbableDomOwnership(ast) {
+  const fail = () => {
+    throw new Error("The production package lost shared non-tabbable DOM ownership lifecycle.");
+  };
+  const component = ast.body.find(
+    (node) => node.type === "FunctionDeclaration" && node.id?.name === "NonTabbableCellContent",
+  );
+  const manager = ast.body.find(
+    (node) =>
+      node.type === "FunctionDeclaration" && node.id?.name === "createNonTabbableGridManager",
+  );
+  const effect = findImportedBinding(ast, "react", "useEffect");
+  if (component === undefined || manager === undefined || effect === undefined) return fail();
+  const memberCall = (node, owner, method, firstArgument, secondArgument) =>
+    node?.type === "CallExpression" &&
+    node.callee.type === "MemberExpression" &&
+    node.callee.object.type === "Identifier" &&
+    node.callee.object.name === owner &&
+    memberPropertyName(node.callee) === method &&
+    (firstArgument === undefined ||
+      node.arguments[0]?.name === firstArgument ||
+      staticStringValue(node.arguments[0]) === firstArgument) &&
+    (secondArgument === undefined || node.arguments[1]?.name === secondArgument);
+  const factoryCall = (node) =>
+    node.type === "CallExpression" &&
+    node.callee.type === "Identifier" &&
+    node.callee.name === "createNonTabbableGridManager";
+  if (
+    !collectEffectCallbacks(component, effect).some(
+      (callback) =>
+        syntaxTreeContains(callback, factoryCall) &&
+        syntaxTreeContains(
+          callback,
+          (node) =>
+            node.type === "ReturnStatement" &&
+            memberCall(node.argument, "manager", "register", "root"),
+        ),
+    )
+  )
+    return fail();
+  if (
+    !syntaxTreeContains(
+      component,
+      (node) =>
+        node.type === "ObjectExpression" &&
+        node.properties.some(
+          (property) => propertyName(property) === "inert" && property.value?.value === true,
+        ) &&
+        node.properties.some(
+          (property) => propertyName(property) === "data-bruno-nontabbable-cell-content",
+        ),
+    )
+  )
+    return fail();
+  if (
+    !syntaxTreeContains(manager, isMutationObserverConstruction) ||
+    !syntaxTreeContains(manager, (node) => memberCall(node, "observer", "observe", "grid")) ||
+    !syntaxTreeContains(manager, (node) =>
+      memberCall(node, "grid", "addEventListener", "focusin", "trackFocusedCandidate"),
+    )
+  )
+    return fail();
+  let registration;
+  walkSyntaxTree(manager, (node) => {
+    if (
+      node.type === "Property" &&
+      propertyName(node) === "register" &&
+      isFunctionNode(node.value)
+    ) {
+      registration = node.value;
+    }
+  });
+  if (registration?.body.type !== "BlockStatement") return fail();
+  const statements = registration.body.body;
+  const reconcileIndex = statements.findIndex(
+    (node) =>
+      node.type === "ExpressionStatement" &&
+      node.expression.type === "CallExpression" &&
+      node.expression.callee.name === "reconcileRoot" &&
+      node.expression.arguments[0]?.name === "root",
+  );
+  const inertIndex = statements.findIndex(
+    (node) => node.type === "ExpressionStatement" && isInertBoundaryRemovalCall(node.expression),
+  );
+  const cleanupIndex = statements.findIndex(
+    (node) => node.type === "ReturnStatement" && isFunctionNode(node.argument),
+  );
+  const cleanupStatement = statements[cleanupIndex];
+  const cleanup =
+    cleanupStatement?.type === "ReturnStatement" && isFunctionNode(cleanupStatement.argument)
+      ? cleanupStatement.argument
+      : undefined;
+  if (
+    reconcileIndex < 0 ||
+    inertIndex <= reconcileIndex ||
+    cleanupIndex <= inertIndex ||
+    cleanup === undefined
+  )
+    return fail();
+  for (const [owner, method, argument, secondArgument] of [
+    ["roots", "delete", "root"],
+    ["observer", "disconnect"],
+    ["grid", "removeEventListener", "focusin", "trackFocusedCandidate"],
+    ["nonTabbableGridManagers", "delete", "grid"],
+  ]) {
+    if (
+      !syntaxTreeContains(cleanup, (node) =>
+        memberCall(node, owner, method, argument, secondArgument),
+      )
+    )
+      return fail();
+  }
 }
 
 async function assertPackedConsumers() {

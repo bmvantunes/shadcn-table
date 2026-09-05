@@ -1144,6 +1144,138 @@ describe("BrunoTable Grid Preferences runtime boundary", () => {
     expect(runtime.getView().getColumnLayoutSnapshot().allColumns[0]?.semantics.width).toBe(321);
   });
 
+  it("reuses the exact preflight snapshot when publishing a filter preference", () => {
+    let encodeCalls = 0;
+    const singleUseValueType: BrunoTableValueType<string, "equality", "text"> = {
+      codecId: "test/single-use-persistence",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: (value) => {
+        encodeCalls += 1;
+        if (encodeCalls > 1) throw new Error("codec must not be invoked after publication");
+        return value;
+      },
+      decodePersisted: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected persisted text." },
+    };
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: singleUseValueType,
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([]),
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const onPersistChange = vi.fn();
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_SINGLE_USE_PERSISTENCE",
+      { getOnPersistChange: () => onPersistChange },
+    );
+    const filterListener = vi.fn();
+    runtime.getView().subscribeFilter(filterListener);
+
+    expect(
+      runtime.getView().dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_NAME",
+        filter: { columnId: "COL_ID_NAME", type: "equals", filter: "next" },
+      }),
+    ).toBe(true);
+    expect(runtime.getView().getFilterSnapshot().filters).toEqual([
+      { columnId: "COL_ID_NAME", type: "equals", filter: "next" },
+    ]);
+    expect(filterListener).toHaveBeenCalledTimes(1);
+    expect(onPersistChange).toHaveBeenCalledTimes(1);
+    expect(encodeCalls).toBe(1);
+  });
+
+  it("rejects a filter persistence preflight failure without publishing partial state", () => {
+    const persistenceFailure = new Error("Persistence codec failed.");
+    const throwingValueType: BrunoTableValueType<string, "equality", "text"> = {
+      codecId: "test/throwing-filter-persistence",
+      codecVersion: 1,
+      filterFamily: "equality",
+      editorFamily: "text",
+      cellAlign: "start",
+      editorLayout: "inline",
+      defaultWidth: 120,
+      decodeRuntime: (input) =>
+        typeof input === "string"
+          ? { _tag: "Success", value: input }
+          : { _tag: "Failure", message: "Expected text." },
+      equivalent: (left, right) => left === right,
+      compare: (left, right) => (left === right ? 0 : left < right ? -1 : 1),
+      formatCanonicalText: (value) => value,
+      parseCanonicalText: (text) => ({ _tag: "Success", value: text }),
+      formatDisplay: (value) => value,
+      encodePersisted: () => {
+        throw persistenceFailure;
+      },
+      decodePersisted: () => ({ _tag: "Failure", message: "Not persisted." }),
+    };
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: throwingValueType,
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter(
+      source([]),
+      (row: Row) => row.id,
+      columns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const onPersistChange = vi.fn();
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_THROWING_FILTER_PERSISTENCE",
+      { getOnPersistChange: () => onPersistChange },
+    );
+    const filterListener = vi.fn();
+    runtime.getView().subscribeFilter(filterListener);
+
+    expect(
+      runtime.getView().dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_NAME",
+        filter: { columnId: "COL_ID_NAME", type: "equals", filter: "next" },
+      }),
+    ).toBe(false);
+    expect(runtime.getView().getFilterSnapshot().filters).toEqual([]);
+    expect(filterListener).not.toHaveBeenCalled();
+    expect(onPersistChange).not.toHaveBeenCalled();
+  });
+
   it("replaces the callback without recreating the runtime or waking row and cell subscribers", () => {
     const row = { id: "first", name: "Ada" };
     const adapter = new BrunoTableClientRowPipelineAdapter(
@@ -2707,6 +2839,7 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
           identityPatches: 1,
           rebuiltSourceSequence: false,
           rebuiltIdentityIndex: false,
+          durationMs: expect.any(Number),
         },
       ]);
       expect(runtime.getRowSnapshot("row-50000")).toBe(replacement);
@@ -2749,6 +2882,38 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
     expect(runtime.getCellSnapshot("first", "COL_ID_NAME")).toBe(nameSnapshot);
     expect(runtime.getCellSnapshot("first", "COL_ID_NOTE")).not.toBe(noteSnapshot);
     expect(runtime.getCellValueSnapshot("first", "COL_ID_NOTE")).toBe("Changed");
+  });
+
+  it("keeps stable cell snapshots without retaining prior row spaces", () => {
+    const cellColumns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const runtime = createClientRuntime(
+      source([{ id: "first", name: "Ada", note: "Initial" } satisfies Row]),
+      (row) => row.id,
+      cellColumns,
+      undefined,
+      [{ columnId: "COL_ID_NAME", direction: "asc" }],
+    );
+    const listener = vi.fn();
+    runtime.subscribeCell("first", "COL_ID_NAME", listener);
+    const snapshot = runtime.getCellSnapshot("first", "COL_ID_NAME");
+    const firstRowSpace = runtime.getRowSpaceSnapshot();
+
+    runtime.publish(source([{ id: "first", name: "Ada", note: "Second" } satisfies Row]));
+    const secondRowSpace = runtime.getRowSpaceSnapshot();
+    runtime.publish(source([{ id: "first", name: "Ada", note: "Third" } satisfies Row]));
+
+    expect(firstRowSpace).not.toBe(secondRowSpace);
+    expect(listener).not.toHaveBeenCalled();
+    expect(runtime.getCellSnapshot("first", "COL_ID_NAME")).toBe(snapshot);
+    expect("rowSpace" in snapshot).toBe(false);
+    expect("rowSpace" in runtime.captureCellCommandReader()("first", "COL_ID_NAME")).toBe(false);
   });
 
   it("preserves cell snapshots for freshly decoded equivalent canonical values", () => {
@@ -4318,6 +4483,81 @@ describe("BrunoTable Grid Runtime with Client Row Pipeline Adapter", () => {
       });
     } finally {
       restoreInstrumentation();
+    }
+  });
+
+  it("delivers an initial reconciliation only to the listener captured at its start", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const startedEvents = vi.fn<(event: BrunoTableClientReconciliationEvent) => void>();
+    const replacementEvents = vi.fn<(event: BrunoTableClientReconciliationEvent) => void>();
+    const removeStartedListener = installBrunoTableClientReconciliationListener(startedEvents);
+    let removeReplacementListener: () => void = () => undefined;
+    let replaced = false;
+    const getRowId = (row: Row): string => {
+      if (!replaced) {
+        replaced = true;
+        removeReplacementListener =
+          installBrunoTableClientReconciliationListener(replacementEvents);
+      }
+      return row.id;
+    };
+
+    try {
+      const runtime = createRuntime(source([], "loading", { totalRows: 1 }), getRowId);
+
+      runtime.publish(source([first]));
+
+      expect(startedEvents).toHaveBeenCalledOnce();
+      expect(startedEvents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          residentRows: 1,
+          durationMs: expect.any(Number),
+          rebuiltIdentityIndex: true,
+        }),
+      );
+      expect(replacementEvents).not.toHaveBeenCalled();
+    } finally {
+      removeReplacementListener();
+      removeStartedListener();
+    }
+  });
+
+  it("delivers an incremental reconciliation only to the listener captured at its start", () => {
+    const first = { id: "first", name: "Ada" } satisfies Row;
+    const replacement = { id: "first", name: "Ada Lovelace" } satisfies Row;
+    const startedEvents = vi.fn<(event: BrunoTableClientReconciliationEvent) => void>();
+    const replacementEvents = vi.fn<(event: BrunoTableClientReconciliationEvent) => void>();
+    let removeReplacementListener: () => void = () => undefined;
+    let replaceDuringReconciliation = false;
+    let replaced = false;
+    const getRowId = (row: Row): string => {
+      if (replaceDuringReconciliation && !replaced) {
+        replaced = true;
+        removeReplacementListener =
+          installBrunoTableClientReconciliationListener(replacementEvents);
+      }
+      return row.id;
+    };
+    const runtime = createRuntime(source([first]), getRowId);
+    const removeStartedListener = installBrunoTableClientReconciliationListener(startedEvents);
+
+    try {
+      replaceDuringReconciliation = true;
+      runtime.publish(source([replacement]));
+
+      expect(startedEvents).toHaveBeenCalledOnce();
+      expect(startedEvents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          residentRows: 1,
+          changedRows: 1,
+          durationMs: expect.any(Number),
+          rebuiltIdentityIndex: false,
+        }),
+      );
+      expect(replacementEvents).not.toHaveBeenCalled();
+    } finally {
+      removeReplacementListener();
+      removeStartedListener();
     }
   });
 

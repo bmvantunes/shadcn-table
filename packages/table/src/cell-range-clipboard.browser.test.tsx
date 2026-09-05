@@ -1812,7 +1812,7 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
         (event) => events.push(event),
       );
       const screen = await render(
-        <div dir={direction}>
+        <div dir={direction} style={{ width: 1_024 }}>
           <BrunoTableClient
             tableId={tableId}
             columns={wideColumns}
@@ -1826,6 +1826,12 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
         await settleBrunoTableBrowserFrames();
         events.length = 0;
         const grid = page.getByRole("grid", { name: `Data for ${tableId}` });
+        expect(
+          grid.element().querySelector('[data-bruno-pinned-body-region="start"]'),
+        ).not.toBeNull();
+        expect(
+          grid.element().querySelector('[data-bruno-pinned-body-region="end"]'),
+        ).not.toBeNull();
         const cells = page.getByRole("gridcell", { name: "Ada", exact: true });
         const anchor = cells.first();
         const target = cells.last();
@@ -1864,6 +1870,18 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
         );
         await settleBrunoTableBrowserFrames(50);
 
+        const scrollLeftBeforeRelease = grid.element().scrollLeft;
+        target.element().dispatchEvent(
+          new PointerEvent("pointerup", {
+            bubbles: true,
+            cancelable: true,
+            clientX: edgeX,
+            clientY: startY + 1,
+            pointerId: direction === "rtl" ? 24 : 23,
+          }),
+        );
+        await settleBrunoTableBrowserFrames(2);
+        expect(grid.element().scrollLeft).toBe(scrollLeftBeforeRelease);
         expect(grid.element().scrollLeft).not.toBe(initialScrollLeft);
         expect(grid.element().scrollTop).toBe(initialScrollTop);
         const currentHeaders = new Set(
@@ -1880,17 +1898,6 @@ describe("BrunoTableClient one-axis Cell Range and atomic Copy", () => {
           .element(page.getByRole("columnheader", { name: "Wide 8" }))
           .toBeInTheDocument();
 
-        const scrollLeftBeforeRelease = grid.element().scrollLeft;
-        target.element().dispatchEvent(
-          new PointerEvent("pointerup", {
-            bubbles: true,
-            cancelable: true,
-            clientX: edgeX,
-            clientY: startY + 1,
-            pointerId: direction === "rtl" ? 24 : 23,
-          }),
-        );
-        expect(grid.element().scrollLeft).toBe(scrollLeftBeforeRelease);
         const framesAfterRelease = events.filter((event) => event.kind === "pointer-frame").length;
         expect(framesAfterRelease).toBeGreaterThan(0);
         expect(framesAfterRelease).toBeLessThanOrEqual(110);

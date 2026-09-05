@@ -297,7 +297,7 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
     await userEvent.click(page.getByRole("menuitem", { name: "Group by Desk" }));
     await expectCommittedProjection(["Desk", "Orders", "Quantity", "Maximum price"]);
-    expect(document.activeElement).not.toBe(page.getByRole("grid").element());
+    await expect.element(page.getByRole("button", { name: "Column menu for Desk" })).toHaveFocus();
     expect(activeGridCellText()).toBe("Alpha (1)");
     await expect.element(page.getByRole("columnheader", { name: /Desk/u })).toBeInTheDocument();
     await expect.element(page.getByRole("columnheader", { name: /Orders/u })).toBeInTheDocument();
@@ -859,9 +859,11 @@ describe("BrunoTableClient grouping and aggregation", () => {
     await expect
       .element(page.getByRole("separator", { name: "Resize Orders" }))
       .toHaveAttribute("aria-valuenow", "112");
+    await vi.waitFor(() => expect(page.getByRole("menu").all()).toHaveLength(0));
 
     await userEvent.click(page.getByRole("button", { name: "Sort rows, 1 active" }));
     const sortPanel = page.getByRole("dialog", { name: "Sort rows" });
+    await expect.element(sortPanel).toBeInTheDocument();
     await expect
       .element(
         sortPanel.getByRole("button", {

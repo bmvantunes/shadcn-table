@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "vp test",
-    "test:browser": "vp test --project browser --project table-browser --run",
+    "test:browser": "vp test --project browser --project table-browser --run && vp run test:browser:performance",
+    "test:browser:performance": "vp run @bruno/table#test:browser:performance",
     "check": "vp check",
     "prepare": "vp config"
   },

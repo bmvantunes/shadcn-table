@@ -11,8 +11,37 @@ import {
   BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE,
   BrunoTableViewportRuntime,
 } from "./virtual-viewport";
+import type { BrunoTableVirtualWindow } from "./virtual-viewport";
 
 type TestRtlScrollType = "negative" | "default" | "reverse";
+
+function runNextFrame(frames: FrameRequestCallback[]): void {
+  const callback = frames.shift();
+  expect(callback).toBeDefined();
+  callback!(0);
+}
+
+function drainFrames(frames: FrameRequestCallback[], limit = 500): void {
+  let count = 0;
+  while (frames.length > 0) {
+    count += 1;
+    expect(count).toBeLessThanOrEqual(limit);
+    runNextFrame(frames);
+  }
+}
+
+function advanceFramesUntil(
+  frames: FrameRequestCallback[],
+  condition: () => boolean,
+  limit = 500,
+): void {
+  let count = 0;
+  while (!condition()) {
+    count += 1;
+    expect(count).toBeLessThanOrEqual(limit);
+    runNextFrame(frames);
+  }
+}
 
 function createRtlOwnerDocument(
   type: TestRtlScrollType,
@@ -259,6 +288,7 @@ describe("BrunoTableViewportRuntime", () => {
       },
     ]);
     const callbacks: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {
       callbacks.push(callback);
       return callbacks.length;
@@ -266,7 +296,6 @@ describe("BrunoTableViewportRuntime", () => {
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const setProperty = vi.fn();
-    let scrollListener: EventListener | undefined;
     const element = {
       addEventListener: vi.fn((name: string, listener: EventListener) => {
         if (name === "scroll") scrollListener = listener;
@@ -387,6 +416,71 @@ describe("BrunoTableViewportRuntime", () => {
     expect(viewport.scrollVerticalByLogical(12)).toBe(false);
   });
 
+  it.each(["ltr", "rtl"] as const)(
+    "resolves cached logical body hits without DOM reads in %s",
+    (direction) => {
+      const columns = compileColumns(
+        Array.from({ length: 8 }, (_, index) => ({
+          columnId: `COL_ID_${String(index)}`,
+          field: "name",
+          headerName: `Column ${String(index)}`,
+          valueType: "text" as const,
+          width: 100,
+        })),
+      );
+      const callbacks: FrameRequestCallback[] = [];
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      });
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
+      let scrollTop = 0;
+      let scrollLeft = 0;
+      let trackReads = false;
+      const element = {
+        addEventListener: vi.fn(),
+        clientHeight: 480,
+        clientWidth: 320,
+        ownerDocument: createRtlOwnerDocument("negative", () => direction),
+        removeEventListener: vi.fn(),
+        get scrollLeft() {
+          if (trackReads) throw new Error("unexpected scrollLeft read");
+          return scrollLeft;
+        },
+        set scrollLeft(value: number) {
+          scrollLeft = value;
+        },
+        get scrollTop() {
+          if (trackReads) throw new Error("unexpected scrollTop read");
+          return scrollTop;
+        },
+        set scrollTop(value: number) {
+          scrollTop = value;
+        },
+        style: { setProperty: vi.fn() },
+      } as unknown as HTMLElement;
+      const viewport = new BrunoTableViewportRuntime();
+      viewport.setLayout(200_000, columns);
+      viewport.attach(element);
+      viewport.revealCell(115_000, "COL_ID_0");
+      callbacks.shift()!(0);
+      expect(viewport.scrollByLogical(200)).toBe(true);
+      callbacks.shift()!(0);
+      const expectedRow = viewport.getSnapshot().virtualWindow.rowStart + 9;
+      trackReads = true;
+
+      expect(
+        viewport.resolveBodyHit({
+          bodyTop: 40,
+          centreLeft: 10,
+          centreRight: 310,
+          clientX: direction === "ltr" ? 60 : 260,
+          clientY: 40 + 5 * 36 + 1,
+        }),
+      ).toEqual({ columnId: "COL_ID_2", rowIndex: expectedRow });
+    },
+  );
+
   it("frame-batches pinned-aware scrollbar geometry onto only the overlay subtree", () => {
     const columns = compileColumns([
       {
@@ -498,7 +592,7 @@ describe("BrunoTableViewportRuntime", () => {
     expect(
       Number.parseFloat(scrolledProperties.get("--bruno-table-scrollbar-vertical-thumb-offset")!),
     ).toBeGreaterThan(0);
-    expect(bodyLayerSetProperty).toHaveBeenCalledWith("transform", expect.stringContaining("3d"));
+    expect(bodyLayerSetProperty).not.toHaveBeenCalled();
     const firstWrite = geometryOrder.findIndex((operation) => operation.startsWith("write"));
     const lastRead = geometryOrder.findLastIndex((operation) => operation.startsWith("read"));
     expect(lastRead).toBeGreaterThanOrEqual(0);
@@ -513,7 +607,7 @@ describe("BrunoTableViewportRuntime", () => {
     viewport.attach(null);
     viewport.attach(element);
     const maximumProperties = new Map(
-      overlaySetProperty.mock.calls.map(
+      [...initialProperties, ...overlaySetProperty.mock.calls].map(
         ([property, value]) => [String(property), String(value)] as const,
       ),
     );
@@ -537,16 +631,13 @@ describe("BrunoTableViewportRuntime", () => {
       },
     ]);
     const callbacks: FrameRequestCallback[] = [];
-    let scrollListener: EventListener | undefined;
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       callbacks.push(callback);
       return callbacks.length;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const element = {
-      addEventListener: vi.fn((name: string, listener: EventListener) => {
-        if (name === "scroll") scrollListener = listener;
-      }),
+      addEventListener: vi.fn(),
       clientHeight: 480,
       clientWidth: 800,
       removeEventListener: vi.fn(),
@@ -555,7 +646,7 @@ describe("BrunoTableViewportRuntime", () => {
       style: { setProperty: vi.fn() },
     } as unknown as HTMLElement;
     const viewport = new BrunoTableViewportRuntime();
-    viewport.setLayout(1_000, columns);
+    viewport.setLayout(1_000_000, columns);
     viewport.attach(element);
 
     const detachedWrite = vi.fn();
@@ -577,8 +668,7 @@ describe("BrunoTableViewportRuntime", () => {
       setProperty.mockClear();
     }
 
-    element.scrollTop = 1_200;
-    scrollListener!(new Event("scroll"));
+    viewport.revealCell(200_000, "COL_ID_BODY_LAYER_CLEANUP");
     callbacks.shift()!(0);
 
     expect(detachedWrite).not.toHaveBeenCalled();
@@ -649,7 +739,7 @@ describe("BrunoTableViewportRuntime", () => {
     viewport.attach(null);
     viewport.attach(element);
     const suspendedMaximumProperties = new Map(
-      overlaySetProperty.mock.calls.map(
+      [...properties, ...overlaySetProperty.mock.calls].map(
         ([property, value]) => [String(property), String(value)] as const,
       ),
     );
@@ -690,7 +780,7 @@ describe("BrunoTableViewportRuntime", () => {
       ]),
     );
     const unpinnedProperties = new Map(
-      overlaySetProperty.mock.calls.map(
+      [...suspendedMaximumProperties, ...overlaySetProperty.mock.calls].map(
         ([property, value]) => [String(property), String(value)] as const,
       ),
     );
@@ -1018,9 +1108,263 @@ describe("BrunoTableViewportRuntime", () => {
     expect(clientWidthReads).toBe(0);
     expect(callbacks).toHaveLength(1);
     callbacks.shift()!(0);
-    expect(readComputedStyle).toHaveBeenCalledOnce();
+    expect(readComputedStyle).not.toHaveBeenCalled();
     expect(clientWidthReads).toBeGreaterThan(0);
     expect(element.scrollLeft).toBe(-720);
+  });
+
+  it("keeps computed direction reads out of clean ordinary scroll frames", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_CLEAN_DIRECTION_${index}`,
+        field: "name",
+        headerName: `Clean direction ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const observers = installViewportObserverHarness();
+    let scrollListener: EventListener | undefined;
+    const ownerDocument = createRtlOwnerDocument("negative", () => "ltr");
+    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
+      typeof vi.fn
+    >;
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 200,
+      offsetHeight: 500,
+      offsetWidth: 220,
+      ownerDocument,
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+    readComputedStyle.mockClear();
+
+    element.scrollLeft = 160;
+    element.scrollTop = 64;
+    scrollListener!(new Event("scroll"));
+    observers.frames.shift()!(0);
+
+    expect(readComputedStyle).not.toHaveBeenCalled();
+
+    observers.triggerMutation(element);
+    observers.frames.shift()!(0);
+    expect(readComputedStyle).toHaveBeenCalledOnce();
+
+    readComputedStyle.mockClear();
+    element.scrollLeft = 320;
+    element.scrollTop = 128;
+    scrollListener!(new Event("scroll"));
+    observers.frames.shift()!(0);
+    expect(readComputedStyle).not.toHaveBeenCalled();
+  });
+
+  it("keeps computed direction reads out of observed RTL scroll frames", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_CLEAN_RTL_DIRECTION_${index}`,
+        field: "name",
+        headerName: `Clean RTL direction ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const observers = installViewportObserverHarness();
+    let scrollListener: EventListener | undefined;
+    const ownerDocument = createRtlOwnerDocument("negative", () => "rtl");
+    const readComputedStyle = ownerDocument.defaultView!.getComputedStyle as ReturnType<
+      typeof vi.fn
+    >;
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 200,
+      offsetHeight: 500,
+      offsetWidth: 220,
+      ownerDocument,
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+    readComputedStyle.mockClear();
+
+    element.scrollLeft = -600;
+    element.scrollTop = 64;
+    scrollListener!(new Event("scroll"));
+    observers.frames.shift()!(0);
+
+    expect(readComputedStyle).not.toHaveBeenCalled();
+    expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBeGreaterThan(0);
+  });
+
+  it("reuses observed dimensions for scroll and refreshes them once after resize", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_CAPTURED_DIMENSION_${index}`,
+        field: "name",
+        headerName: `Captured dimension ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const observers = installViewportObserverHarness();
+    const reads = { clientHeight: 0, clientWidth: 0, offsetHeight: 0, offsetWidth: 0 };
+    let scrollListener: EventListener | undefined;
+    let nativeScrollLeft = 0;
+    let publicationStarted = false;
+    let postPublicationScrollLeftReads = 0;
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      get clientHeight() {
+        reads.clientHeight += 1;
+        return 480;
+      },
+      get clientWidth() {
+        reads.clientWidth += 1;
+        return 200;
+      },
+      get offsetHeight() {
+        reads.offsetHeight += 1;
+        return 500;
+      },
+      get offsetWidth() {
+        reads.offsetWidth += 1;
+        return 220;
+      },
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      get scrollLeft() {
+        if (publicationStarted) postPublicationScrollLeftReads += 1;
+        return nativeScrollLeft;
+      },
+      set scrollLeft(value: number) {
+        nativeScrollLeft = value;
+      },
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+    viewport.attachScrollbarOverlay({
+      style: {
+        setProperty: vi.fn(() => {
+          publicationStarted = true;
+        }),
+      },
+    } as unknown as HTMLElement);
+    publicationStarted = false;
+    reads.clientHeight = 0;
+    reads.clientWidth = 0;
+    reads.offsetHeight = 0;
+    reads.offsetWidth = 0;
+
+    element.scrollLeft = 160;
+    element.scrollTop = 64;
+    scrollListener!(new Event("scroll"));
+    observers.frames.shift()!(0);
+
+    expect(reads).toEqual({ clientHeight: 0, clientWidth: 0, offsetHeight: 0, offsetWidth: 0 });
+    expect(postPublicationScrollLeftReads).toBe(0);
+
+    observers.triggerResize(element);
+    observers.frames.shift()!(0);
+    expect(reads).toEqual({ clientHeight: 1, clientWidth: 1, offsetHeight: 1, offsetWidth: 1 });
+
+    reads.clientHeight = 0;
+    reads.clientWidth = 0;
+    reads.offsetHeight = 0;
+    reads.offsetWidth = 0;
+    postPublicationScrollLeftReads = 0;
+    expect(viewport.scrollByLogical(20)).toBe(true);
+    expect(reads).toEqual({ clientHeight: 0, clientWidth: 0, offsetHeight: 0, offsetWidth: 0 });
+    expect(postPublicationScrollLeftReads).toBe(0);
+    observers.frames.shift()!(0);
+    expect(reads).toEqual({ clientHeight: 0, clientWidth: 0, offsetHeight: 0, offsetWidth: 0 });
+    expect(postPublicationScrollLeftReads).toBe(0);
+  });
+
+  it("updates only scrollbar thumb offsets during steady scroll", () => {
+    const columns = compileColumns(
+      Array.from({ length: 10 }, (_, index) => ({
+        columnId: `COL_ID_STEADY_SCROLLBAR_${index}`,
+        field: "name",
+        headerName: `Steady scrollbar ${index}`,
+        valueType: "text" as const,
+        width: 100,
+      })),
+    );
+    const observers = installViewportObserverHarness();
+    let scrollListener: EventListener | undefined;
+    let clientWidth = 200;
+    const overlaySetProperty = vi.fn();
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      get clientWidth() {
+        return clientWidth;
+      },
+      offsetHeight: 500,
+      offsetWidth: 220,
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+    viewport.attachScrollbarOverlay({
+      style: { setProperty: overlaySetProperty },
+    } as unknown as HTMLElement);
+    overlaySetProperty.mockClear();
+
+    element.scrollLeft = 160;
+    element.scrollTop = 64;
+    scrollListener!(new Event("scroll"));
+    observers.frames.shift()!(0);
+
+    expect(overlaySetProperty.mock.calls).toEqual([
+      ["--bruno-table-scrollbar-horizontal-thumb-offset", expect.any(String)],
+      ["--bruno-table-scrollbar-vertical-thumb-offset", expect.any(String)],
+    ]);
+
+    overlaySetProperty.mockClear();
+    clientWidth = 240;
+    observers.triggerResize(element);
+    observers.frames.shift()!(0);
+
+    expect(overlaySetProperty).toHaveBeenCalledWith(
+      "--bruno-table-scrollbar-horizontal-thumb-width",
+      expect.any(String),
+    );
+    expect(overlaySetProperty).toHaveBeenCalledWith(
+      "--bruno-table-scrollbar-vertical-thumb-height",
+      expect.any(String),
+    );
   });
 
   it("refreshes computed direction during resize-driven environment reconciliation", () => {
@@ -1074,15 +1418,15 @@ describe("BrunoTableViewportRuntime", () => {
       style: { setProperty: overlaySetProperty },
     } as unknown as HTMLElement);
     const initialCenterStart = viewport.getSnapshot().virtualWindow.centerStartIndex;
-    expect(readComputedStyle).toHaveBeenCalledTimes(3);
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
 
     overlaySetProperty.mockClear();
     direction = "rtl";
     resize!();
-    expect(readComputedStyle).toHaveBeenCalledTimes(3);
+    expect(readComputedStyle).toHaveBeenCalledTimes(2);
     callbacks.shift()!(0);
 
-    expect(readComputedStyle).toHaveBeenCalledTimes(4);
+    expect(readComputedStyle).toHaveBeenCalledTimes(3);
     expect(element.scrollLeft).toBe(-600);
     expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBe(initialCenterStart);
     expect(overlaySetProperty).toHaveBeenCalledWith("direction", "rtl");
@@ -1441,6 +1785,173 @@ describe("BrunoTableViewportRuntime", () => {
       .map(([, value]) => value);
     expect(rightPaddingWrites.at(-1)).toBe("800px");
   });
+
+  it("does not force layout while applying a column-width preview", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_LAYOUT_FREE_PREVIEW",
+        field: "name",
+        headerName: "Layout-free preview",
+        valueType: "text" as const,
+        width: 100,
+      },
+    ]);
+    let scrollWidthReads = 0;
+    let scrollLeftWrites = 0;
+    let scrollLeft = 0;
+    let styleWritten = false;
+    let postWriteGeometryReads = 0;
+    const readGeometry = (value: number): number => {
+      if (styleWritten) postWriteGeometryReads += 1;
+      return value;
+    };
+    const element = {
+      addEventListener: vi.fn(),
+      get clientHeight() {
+        return readGeometry(480);
+      },
+      get clientWidth() {
+        return readGeometry(500);
+      },
+      get offsetHeight() {
+        return readGeometry(500);
+      },
+      get offsetWidth() {
+        return readGeometry(500);
+      },
+      get scrollWidth() {
+        scrollWidthReads += 1;
+        if (styleWritten) postWriteGeometryReads += 1;
+        return 500;
+      },
+      ownerDocument: createRtlOwnerDocument("negative", () => "ltr"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      get scrollLeft() {
+        if (styleWritten) postWriteGeometryReads += 1;
+        return scrollLeft;
+      },
+      set scrollLeft(value: number) {
+        scrollLeft = value;
+        scrollLeftWrites += 1;
+      },
+      get scrollTop() {
+        return readGeometry(0);
+      },
+      set scrollTop(_value: number) {},
+      style: {
+        removeProperty: vi.fn(),
+        setProperty: vi.fn(() => {
+          styleWritten = true;
+        }),
+      },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(2, columns);
+    viewport.attach(element);
+    const readsBeforePreview = scrollWidthReads;
+    const writesBeforePreview = scrollLeftWrites;
+    styleWritten = false;
+    postWriteGeometryReads = 0;
+
+    viewport.previewColumnWidth("COL_ID_LAYOUT_FREE_PREVIEW", 160);
+
+    expect(scrollWidthReads).toBe(readsBeforePreview);
+    expect(scrollLeftWrites).toBe(writesBeforePreview);
+    expect(postWriteGeometryReads).toBe(0);
+  });
+
+  it.each(["reverse", "default"] as const)(
+    "preserves logical position with a layout-free %s RTL preview write",
+    (rtlType) => {
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        vi.fn(() => 1),
+      );
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
+      const columns = compileColumns(
+        Array.from({ length: 6 }, (_, index) => ({
+          columnId: `COL_ID_RTL_PREVIEW_${String(index)}`,
+          field: "name",
+          headerName: `RTL preview ${String(index)}`,
+          valueType: "text" as const,
+          width: 160,
+        })),
+      );
+      let scrollLeftWrites = 0;
+      let scrollLeft = 0;
+      let styleWritten = false;
+      let postWriteGeometryReads = 0;
+      const readGeometry = (value: number): number => {
+        if (styleWritten) postWriteGeometryReads += 1;
+        return value;
+      };
+      const setProperty = vi.fn(() => {
+        styleWritten = true;
+      });
+      const element = {
+        addEventListener: vi.fn(),
+        get clientHeight() {
+          return readGeometry(480);
+        },
+        get clientWidth() {
+          return readGeometry(200);
+        },
+        get offsetHeight() {
+          return readGeometry(500);
+        },
+        get offsetWidth() {
+          return readGeometry(200);
+        },
+        get scrollWidth() {
+          return readGeometry(960);
+        },
+        ownerDocument: createRtlOwnerDocument(rtlType),
+        parentElement: null,
+        removeEventListener: vi.fn(),
+        get scrollLeft() {
+          if (styleWritten) postWriteGeometryReads += 1;
+          return scrollLeft;
+        },
+        set scrollLeft(value: number) {
+          scrollLeft = value;
+          scrollLeftWrites += 1;
+        },
+        get scrollTop() {
+          return readGeometry(0);
+        },
+        set scrollTop(_value: number) {},
+        style: {
+          removeProperty: vi.fn(),
+          setProperty,
+        },
+      } as unknown as HTMLElement;
+      const viewport = new BrunoTableViewportRuntime();
+      viewport.setLayout(2, columns);
+      viewport.attach(element);
+      expect(viewport.getSnapshot().virtualWindow.totalWidth).toBe(960);
+      const initialMaximum = viewport.getSnapshot().virtualWindow.totalWidth - element.clientWidth;
+      expect(viewport.scrollByLogical(rtlType === "reverse" ? -40 : 40)).toBe(true);
+      const initialLogicalScrollLeft =
+        rtlType === "reverse" ? initialMaximum - scrollLeft : scrollLeft;
+      const writesBeforePreview = scrollLeftWrites;
+      styleWritten = false;
+      postWriteGeometryReads = 0;
+
+      viewport.previewColumnWidth("COL_ID_RTL_PREVIEW_0", 220);
+
+      const previewMaximum = initialMaximum + 60;
+      const previewLogicalScrollLeft =
+        rtlType === "reverse" ? previewMaximum - scrollLeft : scrollLeft;
+      expect(setProperty).toHaveBeenCalledWith(
+        brunoTableColumnCssVariable("width", "COL_ID_RTL_PREVIEW_0"),
+        "220px",
+      );
+      expect(scrollLeftWrites).toBe(writesBeforePreview + 1);
+      expect(previewLogicalScrollLeft).toBe(initialLogicalScrollLeft);
+      expect(postWriteGeometryReads).toBe(0);
+    },
+  );
 
   it("clears an active width preview before replacing the viewport element", () => {
     const columns = compileColumns([
@@ -2535,6 +3046,932 @@ describe("BrunoTableViewportRuntime", () => {
     expect(middle.center.length).toBeLessThanOrEqual(12);
   });
 
+  it("publishes one adjacent centre window atomically to headers and every mounted row", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_INCREMENTAL_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Incremental ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = 360;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    drainFrames(frames);
+    const previous = viewport.getSnapshot().virtualWindow;
+    const renderListener = vi.fn();
+    const columnWindowListener = vi.fn(() => {
+      expect(viewport.getColumnWindowSnapshot().center).toBe(
+        viewport.getSnapshot().virtualWindow.center,
+      );
+    });
+    const viewportListener = vi.fn();
+    const rowRangeListener = vi.fn(() => {
+      const authoritativeWindow = viewport.getSnapshot().virtualWindow;
+      expect(viewport.getRowRangeSnapshot()).toMatchObject({
+        rowEnd: authoritativeWindow.rowEnd,
+        rowStart: authoritativeWindow.rowStart,
+      });
+    });
+    viewport.subscribeRender(renderListener);
+    viewport.subscribeColumnWindow(columnWindowListener);
+    viewport.subscribe(viewportListener);
+    viewport.subscribeRowRange(rowRangeListener);
+    const rowNotifications = Array.from(
+      { length: previous.rowEnd - previous.rowStart },
+      (_, offset) => {
+        const listener = vi.fn();
+        viewport.subscribeBodyRowColumnWindow(previous.rowStart + offset, listener);
+        return listener;
+      },
+    );
+    element.scrollLeft += 120;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    const firstBatch = viewport.getSnapshot().virtualWindow;
+    expect(firstBatch.centerStartIndex).toBe(previous.centerStartIndex + 1);
+    expect(firstBatch.center.length).toBe(previous.center.length);
+    expect(viewportListener).toHaveBeenCalledOnce();
+    expect(columnWindowListener).not.toHaveBeenCalled();
+    expect(renderListener).not.toHaveBeenCalled();
+    expect(rowRangeListener).not.toHaveBeenCalled();
+    expect(viewport.getColumnWindowSnapshot().center).toBe(previous.center);
+    expect(
+      Array.from({ length: previous.rowEnd - previous.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(previous.rowStart + offset),
+      ).every((window) => window.center === viewport.getColumnWindowSnapshot().center),
+    ).toBe(true);
+    expect(rowNotifications.every((listener) => listener.mock.calls.length === 0)).toBe(true);
+
+    runNextFrame(frames);
+    const firstPreparedRow = viewport.getBodyRowColumnWindowSnapshot(previous.rowStart);
+    expect(firstPreparedRow.center).toBe(previous.center);
+    expect(firstPreparedRow.preparedCenter).toBeDefined();
+    expect(firstPreparedRow.preparedSourceCenterStartIndex).toBe(previous.centerStartIndex);
+    expect(firstPreparedRow.preparedSourceCenterEndIndex).toBe(
+      previous.centerStartIndex + previous.center.length,
+    );
+    expect(rowNotifications[0]).toHaveBeenCalledOnce();
+    expect(columnWindowListener).not.toHaveBeenCalled();
+
+    advanceFramesUntil(frames, () => columnWindowListener.mock.calls.length === 1);
+    expect(viewport.getColumnWindowSnapshot().center).toBe(firstBatch.center);
+    const promotedPreparedRow = viewport.getBodyRowColumnWindowSnapshot(previous.rowStart);
+    expect(promotedPreparedRow.preparedSourceCenterStartIndex).toBe(previous.centerStartIndex);
+    expect(promotedPreparedRow.preparedSourceCenterEndIndex).toBe(
+      previous.centerStartIndex + previous.center.length,
+    );
+    expect(
+      Array.from({ length: previous.rowEnd - previous.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(previous.rowStart + offset),
+      ).every((window) => window.center === firstBatch.center),
+    ).toBe(true);
+
+    drainFrames(frames);
+    expect(
+      Array.from({ length: previous.rowEnd - previous.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(previous.rowStart + offset),
+      ).every((window) => window === viewport.getColumnWindowSnapshot()),
+    ).toBe(true);
+    expect(rowNotifications.every((listener) => listener.mock.calls.length === 2)).toBe(true);
+    expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBe(
+      previous.centerStartIndex + 1,
+    );
+  });
+
+  it("prepares programmatic horizontal scrolling in bounded row batches before promotion", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_PROGRAMMATIC_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Programmatic ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    const removeProperty = vi.fn();
+    const setProperty = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { removeProperty, setProperty },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = 360;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    drainFrames(frames);
+    const previous = viewport.getSnapshot().virtualWindow;
+    const rowNotifications = Array.from(
+      { length: previous.rowEnd - previous.rowStart },
+      (_, offset) => {
+        const listener = vi.fn();
+        viewport.subscribeBodyRowColumnWindow(previous.rowStart + offset, listener);
+        return listener;
+      },
+    );
+    const columnWindowListener = vi.fn();
+    viewport.subscribeColumnWindow(columnWindowListener);
+
+    expect(viewport.scrollByLogical(120)).toBe(true);
+    runNextFrame(frames);
+
+    const target = viewport.getSnapshot().virtualWindow;
+    expect(target.centerStartIndex).toBe(previous.centerStartIndex + 1);
+    expect(viewport.getColumnWindowSnapshot().center).toBe(previous.center);
+    expect(rowNotifications[0]).toHaveBeenCalledOnce();
+    expect(rowNotifications[1]).toHaveBeenCalledOnce();
+    expect(rowNotifications[2]).toHaveBeenCalledOnce();
+    expect(rowNotifications[3]).toHaveBeenCalledOnce();
+    expect(rowNotifications[4]).not.toHaveBeenCalled();
+    expect(viewport.getBodyRowColumnWindowSnapshot(previous.rowStart).preparedCenter).toBeDefined();
+
+    advanceFramesUntil(frames, () => columnWindowListener.mock.calls.length === 1);
+    expect(viewport.getColumnWindowSnapshot().center).toBe(target.center);
+    expect(setProperty).toHaveBeenCalledWith(
+      "--bruno-table-prepared-entering-display",
+      "table-cell",
+    );
+    expect(setProperty).toHaveBeenCalledWith("--bruno-table-prepared-retiring-display", "none");
+    expect(setProperty).toHaveBeenCalledWith(
+      "--bruno-table-prepared-left-padding",
+      `${String(target.leftPadding)}px`,
+    );
+    expect(setProperty).toHaveBeenCalledWith(
+      "--bruno-table-prepared-right-padding",
+      `${String(target.rightPadding)}px`,
+    );
+
+    drainFrames(frames);
+    expect(
+      Array.from({ length: target.rowEnd - target.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(target.rowStart + offset),
+      ).every((window) => window === viewport.getColumnWindowSnapshot()),
+    ).toBe(true);
+    expect(removeProperty).toHaveBeenCalledWith("--bruno-table-prepared-left-padding");
+    expect(removeProperty).toHaveBeenCalledWith("--bruno-table-prepared-right-padding");
+  });
+
+  it("prepares rows mounted by a vertical scroll before promoting a horizontal window", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_VERTICAL_RACE_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Vertical race ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 360,
+      scrollTop: 0,
+      style: { removeProperty: vi.fn(), setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(200, columns);
+    viewport.attach(element);
+    drainFrames(frames);
+
+    const preparation = () =>
+      (
+        viewport as unknown as {
+          bodyColumnPreparation?: {
+            readonly phase: "cleanup" | "prepare" | "promote";
+            readonly preparedRows: ReadonlySet<number>;
+          };
+        }
+      ).bodyColumnPreparation;
+    const columnWindowListener = vi.fn();
+    viewport.subscribeColumnWindow(columnWindowListener);
+    expect(viewport.scrollByLogical(120)).toBe(true);
+    runNextFrame(frames);
+    advanceFramesUntil(frames, () => preparation()?.phase === "promote");
+    const originalRange = viewport.getRowRangeSnapshot();
+
+    element.scrollTop = 800;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+
+    const movedRange = viewport.getRowRangeSnapshot();
+    expect(movedRange.rowStart).toBeGreaterThan(originalRange.rowStart);
+    expect(columnWindowListener).not.toHaveBeenCalled();
+    runNextFrame(frames);
+    expect(preparation()?.phase).not.toBe("cleanup");
+    expect(
+      [...(preparation()?.preparedRows ?? [])].every(
+        (rowIndex) => rowIndex >= movedRange.rowStart && rowIndex < movedRange.rowEnd,
+      ),
+    ).toBe(true);
+
+    drainFrames(frames);
+    expect(columnWindowListener).toHaveBeenCalledOnce();
+    expect(
+      Array.from({ length: movedRange.rowEnd - movedRange.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(movedRange.rowStart + offset),
+      ).every((window) => window === viewport.getColumnWindowSnapshot()),
+    ).toBe(true);
+  });
+
+  it("finishes a promoted preparation coherently before an adjacent target supersedes it", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_SUPERSEDE_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Supersede ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    const removeProperty = vi.fn();
+    const setProperty = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 360,
+      scrollTop: 0,
+      style: { removeProperty, setProperty },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+    drainFrames(frames);
+
+    expect(viewport.scrollByLogical(120)).toBe(true);
+    runNextFrame(frames);
+    const firstTarget = viewport.getSnapshot().virtualWindow;
+    const columnWindowListener = vi.fn();
+    viewport.subscribeColumnWindow(columnWindowListener);
+    advanceFramesUntil(frames, () => columnWindowListener.mock.calls.length === 1);
+    expect(viewport.getColumnWindowSnapshot().center).toBe(firstTarget.center);
+    setProperty.mockClear();
+    removeProperty.mockClear();
+
+    expect(viewport.scrollByLogical(120)).toBe(true);
+    runNextFrame(frames);
+
+    expect(setProperty).not.toHaveBeenCalled();
+    expect(removeProperty).not.toHaveBeenCalled();
+    expect(viewport.getColumnWindowSnapshot().center).toBe(firstTarget.center);
+
+    drainFrames(frames);
+    expect(viewport.getColumnWindowSnapshot().center).toBe(
+      viewport.getSnapshot().virtualWindow.center,
+    );
+  });
+
+  it("settles a matching pending target when its committed window loses visible coverage", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_COVERAGE_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Coverage ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 360,
+      scrollTop: 0,
+      style: { removeProperty: vi.fn(), setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+    drainFrames(frames);
+
+    expect(viewport.scrollByLogical(120)).toBe(true);
+    runNextFrame(frames);
+    const pendingTarget = viewport.getSnapshot().virtualWindow;
+    expect(viewport.getColumnWindowSnapshot().center).not.toBe(pendingTarget.center);
+
+    const reconcileBodyColumnWindow = (
+      viewport as unknown as {
+        reconcileBodyColumnWindow: (
+          window: BrunoTableVirtualWindow,
+          allowPreparation: boolean,
+          currentWindowCoversViewport: boolean,
+        ) => boolean;
+      }
+    ).reconcileBodyColumnWindow.bind(viewport);
+    expect(reconcileBodyColumnWindow(pendingTarget, false, false)).toBe(true);
+
+    expect(viewport.getColumnWindowSnapshot().center).toBe(
+      viewport.getSnapshot().virtualWindow.center,
+    );
+    expect(
+      viewport.getBodyRowColumnWindowSnapshot(pendingTarget.rowStart).preparedCenter,
+    ).toBeUndefined();
+  });
+
+  it("keeps a replacement row-window subscriber after an old unsubscribe repeats", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_IDEMPOTENT_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Idempotent ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+    element.scrollLeft = 360;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    drainFrames(frames);
+    const rowIndex = viewport.getSnapshot().virtualWindow.rowStart;
+    const unsubscribeOld = viewport.subscribeBodyRowColumnWindow(rowIndex, vi.fn());
+    unsubscribeOld();
+    const replacementListener = vi.fn();
+    viewport.subscribeBodyRowColumnWindow(rowIndex, replacementListener);
+
+    unsubscribeOld();
+    element.scrollLeft = 480;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    advanceFramesUntil(frames, () => replacementListener.mock.calls.length === 1);
+
+    expect(replacementListener).toHaveBeenCalledOnce();
+  });
+
+  it("publishes a joint row-range and centre-window update from one coherent snapshot", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_JOINT_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Joint ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(80, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = 360;
+    element.scrollTop = 1_440;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    drainFrames(frames);
+    const previous = viewport.getSnapshot().virtualWindow;
+    const viewportListener = vi.fn();
+    const rowRangeListener = vi.fn();
+    const columnWindowListener = vi.fn();
+    const rowNotifications = Array.from(
+      { length: previous.rowEnd - previous.rowStart },
+      (_, offset) => {
+        const listener = vi.fn();
+        viewport.subscribeBodyRowColumnWindow(previous.rowStart + offset, listener);
+        return listener;
+      },
+    );
+    viewport.subscribe(viewportListener);
+    viewport.subscribeRowRange(rowRangeListener);
+    viewport.subscribeColumnWindow(columnWindowListener);
+
+    element.scrollLeft = 480;
+    element.scrollTop = 1_504;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+
+    const next = viewport.getSnapshot().virtualWindow;
+    expect(next.centerStartIndex).toBe(previous.centerStartIndex + 1);
+    expect(next.rowStart).toBe(previous.rowStart + 1);
+    expect(viewportListener).toHaveBeenCalledOnce();
+    expect(rowRangeListener).toHaveBeenCalledOnce();
+    expect(columnWindowListener).not.toHaveBeenCalled();
+    expect(viewport.getColumnWindowSnapshot().center).toBe(previous.center);
+    expect(
+      Array.from({ length: next.rowEnd - next.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(next.rowStart + offset),
+      ).every((window) => window.center === previous.center),
+    ).toBe(true);
+
+    advanceFramesUntil(frames, () => columnWindowListener.mock.calls.length === 1);
+    expect(viewport.getColumnWindowSnapshot().center).toBe(next.center);
+    expect(
+      Array.from({ length: next.rowEnd - next.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(next.rowStart + offset),
+      ).every((window) => window.center === next.center),
+    ).toBe(true);
+    drainFrames(frames);
+    expect(
+      Array.from({ length: next.rowEnd - next.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(next.rowStart + offset),
+      ).every((window) => window === viewport.getColumnWindowSnapshot()),
+    ).toBe(true);
+    expect(rowNotifications.some((listener) => listener.mock.calls.length > 0)).toBe(true);
+  });
+
+  it("atomically supersedes adjacent centre windows", () => {
+    const columns = compileColumns(
+      Array.from({ length: 40 }, (_, index) => ({
+        columnId: `COL_ID_ADJACENT_SUPERSEDE_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Adjacent supersede ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = 360;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    drainFrames(frames);
+    const initial = viewport.getSnapshot().virtualWindow;
+    const initialHeaderWindow = viewport.getHeaderColumnWindowSnapshot();
+    const headerColumnWindowListener = vi.fn();
+    viewport.subscribeHeaderColumnWindow(headerColumnWindowListener);
+    const columnWindowListener = vi.fn();
+    viewport.subscribeColumnWindow(columnWindowListener);
+    const rowNotifications = Array.from(
+      { length: initial.rowEnd - initial.rowStart },
+      (_, offset) => {
+        const listener = vi.fn();
+        viewport.subscribeBodyRowColumnWindow(initial.rowStart + offset, listener);
+        return listener;
+      },
+    );
+
+    element.scrollLeft = 480;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    expect(columnWindowListener).not.toHaveBeenCalled();
+
+    element.scrollLeft = 600;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    expect(columnWindowListener).not.toHaveBeenCalled();
+    advanceFramesUntil(frames, () => columnWindowListener.mock.calls.length === 1);
+    expect(viewport.getColumnWindowSnapshot().centerStartIndex).toBe(initial.centerStartIndex + 1);
+    expect(viewport.getHeaderColumnWindowSnapshot()).toBe(initialHeaderWindow);
+    expect(headerColumnWindowListener).not.toHaveBeenCalled();
+    drainFrames(frames);
+    expect(columnWindowListener).toHaveBeenCalledTimes(2);
+    expect(rowNotifications.every((listener) => listener.mock.calls.length === 4)).toBe(true);
+    expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBe(
+      initial.centerStartIndex + 2,
+    );
+    expect(
+      Array.from({ length: initial.rowEnd - initial.rowStart }, (_, offset) =>
+        viewport.getBodyRowColumnWindowSnapshot(initial.rowStart + offset),
+      ).every((window) => window === viewport.getColumnWindowSnapshot()),
+    ).toBe(true);
+  });
+
+  it("keeps every mounted row covering visible columns during continuous adjacent scrolling", () => {
+    const columns = compileColumns(
+      Array.from({ length: 40 }, (_, index) => ({
+        columnId: `COL_ID_CONTINUOUS_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Continuous ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+
+    const outward = Array.from({ length: 17 }, (_, index) => index + 3);
+    for (const column of [...outward, ...outward.toReversed().slice(1)]) {
+      element.scrollLeft = column * 120;
+      scrollListener!(new Event("scroll"));
+      runNextFrame(frames);
+      drainFrames(frames);
+      const window = viewport.getSnapshot().virtualWindow;
+      for (let row = window.rowStart; row < window.rowEnd; row += 1) {
+        const body = viewport.getBodyRowColumnWindowSnapshot(row);
+        expect(body).toBe(viewport.getColumnWindowSnapshot());
+        expect(body.centerStartIndex).toBeLessThanOrEqual(column);
+        expect(body.centerStartIndex + body.center.length).toBeGreaterThanOrEqual(column + 2);
+      }
+    }
+    viewport.dispose();
+  });
+
+  it("atomically replaces the shared centre window after a large jump", () => {
+    const columns = compileColumns(
+      Array.from({ length: 40 }, (_, index) => ({
+        columnId: `COL_ID_SUPERSEDE_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Supersede ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = 360;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    drainFrames(frames);
+    element.scrollLeft = 480;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    runNextFrame(frames);
+    const pendingRow = viewport.getSnapshot().virtualWindow.rowStart;
+    const pendingWindow = viewport.getBodyRowColumnWindowSnapshot(pendingRow);
+    const pendingListener = vi.fn();
+    viewport.subscribeBodyRowColumnWindow(pendingRow, pendingListener);
+
+    element.scrollLeft = 2_400;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    expect(viewport.getBodyRowColumnWindowSnapshot(pendingRow)).not.toBe(pendingWindow);
+    expect(pendingListener).toHaveBeenCalledOnce();
+    expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBeGreaterThan(10);
+    expect(frames).toHaveLength(0);
+  });
+
+  it("disposes a pending viewport publication without notifying retired row subscribers", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_DISPOSE_TRANSITION_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Dispose transition ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    const cancelAnimationFrame = vi.fn();
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = 360;
+    scrollListener!(new Event("scroll"));
+    frames.shift()!(0);
+    const rowIndex = viewport.getSnapshot().virtualWindow.rowStart;
+    const rowListener = vi.fn();
+    viewport.subscribeBodyRowColumnWindow(rowIndex, rowListener);
+    element.scrollLeft = 480;
+    scrollListener!(new Event("scroll"));
+    expect(frames).toHaveLength(1);
+
+    viewport.dispose();
+    expect(cancelAnimationFrame).toHaveBeenCalled();
+    frames.shift()!(0);
+    expect(rowListener).not.toHaveBeenCalled();
+    expect(viewport.getBodyRowColumnWindowSnapshot(rowIndex)).toBe(
+      viewport.getColumnWindowSnapshot(),
+    );
+  });
+
+  it("atomically replaces the shared centre window before revealing a distant column", () => {
+    const columns = compileColumns(
+      Array.from({ length: 40 }, (_, index) => ({
+        columnId: `COL_ID_TRANSITION_REVEAL_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Transition reveal ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = 360;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    drainFrames(frames);
+    element.scrollLeft = 480;
+    scrollListener!(new Event("scroll"));
+    runNextFrame(frames);
+    runNextFrame(frames);
+    const pendingRow = viewport.getSnapshot().virtualWindow.rowStart;
+    const pendingWindow = viewport.getBodyRowColumnWindowSnapshot(pendingRow);
+    const pendingListener = vi.fn();
+    viewport.subscribeBodyRowColumnWindow(pendingRow, pendingListener);
+
+    viewport.revealCell(0, "COL_ID_TRANSITION_REVEAL_30", "header");
+    runNextFrame(frames);
+    const revealed = viewport.getSnapshot().virtualWindow;
+    expect(viewport.getBodyRowColumnWindowSnapshot(pendingRow)).not.toBe(pendingWindow);
+    expect(pendingListener).toHaveBeenCalledOnce();
+    expect(
+      revealed.center.some((column) => column.columnId === "COL_ID_TRANSITION_REVEAL_30"),
+    ).toBe(true);
+  });
+
+  it("publishes one adjacent shared window in negative RTL coordinates", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_INCREMENTAL_RTL_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Incremental RTL ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      ownerDocument: createRtlOwnerDocument("negative"),
+      parentElement: null,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      scrollWidth: 2_400,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(40, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = -360;
+    scrollListener!(new Event("scroll"));
+    frames.shift()!(0);
+    const previous = viewport.getSnapshot().virtualWindow;
+    element.scrollLeft = -480;
+    scrollListener!(new Event("scroll"));
+    frames.shift()!(0);
+
+    expect(viewport.getSnapshot().virtualWindow.centerStartIndex).toBe(
+      previous.centerStartIndex + 1,
+    );
+    expect(viewport.getBodyRowColumnWindowSnapshot(previous.rowStart)).toBe(
+      viewport.getColumnWindowSnapshot(),
+    );
+  });
+
+  it("preserves the shared centre window through a vertical-only publication", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_INCREMENTAL_VERTICAL_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Incremental vertical ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    const frames: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 0,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(200, columns);
+    viewport.attach(element);
+
+    element.scrollLeft = 360;
+    scrollListener!(new Event("scroll"));
+    frames.shift()!(0);
+    element.scrollLeft = 480;
+    scrollListener!(new Event("scroll"));
+    frames.shift()!(0);
+    const beforeVertical = viewport.getSnapshot().virtualWindow;
+    const previousBodyWindow = viewport.getBodyRowColumnWindowSnapshot(beforeVertical.rowStart);
+    const renderListener = vi.fn();
+    const columnWindowListener = vi.fn();
+    const rowRangeListener = vi.fn();
+    viewport.subscribeRender(renderListener);
+    viewport.subscribeColumnWindow(columnWindowListener);
+    viewport.subscribeRowRange(rowRangeListener);
+
+    element.scrollTop = 360;
+    scrollListener!(new Event("scroll"));
+    frames.shift()!(0);
+    const afterVertical = viewport.getSnapshot().virtualWindow;
+    expect(afterVertical.rowStart).toBeGreaterThan(beforeVertical.rowStart);
+    expect(renderListener).not.toHaveBeenCalled();
+    expect(columnWindowListener).not.toHaveBeenCalled();
+    expect(rowRangeListener).toHaveBeenCalledOnce();
+    expect(viewport.getBodyRowColumnWindowSnapshot(afterVertical.rowStart)).toBe(
+      previousBodyWindow,
+    );
+    expect(viewport.getBodyRowColumnWindowSnapshot(afterVertical.rowEnd - 1)).toBe(
+      viewport.getColumnWindowSnapshot(),
+    );
+  });
+
   it("publishes off-screen column-count changes that preserve visible geometry", () => {
     const columns = compileColumns(
       Array.from({ length: 10 }, (_, index) => ({
@@ -2966,6 +4403,7 @@ describe("BrunoTableViewportRuntime", () => {
     const window = viewport.getSnapshot().virtualWindow;
     expect(window).toMatchObject({
       rowEnd: 1_000_000,
+      segmentedRows: true,
       totalHeight: BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT,
     });
     const layerTransformCall = setProperty.mock.calls.findLast(
@@ -3059,6 +4497,162 @@ describe("BrunoTableViewportRuntime", () => {
     callback!(0);
 
     expect(element.scrollTop).toBe(720);
+  });
+
+  it("does not create a native scroll event when the revealed body row is already visible", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    let callback: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callback = next;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    let scrollTop = 0;
+    const scrollTo = vi.fn((options: ScrollToOptions) => {
+      if (options.top !== undefined) scrollTop = options.top;
+    });
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTo,
+      get scrollTop() {
+        return scrollTop;
+      },
+      set scrollTop(value: number) {
+        scrollTop = value;
+      },
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+    scrollTo.mockClear();
+
+    viewport.revealCell(1, "COL_ID_NAME", "body", "row-1");
+    callback!(0);
+
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(element.scrollTop).toBe(0);
+  });
+
+  it("reduces only off-axis row overscan for a horizontal reveal", () => {
+    const columns = compileColumns(
+      Array.from({ length: 20 }, (_, index) => ({
+        columnId: `COL_ID_HORIZONTAL_REVEAL_${String(index).padStart(2, "0")}`,
+        field: "name",
+        headerName: `Horizontal reveal ${index}`,
+        valueType: "text" as const,
+        width: 120,
+      })),
+    );
+    let callback: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callback = next;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const element = {
+      addEventListener: vi.fn(),
+      clientHeight: 480,
+      clientWidth: 240,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTop: 720,
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+
+    viewport.revealCell(21, "COL_ID_HORIZONTAL_REVEAL_00", "body", "row-21");
+    callback!(0);
+    const initial = viewport.getSnapshot().virtualWindow;
+
+    viewport.revealCell(21, "COL_ID_HORIZONTAL_REVEAL_10", "body", "row-21");
+    callback!(0);
+    const horizontal = viewport.getSnapshot().virtualWindow;
+
+    expect(horizontal.rowEnd - horizontal.rowStart).toBeLessThan(initial.rowEnd - initial.rowStart);
+    expect(horizontal.rowStart).toBeLessThanOrEqual(21);
+    expect(horizontal.rowEnd).toBeGreaterThan(21);
+
+    viewport.revealCell(0, "COL_ID_HORIZONTAL_REVEAL_11", "header");
+    callback!(0);
+    const header = viewport.getSnapshot().virtualWindow;
+
+    expect(header.rowEnd - header.rowStart).toBeGreaterThan(
+      horizontal.rowEnd - horizontal.rowStart,
+    );
+
+    viewport.revealCell(80, "COL_ID_HORIZONTAL_REVEAL_10", "body", "row-80");
+    callback!(0);
+    const vertical = viewport.getSnapshot().virtualWindow;
+
+    expect(vertical.rowEnd - vertical.rowStart).toBeGreaterThan(
+      horizontal.rowEnd - horizontal.rowStart,
+    );
+    expect(vertical.rowStart).toBeLessThanOrEqual(80);
+    expect(vertical.rowEnd).toBeGreaterThan(80);
+  });
+
+  it("ignores the redundant native event from an exact programmatic reveal", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const callbacks: FrameRequestCallback[] = [];
+    let scrollListener: EventListener | undefined;
+    vi.stubGlobal("requestAnimationFrame", (next: FrameRequestCallback) => {
+      callbacks.push(next);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    let scrollTop = 0;
+    const element = {
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "scroll") scrollListener = listener;
+      }),
+      clientHeight: 480,
+      clientWidth: 800,
+      removeEventListener: vi.fn(),
+      scrollLeft: 0,
+      scrollTo: ({ top }: ScrollToOptions) => {
+        if (top !== undefined) scrollTop = top;
+      },
+      get scrollTop() {
+        return scrollTop;
+      },
+      set scrollTop(value: number) {
+        scrollTop = value;
+      },
+      style: { setProperty: vi.fn() },
+    } as unknown as HTMLElement;
+    const viewport = new BrunoTableViewportRuntime();
+    viewport.setLayout(100, columns);
+    viewport.attach(element);
+
+    viewport.revealCell(50, "COL_ID_NAME", "body", "row-50");
+    callbacks.shift()!(0);
+    expect(element.scrollTop).toBeGreaterThan(0);
+    expect(callbacks).toHaveLength(0);
+
+    scrollListener!(new Event("scroll"));
+
+    expect(callbacks).toHaveLength(0);
   });
 
   it("keeps unchanged logical windows out of React notifications while scrolling", () => {

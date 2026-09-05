@@ -3,7 +3,7 @@ import { cdp, page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
 import type { CDPSession as PlaywrightCDPSession } from "@vitest/browser-playwright";
-import { act, Suspense, useEffect, useState } from "react";
+import { act, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import * as BigDecimal from "effect/BigDecimal";
@@ -57,6 +57,8 @@ import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import {
   BrunoTableToolbarStore,
   BrunoTableView,
+  asBrunoTableRealmHTMLElement,
+  isBrunoTableColumnMenuTriggerTarget,
   type BrunoTableLogicalRowSpace,
   type BrunoTableRowPipelineProps,
 } from "./internal/bruno-table-view";
@@ -435,6 +437,15 @@ function SparseRowPipeline({
     queryNavigationMode: "reset",
     loading: false,
   });
+}
+
+function StatefulRowAction({ row }: { readonly row: Row }) {
+  const [pressed, setPressed] = useState(false);
+  return (
+    <button type="button" aria-pressed={pressed} onClick={() => setPressed(!pressed)}>
+      Toggle {row.name}
+    </button>
+  );
 }
 
 function TrackedRowAction({
@@ -3139,6 +3150,208 @@ describe("BrunoTableClient browser surface", () => {
     await expect
       .element(screen.getByRole("dialog", { name: "Filter Score" }))
       .not.toBeInTheDocument();
+  });
+
+  test("restores filter-owner focus inside the grid owning document", async () => {
+    const replacementColumns = [
+      {
+        columnId: "COL_ID_FILTER_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_FILTER_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+      },
+    ] as const satisfies BrunoTableColumns<FilterRow>;
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    let screen: Awaited<ReturnType<typeof render>> | undefined;
+    try {
+      const ownerDocument = frame.contentDocument;
+      if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+      ownerDocument.body.tabIndex = -1;
+      const container = ownerDocument.createElement("div");
+      ownerDocument.body.append(container);
+      screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_OWNER_IFRAME_UNMOUNT"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+        { container, baseElement: ownerDocument.body },
+      );
+
+      const filterTrigger = await vi.waitFor(() => {
+        const trigger = ownerDocument.querySelector<HTMLButtonElement>(
+          'button[aria-label="Filter Score"]',
+        );
+        expect(trigger).not.toBeNull();
+        return trigger!;
+      });
+      const OwnerPointerEvent = ownerDocument.defaultView?.PointerEvent;
+      const OwnerMouseEvent = ownerDocument.defaultView?.MouseEvent;
+      if (OwnerPointerEvent === undefined || OwnerMouseEvent === undefined) {
+        throw new Error("Expected iframe pointer and mouse event constructors.");
+      }
+      filterTrigger.dispatchEvent(
+        new OwnerPointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          pointerId: 1,
+        }),
+      );
+      filterTrigger.dispatchEvent(
+        new OwnerPointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          pointerId: 1,
+        }),
+      );
+      filterTrigger.dispatchEvent(new OwnerMouseEvent("click", { bubbles: true, button: 0 }));
+      await vi.waitFor(() =>
+        expect(
+          ownerDocument.querySelector('[data-bruno-filter-overlay="COL_ID_FILTER_SCORE"]') ??
+            document.querySelector('[data-bruno-filter-overlay="COL_ID_FILTER_SCORE"]'),
+        ).not.toBeNull(),
+      );
+      ownerDocument.body.focus();
+      expect(ownerDocument.activeElement).toBe(ownerDocument.body);
+      expect(document.activeElement).toBe(frame);
+
+      await screen.rerender(
+        <BrunoTableClient<FilterRow, typeof replacementColumns>
+          tableId="TABLE_ID_FILTER_OWNER_IFRAME_UNMOUNT"
+          columns={replacementColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      await vi.waitFor(() =>
+        expect(ownerDocument.activeElement).toBe(
+          ownerDocument.querySelector(
+            '[role="grid"][aria-label="Data for TABLE_ID_FILTER_OWNER_IFRAME_UNMOUNT"]',
+          ),
+        ),
+      );
+      expect(document.activeElement).toBe(frame);
+      expect(
+        ownerDocument.querySelector('[data-bruno-filter-overlay="COL_ID_FILTER_SCORE"]'),
+      ).toBeNull();
+      expect(
+        document.querySelector('[data-bruno-filter-overlay="COL_ID_FILTER_SCORE"]'),
+      ).toBeNull();
+    } finally {
+      await screen?.unmount();
+      frame.remove();
+    }
+  });
+
+  test("preserves parent-document focus when an iframe filter owner unmounts", async () => {
+    const replacementColumns = [
+      {
+        columnId: "COL_ID_FILTER_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+      {
+        columnId: "COL_ID_FILTER_QUANTITY",
+        field: "quantity",
+        headerName: "Quantity",
+        valueType: "bigint",
+      },
+    ] as const satisfies BrunoTableColumns<FilterRow>;
+    const parentButton = document.createElement("button");
+    parentButton.textContent = "Outside iframe";
+    document.body.append(parentButton);
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    let screen: Awaited<ReturnType<typeof render>> | undefined;
+    try {
+      const ownerDocument = frame.contentDocument;
+      if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+      const container = ownerDocument.createElement("div");
+      ownerDocument.body.append(container);
+      screen = await render(
+        <BrunoTableClient<FilterRow, typeof filterColumns>
+          tableId="TABLE_ID_FILTER_OWNER_IFRAME_EXTERNAL_FOCUS"
+          columns={filterColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+        { container, baseElement: ownerDocument.body },
+      );
+
+      const filterTrigger = await vi.waitFor(() => {
+        const trigger = ownerDocument.querySelector<HTMLButtonElement>(
+          'button[aria-label="Filter Score"]',
+        );
+        expect(trigger).not.toBeNull();
+        return trigger!;
+      });
+      const OwnerPointerEvent = ownerDocument.defaultView?.PointerEvent;
+      const OwnerMouseEvent = ownerDocument.defaultView?.MouseEvent;
+      if (OwnerPointerEvent === undefined || OwnerMouseEvent === undefined) {
+        throw new Error("Expected iframe pointer and mouse event constructors.");
+      }
+      filterTrigger.dispatchEvent(
+        new OwnerPointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          pointerId: 1,
+        }),
+      );
+      filterTrigger.dispatchEvent(
+        new OwnerPointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          pointerId: 1,
+        }),
+      );
+      filterTrigger.dispatchEvent(new OwnerMouseEvent("click", { bubbles: true, button: 0 }));
+      await vi.waitFor(() =>
+        expect(
+          ownerDocument.querySelector('[data-bruno-filter-overlay="COL_ID_FILTER_SCORE"]') ??
+            document.querySelector('[data-bruno-filter-overlay="COL_ID_FILTER_SCORE"]'),
+        ).not.toBeNull(),
+      );
+
+      parentButton.focus();
+      expect(document.activeElement).toBe(parentButton);
+      expect(ownerDocument.activeElement).toBe(ownerDocument.body);
+
+      await screen.rerender(
+        <BrunoTableClient<FilterRow, typeof replacementColumns>
+          tableId="TABLE_ID_FILTER_OWNER_IFRAME_EXTERNAL_FOCUS"
+          columns={replacementColumns}
+          initialOrderBy={[{ columnId: "COL_ID_FILTER_NAME", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={readyFilterSource()}
+        />,
+      );
+
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expect(document.activeElement).toBe(parentButton);
+      expect(ownerDocument.activeElement).toBe(ownerDocument.body);
+    } finally {
+      await screen?.unmount();
+      frame.remove();
+      parentButton.remove();
+    }
   });
 
   test("reviews half-open ranges and text sensitivity in the global filter rail", async () => {
@@ -6203,6 +6416,131 @@ describe("BrunoTableClient browser surface", () => {
     expect(screen.getByRole("row").all().length).toBeLessThan(30);
   });
 
+  test.each([false, true])(
+    "keeps renderer state owned by Row Identity with editable=%s",
+    async (editable) => {
+      const rendererColumns = [
+        {
+          ...columns[0],
+          cellRenderer: ({ row }: { readonly row: Row }) => <StatefulRowAction row={row} />,
+          isEditable: true,
+        },
+      ] as const;
+      const initial = [{ id: "first", name: "First", score: 1 }] satisfies readonly Row[];
+      const editing = editable
+        ? {
+            editable: true as const,
+            getRowVersion: (row: Row) => row.score,
+            projectEditRow: ({ row, patch }: { row: Row; patch: Partial<Row> }) => ({
+              ...row,
+              ...patch,
+            }),
+            onSaveEdits: async () => undefined,
+          }
+        : {};
+      const surface = (records: readonly Row[], version: number) => (
+        <BrunoTableClient
+          {...editing}
+          tableId="TABLE_ID_RENDERER_STATE"
+          getRowId={(row: Row) => row.id}
+          columns={rendererColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={{ ...readySource(records), version }}
+        />
+      );
+      const screen = await render(surface(initial, 1));
+      await userEvent.click(screen.getByRole("button", { name: "Toggle First" }));
+      await expect
+        .element(screen.getByRole("button", { name: "Toggle First" }))
+        .toHaveAttribute("aria-pressed", "true");
+      await screen.rerender(surface([{ id: "first", name: "Updated", score: 2 }], 2));
+      await expect
+        .element(screen.getByRole("button", { name: "Toggle Updated" }))
+        .toHaveAttribute("aria-pressed", "true");
+      await screen.rerender(surface([{ id: "second", name: "Second", score: 3 }], 3));
+      await expect
+        .element(screen.getByRole("button", { name: "Toggle Second" }))
+        .toHaveAttribute("aria-pressed", "false");
+      const manyRows = Array.from({ length: 100 }, (_, index) => ({
+        id: `row-${index}`,
+        name: `Row ${String(index).padStart(3, "0")}`,
+        score: index,
+      }));
+      await screen.rerender(surface(manyRows, 4));
+      await expect
+        .element(screen.getByRole("button", { name: "Toggle Row 000" }))
+        .toBeInTheDocument();
+      const grid = screen.getByRole("grid").element();
+      const initialButtons = screen.getByRole("button", { name: /^Toggle Row/ }).all();
+      expect(initialButtons.length).toBeGreaterThan(5);
+      const initialNames = new Set(initialButtons.map((button) => button.element().textContent));
+      for (const button of initialButtons) {
+        await userEvent.click(button);
+        await expect.element(button).toHaveAttribute("aria-pressed", "true");
+      }
+      grid.focus();
+      grid.scrollTop = 1_080;
+      grid.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() => {
+        const entering = screen
+          .getByRole("button", { name: /^Toggle Row/ })
+          .all()
+          .filter((button) => !initialNames.has(button.element().textContent));
+        expect(entering.length).toBeGreaterThan(0);
+        for (const button of entering) {
+          expect(button.element()).toHaveAttribute("aria-pressed", "false");
+        }
+      });
+    },
+  );
+
+  test("recycles retired row shells while preserving overlapping rows", async () => {
+    const largeRows = Array.from({ length: 100 }, (_, index) => ({
+      id: `row-${index}`,
+      name: `Row ${index}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const screen = await render(
+      <BrunoTableClient {...props} clientSource={readySource(largeRows)} />,
+    );
+    const grid = screen.getByRole("grid").element();
+    const mountedRow = (rowId: string) =>
+      grid
+        .querySelector<HTMLElement>(`[role="gridcell"][data-bruno-row-id="${rowId}"]`)
+        ?.closest<HTMLTableRowElement>('tr[role="row"]') ?? null;
+    const mountedRows = () =>
+      new Map(
+        [...grid.querySelectorAll<HTMLElement>('[role="gridcell"][data-bruno-row-id]')].flatMap(
+          (cell) => {
+            const rowId = cell.dataset["brunoRowId"];
+            const row = cell.closest<HTMLTableRowElement>('tr[role="row"]');
+            return rowId === undefined || row === null ? [] : [[rowId, row] as const];
+          },
+        ),
+      );
+    const initialRows = mountedRows();
+    expect(initialRows.size).toBeGreaterThan(5);
+
+    grid.scrollTop = 216;
+    grid.dispatchEvent(new Event("scroll"));
+    await vi.waitFor(() =>
+      expect([...mountedRows().keys()].some((rowId) => !initialRows.has(rowId))).toBe(true),
+    );
+
+    const nextRows = mountedRows();
+    const overlappingRowId = [...nextRows.keys()].find((rowId) => initialRows.has(rowId));
+    expect(overlappingRowId).toBeDefined();
+    expect(mountedRow(overlappingRowId!)).toBe(initialRows.get(overlappingRowId!));
+    const retiredRows = [...initialRows.entries()]
+      .filter(([rowId]) => !nextRows.has(rowId))
+      .map(([, row]) => row);
+    const enteringRows = [...nextRows.entries()]
+      .filter(([rowId]) => !initialRows.has(rowId))
+      .map(([, row]) => row);
+    expect(retiredRows.length).toBeGreaterThan(0);
+    expect(enteringRows.some((row) => retiredRows.includes(row))).toBe(true);
+  });
+
   test(
     "reports logical aria row indexes after physical scroll-space compression",
     { timeout: 30_000 },
@@ -6276,6 +6614,606 @@ describe("BrunoTableClient browser surface", () => {
       .element(screen.getByRole("dialog", { name: "Filter Wide 01" }))
       .toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
+  });
+
+  test.each(["ltr", "rtl"] as const)(
+    "keeps one logical row when an active %s centre column is horizontally unmounted",
+    async (direction) => {
+      const ownershipColumns = Array.from({ length: 20 }, (_, index) => ({
+        ...columns[0],
+        columnId: `COL_ID_ACTIVE_OWNER_${String(index).padStart(2, "0")}`,
+        headerName: `Active owner ${String(index).padStart(2, "0")}`,
+        width: 160,
+      })) as BrunoTableColumns<Row>;
+      const tableId = `TABLE_ID_ACTIVE_OWNER_${direction.toUpperCase()}`;
+      const screen = await render(
+        <div dir={direction} style={{ height: 320, width: 320 }}>
+          <BrunoTableClient
+            tableId={tableId}
+            getRowId={(row: Row) => row.id}
+            columns={ownershipColumns}
+            initialOrderBy={[{ columnId: "COL_ID_ACTIVE_OWNER_00", direction: "asc" }]}
+            clientSource={readySource()}
+          />
+        </div>,
+      );
+      const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+      const gridElement = grid.element();
+      const rowsAt = (rowIndex: number) =>
+        screen
+          .getByRole("row")
+          .all()
+          .filter((row) => row.element().getAttribute("aria-rowindex") === String(rowIndex));
+      const activeOwnedElement = (role: "columnheader" | "gridcell") => {
+        const activeId = gridElement.getAttribute("aria-activedescendant");
+        return screen
+          .getByRole(role)
+          .all()
+          .find((element) => element.element().id === activeId);
+      };
+      const expectOwnedByOnlyRow = async (rowIndex: number, ownedId: string) =>
+        vi.waitFor(() => {
+          const owners = rowsAt(rowIndex);
+          expect(owners).toHaveLength(1);
+          const owner = owners[0]!.element();
+          const owned = gridElement.ownerDocument.getElementById(ownedId);
+          expect(
+            owner.contains(owned) ||
+              (owner.getAttribute("aria-owns")?.split(" ") ?? []).includes(ownedId),
+          ).toBe(true);
+        });
+      const expectContainedCellIsNotAriaOwned = async (rowIndex: number, ownedId: string) =>
+        vi.waitFor(() => {
+          const owners = rowsAt(rowIndex);
+          expect(owners).toHaveLength(1);
+          const owner = owners[0]!.element();
+          const owned = gridElement.ownerDocument.getElementById(ownedId);
+          expect(owned).not.toBeNull();
+          expect(owner.contains(owned)).toBe(true);
+          expect(owner.getAttribute("aria-owns")?.split(" ") ?? []).not.toContain(ownedId);
+        });
+      const scrollActiveColumnOut = async () => {
+        gridElement.scrollLeft =
+          direction === "rtl" ? -gridElement.scrollWidth : gridElement.scrollWidth;
+        gridElement.dispatchEvent(new Event("scroll"));
+        await expect
+          .element(screen.getByRole("columnheader", { name: "Active owner 00" }))
+          .not.toBeInTheDocument();
+      };
+      const restoreActiveColumn = async () => {
+        gridElement.scrollLeft = 0;
+        gridElement.dispatchEvent(new Event("scroll"));
+        await expect
+          .element(screen.getByRole("columnheader", { name: "Active owner 00" }))
+          .toBeInTheDocument();
+      };
+
+      gridElement.focus();
+      await vi.waitFor(() =>
+        expect(activeOwnedElement("gridcell")?.element().getAttribute("aria-colindex")).toBe("1"),
+      );
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      await scrollActiveColumnOut();
+
+      const bodyProxy = activeOwnedElement("gridcell");
+      expect(bodyProxy).toBeDefined();
+      await expectOwnedByOnlyRow(2, bodyProxy!.element().id);
+      expect(gridElement.querySelectorAll(`[id="${bodyProxy!.element().id}"]`)).toHaveLength(1);
+
+      gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowUp" }));
+      await vi.waitFor(() =>
+        expect(activeOwnedElement("columnheader")?.element().getAttribute("aria-colindex")).toBe(
+          "1",
+        ),
+      );
+
+      const headerProxy = activeOwnedElement("columnheader");
+      expect(headerProxy).toBeDefined();
+      await expectOwnedByOnlyRow(1, headerProxy!.element().id);
+      expect(gridElement.querySelectorAll(`[id="${headerProxy!.element().id}"]`)).toHaveLength(1);
+
+      await restoreActiveColumn();
+      await vi.waitFor(() =>
+        expect(activeOwnedElement("columnheader")?.element()).not.toHaveAttribute(
+          "data-bruno-active-proxy",
+        ),
+      );
+      await expectContainedCellIsNotAriaOwned(1, headerProxy!.element().id);
+      expect(rowsAt(1)).toHaveLength(1);
+
+      gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+      await vi.waitFor(() =>
+        expect(activeOwnedElement("gridcell")?.element()).not.toHaveAttribute(
+          "data-bruno-active-proxy",
+        ),
+      );
+      expect(rowsAt(2)).toHaveLength(1);
+    },
+  );
+
+  test.each(["ltr", "rtl"] as const)(
+    "moves one horizontally unmounted active %s descendant to its new semantic row owner",
+    async (direction) => {
+      const ownershipColumns = Array.from({ length: 20 }, (_, index) => ({
+        ...columns[0],
+        columnId: `COL_ID_MOVING_OWNER_${String(index).padStart(2, "0")}`,
+        headerName: `Moving owner ${String(index).padStart(2, "0")}`,
+        width: 160,
+      })) as BrunoTableColumns<Row>;
+      const ownershipRows = Array.from({ length: 6 }, (_, index) => ({
+        id: `moving-owner-${String(index)}`,
+        name: String(index),
+        score: index,
+      })) satisfies readonly Row[];
+      const tableId = `TABLE_ID_MOVING_OWNER_${direction.toUpperCase()}`;
+      const renderTable = (sourceRows: readonly Row[]) => (
+        <div dir={direction} style={{ height: 320, width: 320 }}>
+          <BrunoTableClient
+            tableId={tableId}
+            getRowId={(row: Row) => row.id}
+            columns={ownershipColumns}
+            initialOrderBy={[{ columnId: "COL_ID_MOVING_OWNER_00", direction: "asc" }]}
+            clientSource={readySource(sourceRows)}
+          />
+        </div>
+      );
+      const screen = await render(renderTable(ownershipRows));
+      const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
+      const gridElement = grid.element();
+      const ownershipRowsFor = (ownedId: string) =>
+        screen
+          .getByRole("row")
+          .all()
+          .filter((row) =>
+            (row.element().getAttribute("aria-owns")?.split(" ") ?? []).includes(ownedId),
+          );
+
+      gridElement.focus();
+      await vi.waitFor(() =>
+        expect(gridElement.getAttribute("aria-activedescendant")).not.toBeNull(),
+      );
+      gridElement.scrollLeft =
+        direction === "rtl" ? -gridElement.scrollWidth : gridElement.scrollWidth;
+      gridElement.dispatchEvent(new Event("scroll"));
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Moving owner 00" }))
+        .not.toBeInTheDocument();
+      const activeId = gridElement.getAttribute("aria-activedescendant");
+      if (activeId === null) throw new Error("The active body cell did not retain its identity.");
+      await vi.waitFor(() => {
+        expect(ownershipRowsFor(activeId)).toHaveLength(1);
+        expect(ownershipRowsFor(activeId)[0]!.element().getAttribute("aria-rowindex")).toBe("2");
+      });
+
+      const movedRows = ownershipRows.map((row) =>
+        row.id === "moving-owner-0" ? { ...row, name: "3.5" } : row,
+      );
+      await screen.rerender(renderTable(movedRows));
+
+      await vi.waitFor(() => {
+        const owners = ownershipRowsFor(activeId);
+        expect(owners).toHaveLength(1);
+        expect(owners[0]!.element().getAttribute("aria-rowindex")).toBe("5");
+        const oldSemanticOwner = screen
+          .getByRole("row")
+          .all()
+          .find((row) => row.element().getAttribute("aria-rowindex") === "2");
+        expect(oldSemanticOwner).toBeDefined();
+        expect(
+          oldSemanticOwner!.element().getAttribute("aria-owns")?.split(" ") ?? [],
+        ).not.toContain(activeId);
+      });
+      expect(gridElement.querySelectorAll(`[id="${activeId}"]`)).toHaveLength(1);
+    },
+  );
+
+  test.each(["ltr", "rtl"] as const)(
+    "keeps visible header and body identities aligned during continuous %s scrolling",
+    async (direction) => {
+      const scrollingColumns = Array.from({ length: 40 }, (_, index) => ({
+        ...columns[0],
+        columnId: `COL_ID_SCROLL_COVERAGE_${String(index).padStart(2, "0")}`,
+        headerName: `Coverage ${index}`,
+        width: 120,
+      })) as BrunoTableColumns<Row>;
+      const scrollingRows = Array.from({ length: 40 }, (_, index) => ({
+        id: `coverage-${index}`,
+        name: String(index).padStart(2, "0"),
+        score: index,
+      }));
+      const screen = await render(
+        <div dir={direction} style={{ height: 480, width: 240 }}>
+          <BrunoTableClient
+            tableId={`TABLE_ID_SCROLL_COVERAGE_${direction.toUpperCase()}`}
+            getRowId={(row: Row) => row.id}
+            columns={scrollingColumns}
+            initialOrderBy={[{ columnId: "COL_ID_SCROLL_COVERAGE_00", direction: "asc" }]}
+            clientSource={readySource(scrollingRows)}
+          />
+        </div>,
+      );
+      const grid = screen.getByRole("grid").element();
+      await expect.element(screen.getByRole("columnheader", { name: "Coverage 0" })).toBeVisible();
+      const outward = Array.from({ length: 17 }, (_, index) => index + 3);
+      for (const column of [...outward, ...outward.toReversed().slice(1)]) {
+        grid.scrollLeft = column * 120 * (direction === "rtl" ? -1 : 1);
+        grid.dispatchEvent(new Event("scroll"));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const bounds = grid.getBoundingClientRect();
+        const visibleHeaders = screen
+          .getByRole("columnheader")
+          .elements()
+          .filter((header) => {
+            const rect = header.getBoundingClientRect();
+            const midpoint = rect.left + rect.width / 2;
+            return midpoint > bounds.left && midpoint < bounds.right && rect.width > 0;
+          });
+        expect(visibleHeaders.length).toBeGreaterThan(0);
+        const cells = screen.getByRole("gridcell").elements();
+        const visibleRows = screen
+          .getByRole("row")
+          .elements()
+          .filter((row) => {
+            const rect = row.getBoundingClientRect();
+            return (
+              Number(row.getAttribute("aria-rowindex")) > 1 &&
+              rect.top >= bounds.top + 36 &&
+              rect.bottom <= bounds.bottom
+            );
+          });
+        expect(visibleRows.length).toBeGreaterThan(1);
+        for (const row of visibleRows) {
+          for (const header of visibleHeaders) {
+            const cell = cells.find(
+              (candidate) =>
+                row.contains(candidate) &&
+                candidate.getAttribute("aria-colindex") === header.getAttribute("aria-colindex"),
+            );
+            expect(cell).toBeDefined();
+            const headerRect = header.getBoundingClientRect();
+            const cellRect = cell!.getBoundingClientRect();
+            expect(Math.abs(headerRect.left - cellRect.left)).toBeLessThanOrEqual(1);
+            expect(Math.abs(headerRect.width - cellRect.width)).toBeLessThanOrEqual(1);
+          }
+        }
+      }
+    },
+  );
+
+  test("advances one atomic centre projection without rerendering mounted row shells", async () => {
+    const tableId = "TABLE_ID_ATOMIC_CENTRE_PROJECTION";
+    const rowRenders = vi.fn();
+    const removeRowRenders = installBrunoTableClientRowRenderListenerForTable(tableId, rowRenders);
+    const projectionColumns = Array.from({ length: 40 }, (_, index) => ({
+      ...columns[0],
+      columnId: `COL_ID_ATOMIC_PROJECTION_${String(index).padStart(2, "0")}`,
+      headerName: `Atomic projection ${index}`,
+      width: 120,
+    })) as BrunoTableColumns<Row>;
+    const projectionRows = Array.from({ length: 40 }, (_, index) => ({
+      id: `atomic-projection-${index}`,
+      name: String(index).padStart(2, "0"),
+      score: index,
+    }));
+
+    try {
+      const screen = await render(
+        <div style={{ height: 480, width: 240 }}>
+          <BrunoTableClient
+            tableId={tableId}
+            getRowId={(row: Row) => row.id}
+            columns={projectionColumns}
+            initialOrderBy={[{ columnId: "COL_ID_ATOMIC_PROJECTION_00", direction: "asc" }]}
+            clientSource={readySource(projectionRows)}
+          />
+        </div>,
+      );
+      const grid = screen.getByRole("grid").element();
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Atomic projection 0" }))
+        .toBeVisible();
+      await settleBrunoTableBrowserFrames(2);
+      rowRenders.mockClear();
+
+      grid.scrollLeft = 600;
+      grid.dispatchEvent(new Event("scroll"));
+      await expect
+        .element(screen.getByRole("columnheader", { name: "Atomic projection 5" }))
+        .toBeVisible();
+      await settleBrunoTableBrowserFrames(2);
+
+      expect(rowRenders).not.toHaveBeenCalled();
+    } finally {
+      removeRowRenders();
+    }
+  });
+
+  test("keeps an active header descendant uniquely resolved across a horizontal window boundary", async () => {
+    const headerColumns = Array.from({ length: 20 }, (_, index) => ({
+      ...columns[0],
+      columnId: `COL_ID_HEADER_OWNER_${String(index).padStart(2, "0")}`,
+      headerName: `Header owner ${String(index).padStart(2, "0")}`,
+      width: 160,
+    })) as BrunoTableColumns<Row>;
+    const screen = await render(
+      <div style={{ height: 320, width: 320 }}>
+        <BrunoTableClient
+          tableId="TABLE_ID_HEADER_OWNER_BOUNDARY"
+          getRowId={(row: Row) => row.id}
+          columns={headerColumns}
+          initialOrderBy={[{ columnId: "COL_ID_HEADER_OWNER_00", direction: "asc" }]}
+          clientSource={readySource()}
+        />
+      </div>,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_HEADER_OWNER_BOUNDARY" });
+    const gridElement = grid.element();
+    gridElement.focus();
+    gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowUp" }));
+    await vi.waitFor(() =>
+      expect(gridElement.getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const activeId = gridElement.getAttribute("aria-activedescendant");
+    if (activeId === null) throw new Error("The focused header did not publish an Active Cell.");
+    const failures: string[] = [];
+    const captureResolution = () => {
+      const currentActiveId = gridElement.getAttribute("aria-activedescendant");
+      if (currentActiveId !== activeId) {
+        failures.push("The active header identity changed during horizontal scrolling.");
+        return;
+      }
+      const matches = [...gridElement.querySelectorAll<HTMLElement>("[id]")].filter(
+        (element) => element.id === activeId,
+      );
+      if (matches.length !== 1) {
+        failures.push(`Active header ${activeId} resolved ${String(matches.length)} times.`);
+      }
+    };
+    const observer = new MutationObserver(captureResolution);
+    observer.observe(gridElement, {
+      attributes: true,
+      attributeFilter: ["aria-activedescendant", "aria-owns", "id"],
+      childList: true,
+      subtree: true,
+    });
+
+    try {
+      captureResolution();
+      await grid.wheel({ delta: { x: 2400 } });
+      await vi.waitFor(() => expect(gridElement.scrollLeft).toBeGreaterThan(0));
+      await settleBrunoTableBrowserFrames(20);
+      await vi.waitFor(() =>
+        expect(
+          gridElement.querySelector('th[data-bruno-column-id="COL_ID_HEADER_OWNER_00"]'),
+        ).toBeNull(),
+      );
+      const proxy = [...gridElement.querySelectorAll<HTMLElement>("[id]")].find(
+        (element) => element.id === activeId,
+      );
+      expect(proxy?.hasAttribute("data-bruno-active-proxy")).toBe(true);
+      captureResolution();
+
+      gridElement.scrollLeft = 0;
+      gridElement.dispatchEvent(new Event("scroll"));
+      await settleBrunoTableBrowserFrames(20);
+      await vi.waitFor(() =>
+        expect(
+          gridElement.querySelector('th[data-bruno-column-id="COL_ID_HEADER_OWNER_00"]'),
+        ).not.toBeNull(),
+      );
+      const restored = [...gridElement.querySelectorAll<HTMLElement>("[id]")].find(
+        (element) => element.id === activeId,
+      );
+      expect(restored?.hasAttribute("data-bruno-active-proxy")).toBe(false);
+      captureResolution();
+      expect(failures).toEqual([]);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
+  test("keeps one atomic centre window and the active descendant coherently owned", async () => {
+    const transitionRows = Array.from({ length: 40 }, (_, index) => ({
+      id: `transition-row-${String(index).padStart(2, "0")}`,
+      name: `Transition row ${String(index).padStart(2, "0")}`,
+      score: index,
+    })) satisfies readonly Row[];
+    const transitionColumns = Array.from({ length: 20 }, (_, index) => ({
+      ...columns[0],
+      columnId: `COL_ID_MIXED_OWNER_${String(index).padStart(2, "0")}`,
+      headerName: `Mixed owner ${String(index).padStart(2, "0")}`,
+      width: 120,
+    })) as BrunoTableColumns<Row>;
+    const screen = await render(
+      <div style={{ height: 320, width: 320 }}>
+        <BrunoTableClient
+          tableId="TABLE_ID_MIXED_OWNER"
+          getRowId={(row: Row) => row.id}
+          columns={transitionColumns}
+          initialOrderBy={[{ columnId: "COL_ID_MIXED_OWNER_00", direction: "asc" }]}
+          clientSource={readySource(transitionRows)}
+        />
+      </div>,
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_MIXED_OWNER" });
+    const gridElement = grid.element();
+    const firstHeader = screen.getByRole("columnheader", { name: "Mixed owner 00" });
+
+    gridElement.focus();
+    await vi.waitFor(() =>
+      expect(gridElement.getAttribute("aria-activedescendant")).not.toBeNull(),
+    );
+    const stableActiveId = gridElement.getAttribute("aria-activedescendant");
+    if (stableActiveId === null)
+      throw new Error("The focused grid did not publish an Active Cell.");
+    const failures: string[] = [];
+    const observedActiveIds = new Set<string>();
+    let sawMixedRows = false;
+    let sawActiveProxy = false;
+    let sawActiveRealCell = false;
+    let sawEnteringStage = false;
+    let sawRetiringActiveStage = false;
+    let ownershipFrame: number | undefined;
+    const captureOwnership = () => {
+      const allIds = [...gridElement.querySelectorAll<HTMLElement>("[id]")].map(
+        (element) => element.id,
+      );
+      if (new Set(allIds).size !== allIds.length) {
+        failures.push("A committed frame contained duplicate DOM IDs.");
+      }
+      const activeId = gridElement.getAttribute("aria-activedescendant");
+      if (activeId === null) {
+        failures.push("A committed frame omitted aria-activedescendant.");
+      } else {
+        observedActiveIds.add(activeId);
+        const activeOwners = [...gridElement.querySelectorAll<HTMLElement>("[id]")].filter(
+          (element) => element.id === activeId,
+        );
+        if (activeOwners.length !== 1) {
+          failures.push(
+            `Active descendant ${activeId} resolved ${String(activeOwners.length)} times.`,
+          );
+        } else if (activeOwners[0]!.hasAttribute("data-bruno-active-proxy")) {
+          sawActiveProxy = true;
+        } else {
+          sawActiveRealCell = true;
+        }
+      }
+      sawEnteringStage ||= gridElement.querySelector('[id$="--prepared-entering"]') !== null;
+      sawRetiringActiveStage ||=
+        gridElement.querySelector(`#${CSS.escape(`${stableActiveId}--prepared-retiring`)}`) !==
+        null;
+
+      const visibleHeaders = [
+        ...gridElement.querySelectorAll<HTMLElement>(
+          'thead [role="columnheader"][data-bruno-column-id]',
+        ),
+      ].filter((header) => header.getClientRects().length > 0);
+      const headerSignature = visibleHeaders
+        .map((header) => header.dataset["brunoColumnId"])
+        .join("|");
+      const rowSignatures = new Set<string>();
+      for (const row of gridElement.querySelectorAll<HTMLElement>(
+        'tbody[role="rowgroup"] > tr[role="row"]',
+      )) {
+        const ownedIds = row.getAttribute("aria-owns")?.split(" ").filter(Boolean) ?? [];
+        if (new Set(ownedIds).size !== ownedIds.length) {
+          failures.push(`Row ${row.getAttribute("aria-rowindex") ?? "unknown"} repeated an owner.`);
+        }
+        for (const ownedId of ownedIds) {
+          const matches = [...gridElement.querySelectorAll<HTMLElement>("[id]")].filter(
+            (element) => element.id === ownedId,
+          );
+          if (matches.length !== 1) {
+            failures.push(`Owned descendant ${ownedId} resolved ${String(matches.length)} times.`);
+          }
+        }
+        const visibleCells = [
+          ...row.querySelectorAll<HTMLElement>('[role="gridcell"][data-bruno-column-id]'),
+        ].filter((cell) => cell.getClientRects().length > 0);
+        const rowSignature = visibleCells.map((cell) => cell.dataset["brunoColumnId"]).join("|");
+        rowSignatures.add(rowSignature);
+        if (rowSignature !== headerSignature) {
+          failures.push(
+            `Row ${row.getAttribute("aria-rowindex") ?? "unknown"} projected ${rowSignature} while the header projected ${headerSignature}.`,
+          );
+        }
+        for (const header of visibleHeaders) {
+          const columnId = header.dataset["brunoColumnId"];
+          const cell = visibleCells.find(
+            (candidate) => candidate.dataset["brunoColumnId"] === columnId,
+          );
+          if (cell === undefined) continue;
+          const headerRect = header.getBoundingClientRect();
+          const cellRect = cell.getBoundingClientRect();
+          if (
+            Math.abs(headerRect.left - cellRect.left) > 1 ||
+            Math.abs(headerRect.width - cellRect.width) > 1
+          ) {
+            failures.push(
+              `Column ${columnId ?? "unknown"} header/body geometry diverged during projection.`,
+            );
+          }
+        }
+      }
+      if (rowSignatures.size > 1) sawMixedRows = true;
+    };
+    const scheduleOwnershipCapture = () => {
+      if (ownershipFrame !== undefined) return;
+      ownershipFrame = requestAnimationFrame(() => {
+        ownershipFrame = undefined;
+        captureOwnership();
+      });
+    };
+    const observer = new MutationObserver(scheduleOwnershipCapture);
+    observer.observe(gridElement, {
+      attributes: true,
+      attributeFilter: ["aria-activedescendant", "aria-owns", "id", "style"],
+      childList: true,
+      subtree: true,
+    });
+
+    try {
+      captureOwnership();
+      for (const scrollLeft of [120, 240, 360, 480]) {
+        gridElement.scrollLeft = scrollLeft;
+        gridElement.dispatchEvent(new Event("scroll"));
+        await settleBrunoTableBrowserFrames(20);
+      }
+      await expect.element(firstHeader).not.toBeInTheDocument();
+      expect(sawMixedRows).toBe(false);
+      expect(sawActiveProxy).toBe(true);
+      expect(sawRetiringActiveStage).toBe(true);
+      expect(observedActiveIds).toEqual(new Set([stableActiveId]));
+      expect(failures).toEqual([]);
+
+      const supersededHeader = gridElement.querySelector<HTMLElement>(
+        "thead th[data-bruno-column-id]",
+      );
+      expect(supersededHeader).not.toBeNull();
+      const supersededColumnId = supersededHeader?.dataset["brunoColumnId"];
+      expect(supersededColumnId).toBeDefined();
+      gridElement.scrollLeft = 600;
+      gridElement.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() =>
+        expect(
+          gridElement.querySelector(`th[data-bruno-column-id="${supersededColumnId}"]`),
+        ).toBeNull(),
+      );
+      gridElement.scrollLeft = 720;
+      gridElement.dispatchEvent(new Event("scroll"));
+      await settleBrunoTableBrowserFrames(20);
+      captureOwnership();
+      expect(failures).toEqual([]);
+
+      sawMixedRows = false;
+      sawActiveRealCell = false;
+      for (const scrollLeft of [360, 240, 120, 0]) {
+        gridElement.scrollLeft = scrollLeft;
+        gridElement.dispatchEvent(new Event("scroll"));
+        await settleBrunoTableBrowserFrames(20);
+      }
+      await expect.element(firstHeader).toBeInTheDocument();
+      expect(sawMixedRows).toBe(false);
+      expect(sawActiveRealCell).toBe(true);
+      expect(sawEnteringStage).toBe(true);
+      expect(observedActiveIds).toEqual(new Set([stableActiveId]));
+      expect(failures).toEqual([]);
+
+      gridElement.scrollLeft = 480;
+      gridElement.scrollTop = 1_504;
+      gridElement.dispatchEvent(new Event("scroll"));
+      await settleBrunoTableBrowserFrames(20);
+      expect(gridElement.scrollTop).toBeGreaterThan(0);
+      captureOwnership();
+      expect(observedActiveIds).toEqual(new Set([stableActiveId]));
+      expect(failures).toEqual([]);
+    } finally {
+      observer.disconnect();
+      if (ownershipFrame !== undefined) cancelAnimationFrame(ownershipFrame);
+    }
   });
 
   test("bounds mounted cells across a 150-column resident source", async () => {
@@ -6700,7 +7638,6 @@ describe("BrunoTableClient browser surface", () => {
         .map((row) => row.element())
         .filter((row) => row.style.transform.startsWith("translate3d"));
       expect(replacedRows.length).toBeGreaterThan(0);
-      const replacedTransforms = replacedRows.map((row) => row.style.transform);
       const replacementRows = manyRows.map((row, index) => ({
         ...row,
         id: `replacement-row-${index}`,
@@ -6718,7 +7655,12 @@ describe("BrunoTableClient browser surface", () => {
       await expect
         .element(screen.getByRole("gridcell", { name: "Replacement row 040" }).nth(0))
         .toBeInTheDocument();
-      expect(replacedRows.every((row) => !row.isConnected)).toBe(true);
+      expect(replacedRows.some((row) => row.isConnected)).toBe(true);
+      expect(
+        replacedRows
+          .filter((row) => row.isConnected)
+          .every((row) => row.querySelector('[data-bruno-row-id^="replacement-row-"]') !== null),
+      ).toBe(true);
 
       const replacementGrid = screen
         .getByRole("grid", { name: "Data for TABLE_ID_GEOMETRY" })
@@ -6728,7 +7670,6 @@ describe("BrunoTableClient browser surface", () => {
       await expect
         .element(screen.getByRole("gridcell", { name: "Replacement row 080" }).nth(0))
         .toBeInTheDocument();
-      expect(replacedRows.map((row) => row.style.transform)).toEqual(replacedTransforms);
     } finally {
       removeHeaderRenderListener();
       removeViewRenderListener();
@@ -7587,6 +8528,24 @@ describe("BrunoTableClient browser surface", () => {
 
   test("keeps pinned custom renderers semantic and interactive", async () => {
     const activate = vi.fn();
+    const passiveSetupProbe = vi.fn();
+    function PassiveSetupProbe({ row }: { readonly row: Row }) {
+      const buttonRef = useRef<HTMLButtonElement>(null);
+      useEffect(() => {
+        const button = buttonRef.current;
+        if (button === null) return;
+        button.focus();
+        passiveSetupProbe({
+          focused: document.activeElement === button,
+          inert: button.closest("[inert]") !== null,
+        });
+      }, []);
+      return (
+        <button ref={buttonRef} type="button" onClick={() => activate(row.id)}>
+          Open {row.name}
+        </button>
+      );
+    }
     const interactiveColumns = [
       columns[1],
       {
@@ -7599,9 +8558,7 @@ describe("BrunoTableClient browser surface", () => {
             <button disabled type="button">
               Unavailable {row.name}
             </button>
-            <button type="button" onClick={() => activate(row.id)}>
-              Open {row.name}
-            </button>
+            <PassiveSetupProbe row={row} />
             <input aria-label={`Edit ${row.name}`} defaultValue={row.name} />
           </>
         ),
@@ -7624,6 +8581,7 @@ describe("BrunoTableClient browser surface", () => {
       expect(input.element().tabIndex).toBe(-1);
       expect(action.element().closest("[inert]")).toBeNull();
     });
+    expect(passiveSetupProbe).toHaveBeenCalledWith({ focused: false, inert: true });
     await action.click();
     expect(activate).toHaveBeenCalledWith("grace");
     await expect.element(screen.getByRole("columnheader", { name: "Action" })).toBeInTheDocument();
@@ -7655,6 +8613,264 @@ describe("BrunoTableClient browser surface", () => {
     input.element().dispatchEvent(arrow);
     expect(arrow.defaultPrevented).toBe(false);
     expect(grid.element().getAttribute("aria-activedescendant")).toBe(activeId);
+  });
+
+  test("shares custom-renderer descendant observation across the grid", async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, "observe");
+    try {
+      const textRendererColumns = [
+        {
+          ...columns[0],
+          cellRenderer: ({ value }: { readonly value: string }) => <span>{value}</span>,
+        },
+      ] as const satisfies BrunoTableColumns<Row>;
+      await render(
+        <BrunoTableClient
+          tableId="TABLE_ID_SHARED_CUSTOM_RENDERER_OBSERVER"
+          getRowId={(row: Row) => row.id}
+          columns={textRendererColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={readySource()}
+        />,
+      );
+
+      await vi.waitFor(() => {
+        const descendantObservation = observe.mock.calls.filter(
+          ([target, options]) =>
+            target instanceof HTMLElement &&
+            target.getAttribute("role") === "grid" &&
+            options?.attributeFilter?.includes("tabindex") === true,
+        );
+        expect(descendantObservation).toHaveLength(1);
+      });
+    } finally {
+      observe.mockRestore();
+    }
+  });
+
+  test("normalizes dynamically inserted custom controls in the grid owning realm", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    let screen: Awaited<ReturnType<typeof render>> | undefined;
+    try {
+      const ownerDocument = frame.contentDocument;
+      if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+      const container = ownerDocument.createElement("div");
+      ownerDocument.body.append(container);
+      const customRendererColumns = [
+        {
+          ...columns[0],
+          cellRenderer: ({ value }: { readonly value: string }) => <span>{value}</span>,
+        },
+      ] as const satisfies BrunoTableColumns<Row>;
+      screen = await render(
+        <BrunoTableClient
+          tableId="TABLE_ID_IFRAME_CUSTOM_RENDERER_MUTATION"
+          getRowId={(row: Row) => row.id}
+          columns={customRendererColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={readySource()}
+        />,
+        { container, baseElement: ownerDocument.body },
+      );
+      const rendererRoot = await vi.waitFor(() => {
+        const current = ownerDocument.querySelector<HTMLElement>(
+          "[data-bruno-nontabbable-cell-content]",
+        );
+        expect(current).not.toBeNull();
+        return current!;
+      });
+      const action = ownerDocument.createElement("button");
+      action.textContent = "Dynamic iframe action";
+      rendererRoot.append(action);
+
+      await vi.waitFor(() => expect(action.tabIndex).toBe(-1));
+    } finally {
+      await screen?.unmount();
+      frame.remove();
+    }
+  });
+
+  test.each(["disabled", "unmounted"] as const)(
+    "returns focus to an iframe-owned grid when a focused custom control becomes %s",
+    async (transition) => {
+      const frame = document.createElement("iframe");
+      document.body.append(frame);
+      let screen: Awaited<ReturnType<typeof render>> | undefined;
+      try {
+        const ownerDocument = frame.contentDocument;
+        if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+        const container = ownerDocument.createElement("div");
+        ownerDocument.body.append(container);
+        const interactiveColumns = [
+          {
+            ...columns[0],
+            cellRenderer: ({ row }: { readonly row: Row }) => (
+              <button disabled={row.score === 0} type="button">
+                Open {row.name}
+              </button>
+            ),
+          },
+        ] as const satisfies BrunoTableColumns<Row>;
+        screen = await render(
+          <BrunoTableClient
+            tableId="TABLE_ID_IFRAME_CUSTOM_RENDERER_FOCUS_RECOVERY"
+            getRowId={(row: Row) => row.id}
+            columns={interactiveColumns}
+            initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+            clientSource={readySource([{ id: "stable", name: "Stable", score: 1 }])}
+          />,
+          { container, baseElement: ownerDocument.body },
+        );
+        const grid = await vi.waitFor(() => {
+          const current = ownerDocument.querySelector<HTMLElement>(
+            '[role="grid"][aria-label="Data for TABLE_ID_IFRAME_CUSTOM_RENDERER_FOCUS_RECOVERY"]',
+          );
+          expect(current).not.toBeNull();
+          return current!;
+        });
+        const action = await vi.waitFor(() => {
+          const current = ownerDocument.querySelector<HTMLButtonElement>(
+            "[data-bruno-nontabbable-cell-content] button",
+          );
+          expect(current).not.toBeNull();
+          return current!;
+        });
+        action.focus();
+        await vi.waitFor(() => expect(ownerDocument.activeElement).toBe(action));
+        expect(document.activeElement).toBe(frame);
+
+        await screen.rerender(
+          <BrunoTableClient
+            tableId="TABLE_ID_IFRAME_CUSTOM_RENDERER_FOCUS_RECOVERY"
+            getRowId={(row: Row) => row.id}
+            columns={transition === "disabled" ? interactiveColumns : columns}
+            initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+            clientSource={readySource([
+              {
+                id: "stable",
+                name: "Stable",
+                score: transition === "disabled" ? 0 : 1,
+              },
+            ])}
+          />,
+        );
+
+        await vi.waitFor(() => expect(ownerDocument.activeElement).toBe(grid));
+        expect(document.activeElement).toBe(frame);
+      } finally {
+        await screen?.unmount();
+        frame.remove();
+      }
+    },
+  );
+
+  test.each(["disabled", "unmounted"] as const)(
+    "preserves parent-document focus when an iframe custom control becomes %s",
+    async (transition) => {
+      const frame = document.createElement("iframe");
+      const parentAction = document.createElement("button");
+      parentAction.textContent = "Parent action";
+      document.body.append(frame, parentAction);
+      let screen: Awaited<ReturnType<typeof render>> | undefined;
+      try {
+        const ownerDocument = frame.contentDocument;
+        if (ownerDocument === null) throw new Error("Expected a same-origin iframe document.");
+        const container = ownerDocument.createElement("div");
+        ownerDocument.body.append(container);
+        const interactiveColumns = [
+          {
+            ...columns[0],
+            cellRenderer: ({ row }: { readonly row: Row }) => (
+              <button disabled={row.score === 0} type="button">
+                Open {row.name}
+              </button>
+            ),
+          },
+        ] as const satisfies BrunoTableColumns<Row>;
+        screen = await render(
+          <BrunoTableClient
+            tableId="TABLE_ID_IFRAME_CUSTOM_RENDERER_PARENT_FOCUS"
+            getRowId={(row: Row) => row.id}
+            columns={interactiveColumns}
+            initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+            clientSource={readySource([{ id: "stable", name: "Stable", score: 1 }])}
+          />,
+          { container, baseElement: ownerDocument.body },
+        );
+        const action = await vi.waitFor(() => {
+          const current = ownerDocument.querySelector<HTMLButtonElement>(
+            "[data-bruno-nontabbable-cell-content] button",
+          );
+          expect(current).not.toBeNull();
+          return current!;
+        });
+        action.focus();
+        await vi.waitFor(() => expect(ownerDocument.activeElement).toBe(action));
+        parentAction.focus();
+        expect(document.activeElement).toBe(parentAction);
+
+        await screen.rerender(
+          <BrunoTableClient
+            tableId="TABLE_ID_IFRAME_CUSTOM_RENDERER_PARENT_FOCUS"
+            getRowId={(row: Row) => row.id}
+            columns={transition === "disabled" ? interactiveColumns : columns}
+            initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+            clientSource={readySource([
+              {
+                id: "stable",
+                name: "Stable",
+                score: transition === "disabled" ? 0 : 1,
+              },
+            ])}
+          />,
+        );
+
+        await vi.waitFor(() => expect(document.activeElement).toBe(parentAction));
+      } finally {
+        await screen?.unmount();
+        frame.remove();
+        parentAction.remove();
+      }
+    },
+  );
+
+  test("skips descendant observation for primitive custom-renderer content", async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, "observe");
+    try {
+      const textRendererColumns = [
+        {
+          ...columns[0],
+          cellRenderer: ({ value }: { readonly value: string }) => value,
+        },
+      ] as const satisfies BrunoTableColumns<Row>;
+      const screen = await render(
+        <BrunoTableClient
+          tableId="TABLE_ID_PRIMITIVE_CUSTOM_RENDERER"
+          getRowId={(row: Row) => row.id}
+          columns={textRendererColumns}
+          initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+          clientSource={readySource()}
+        />,
+      );
+
+      await vi.waitFor(() =>
+        expect(
+          screen.getByRole("gridcell", { name: "Ada", exact: true }).all().length,
+        ).toBeGreaterThan(0),
+      );
+      await settleBrunoTableBrowserFrames(2);
+      expect(
+        observe.mock.calls.filter(
+          ([target, options]) =>
+            target instanceof HTMLElement &&
+            target.getAttribute("role") === "grid" &&
+            options?.attributeFilter?.includes("tabindex") === true,
+        ),
+      ).toHaveLength(0);
+    } finally {
+      observe.mockRestore();
+    }
   });
 
   test("keeps text and composition keys native while Escape exits read-only custom controls", async () => {
@@ -7834,6 +9050,29 @@ describe("BrunoTableClient browser surface", () => {
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
       );
     expect(document.activeElement).toBe(grid.element());
+  });
+
+  test("classifies column-menu targets in the grid's owning realm", () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    try {
+      const ownerDocument = frame.contentDocument;
+      if (ownerDocument === null) {
+        throw new Error("Expected a same-origin iframe Browser realm.");
+      }
+      const grid = ownerDocument.createElement("div");
+      const trigger = ownerDocument.createElement("button");
+      trigger.dataset["brunoColumnMenuTrigger"] = "COL_ID_NAME";
+      grid.append(trigger);
+
+      expect(asBrunoTableRealmHTMLElement(grid, trigger)).toBe(trigger);
+      expect(asBrunoTableRealmHTMLElement(grid, document.body)).toBeNull();
+      expect(isBrunoTableColumnMenuTriggerTarget(grid, null)).toBe(false);
+      expect(isBrunoTableColumnMenuTriggerTarget(grid, ownerDocument)).toBe(false);
+      expect(isBrunoTableColumnMenuTriggerTarget(grid, trigger)).toBe(true);
+    } finally {
+      frame.remove();
+    }
   });
 
   test("suppresses embedded contexts without auto-entering their browsing context", async () => {
@@ -9887,6 +11126,104 @@ describe("BrunoTableClient browser surface", () => {
     expect(activeProxyElement.textContent).toBe("Augusta");
   });
 
+  test("caches abandoned read-only snapshots and catches publication before subscription", async () => {
+    const initialRow = { id: "stable", name: "Before", score: 1 } satisfies Row;
+    const updatedRow = { ...initialRow, name: "After" };
+    let publishBetweenRenderAndSubscribe: (() => void) | undefined;
+    function PublishBeforeSubscription({ row }: { readonly row: Row }) {
+      useLayoutEffect(() => publishBetweenRenderAndSubscribe?.(), []);
+      return row.name;
+    }
+    const compiledColumns = compileColumns([
+      {
+        ...columns[0],
+        cellRenderer: ({ row }: { readonly row: Row }) => <PublishBeforeSubscription row={row} />,
+      },
+    ] as const);
+    const publication = (row: Row, version: number) =>
+      Object.freeze({
+        status: "ready" as const,
+        totalRows: 1,
+        version,
+        hasCoherentRows: true,
+        rowSpace: Object.freeze({
+          totalRows: 1,
+          loadedRows: 1,
+          getRowId: (index: number) => (index === 0 ? row.id : undefined),
+          getRow: (rowId: string) => (rowId === row.id ? row : undefined),
+          getCellValue: (rowId: string) => (rowId === row.id ? row.name : undefined),
+        }),
+      });
+    const runtime = new BrunoTableGridRuntime(
+      publication(initialRow, 1),
+      compiledColumns,
+      Object.freeze({
+        baselineFilters: Object.freeze([]),
+        baselineOrderBy: Object.freeze([
+          Object.freeze({ columnId: "COL_ID_NAME", direction: "asc" as const }),
+        ]),
+      }),
+      "TABLE_ID_READ_ONLY_SNAPSHOT_CACHE",
+    );
+    const runtimeView = runtime.getView();
+    let subscribed = false;
+    let readsBeforeSubscription = 0;
+    let rowSnapshotReads = 0;
+    let rowCellSnapshotReads = 0;
+    const observedReadsBeforeSubscription: number[] = [];
+    const instrumentedRuntime = Object.freeze({
+      ...runtimeView,
+      getRowSnapshot: (rowId: string) => {
+        rowSnapshotReads += 1;
+        return runtimeView.getRowSnapshot(rowId);
+      },
+      getRowCellSnapshot: (rowId: string, columnId: string) => {
+        rowCellSnapshotReads += 1;
+        if (!subscribed) readsBeforeSubscription += 1;
+        return runtimeView.getRowCellSnapshot(rowId, columnId);
+      },
+      subscribeRowCell: (rowId: string, columnId: string, listener: () => void) => {
+        observedReadsBeforeSubscription.push(readsBeforeSubscription);
+        subscribed = true;
+        return runtimeView.subscribeRowCell(rowId, columnId, listener);
+      },
+    });
+    publishBetweenRenderAndSubscribe = () => {
+      publishBetweenRenderAndSubscribe = undefined;
+      runtime.publish(publication(updatedRow, 2));
+    };
+    const logicalRowSpace: BrunoTableLogicalRowSpace = Object.freeze({
+      totalRows: 1,
+      getRowId: (index) => (index === 0 ? initialRow.id : undefined),
+      findRowIndex: (rowId) => (rowId === initialRow.id ? 0 : undefined),
+      setRequiredRange: () => undefined,
+    });
+
+    const screen = await render(
+      <BrunoTableView
+        runtime={instrumentedRuntime}
+        tableId="TABLE_ID_READ_ONLY_SNAPSHOT_CACHE"
+        compiledColumns={compiledColumns}
+        toolbar={new BrunoTableToolbarStore(undefined)}
+        rowPipeline={SparseRowPipeline}
+        rowPipelineAdapter={{ rowSpace: logicalRowSpace, queryGeneration: 0 }}
+      />,
+    );
+
+    await expect.element(screen.getByRole("gridcell", { name: "After" })).toBeInTheDocument();
+    expect(observedReadsBeforeSubscription[0]).toBe(1);
+    // Row admission classifies nested review sources once; cell publications
+    // continue through the cached cell snapshot without rereading the row.
+    expect(rowSnapshotReads).toBe(1);
+    expect(rowCellSnapshotReads).toBe(2);
+
+    const finalRow = { ...initialRow, name: "Final" };
+    await act(async () => runtime.publish(publication(finalRow, 3)));
+    await expect.element(screen.getByRole("gridcell", { name: "Final" })).toBeInTheDocument();
+    expect(rowSnapshotReads).toBe(1);
+    expect(rowCellSnapshotReads).toBe(3);
+  });
+
   test("does not mount an empty toolbar and isolates unchanged cell islands", async () => {
     const gridSurfaceRenders = vi.fn();
     const removeRenderListener =
@@ -10593,7 +11930,7 @@ describe("BrunoTableClient browser surface", () => {
       .toBeVisible();
   });
 
-  test("propagates a persistence failure after committing a Grid Filter command", async () => {
+  test("rejects a persistence failure before committing a Grid Filter command", async () => {
     const persistenceFailure = new Error("Persistence codec failed.");
     const throwingValueType = {
       codecId: "browser/throwing-text",
@@ -10662,11 +11999,11 @@ describe("BrunoTableClient browser surface", () => {
     );
 
     await screen.getByRole("button", { name: "Apply throwing filter" }).click();
-    expect(returned).toBeUndefined();
-    expect(caught).toBe(persistenceFailure);
+    expect(returned).toBe(false);
+    expect(caught).toBeUndefined();
     await expect
       .element(screen.getByRole("status", { name: "Active filters" }))
-      .toHaveTextContent("1 active filter");
+      .toHaveTextContent("0 active filters");
   });
 
   test("rejects stale Grid Filter clear and reset column identities", async () => {

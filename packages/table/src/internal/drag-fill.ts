@@ -427,6 +427,10 @@ type DragFillRegistration = Readonly<{
   ) => BrunoTableDragFillApplyResult;
   /** Excludes sticky headers, pinned overlays, and the row-selection utility from auto-scroll. */
   readonly interactionGeometry?: (() => BrunoTableDragFillInteractionGeometry) | undefined;
+  /** Cached logical hit testing supplied by the viewport; avoids forced layout in hot frames. */
+  readonly resolvePointerHit?:
+    | ((clientX: number, clientY: number) => BrunoTableCellCoordinate | undefined)
+    | undefined;
   readonly scrollHorizontalByPhysical: (delta: number) => boolean;
   readonly scrollVerticalByLogical?: ((delta: number) => boolean) | undefined;
   readonly describeCoordinate?: (coordinate: BrunoTableCellCoordinate) => string;
@@ -438,6 +442,8 @@ type PointerGesture = Readonly<{
   readonly view: Window;
   readonly sourceShapeIdentity: object;
   readonly source: BrunoTableDragFillSource;
+  readonly gridBounds: DOMRectReadOnly;
+  readonly interactionGeometry: BrunoTableDragFillInteractionGeometry;
   readonly startX: number;
   readonly startY: number;
   readonly registration: DragFillRegistration;
@@ -628,6 +634,8 @@ export class BrunoTableDragFillRuntime {
       return;
     }
     const capturedSource = freezeSource(source);
+    const gridBounds = registration.grid.getBoundingClientRect();
+    const interactionGeometry = readInteractionGeometry(registration, gridBounds);
     const sourceAxis = capturedSource.canonicalTexts.length > 1 ? capturedSource.axis : undefined;
     const gesture =
       sourceAxis === undefined ? undefined : captureGesture(capturedSource, structure, sourceAxis);
@@ -638,6 +646,8 @@ export class BrunoTableDragFillRuntime {
       view,
       sourceShapeIdentity: source.shapeIdentity,
       source: capturedSource,
+      gridBounds,
+      interactionGeometry,
       structure,
       startX: event.clientX,
       startY: event.clientY,
@@ -840,10 +850,8 @@ export class BrunoTableDragFillRuntime {
     pointer.gesture ??= captureGesture(pointer.source, pointer.structure, axis);
     if (pointer.gesture === undefined) return false;
     if (lockedAxis === undefined) this.actor.send({ type: "LOCK_AXIS", axis });
-    const gridBounds = pointer.grid.getBoundingClientRect();
-    const geometry = allowAutoscroll
-      ? readInteractionGeometry(pointer.registration, gridBounds)
-      : undefined;
+    const gridBounds = pointer.gridBounds;
+    const geometry = allowAutoscroll ? pointer.interactionGeometry : undefined;
     const hit = hitAtPointer(pointer, gridBounds, geometry);
     if (hit !== undefined) {
       const targetIdentity = axis === "horizontal" ? hit.columnId : hit.rowId;
@@ -934,14 +942,19 @@ export class BrunoTableDragFillRuntime {
     this.clearPreview();
     const pointer = this.pointer;
     if (pointer === undefined || preview === undefined) return;
-    for (const cell of ownedMountedCells(pointer.grid)) {
+    const perpendicularSource =
+      preview.axis === "horizontal" ? pointer.source.rowIds[0] : pointer.source.columnIds[0];
+    if (perpendicularSource === undefined) return;
+    for (const cell of ownedMountedPreviewLaneCells(
+      pointer.grid,
+      preview.axis,
+      perpendicularSource,
+    )) {
       const rowId = cell.dataset["brunoRowId"];
       const columnId = cell.dataset["brunoColumnId"];
       if (rowId === undefined || columnId === undefined) continue;
       const parallelIdentity = preview.axis === "horizontal" ? columnId : rowId;
       const perpendicularIdentity = preview.axis === "horizontal" ? rowId : columnId;
-      const perpendicularSource =
-        preview.axis === "horizontal" ? pointer.source.rowIds[0] : pointer.source.columnIds[0];
       const index = pointer.gesture?.indexById.get(parallelIdentity);
       if (
         perpendicularIdentity !== perpendicularSource ||
@@ -1168,6 +1181,10 @@ function hitAtPointer(
     pointer.clientY > bounds.bottom;
   let clientX = pointer.clientX;
   let clientY = pointer.clientY;
+  if (!outside) {
+    const direct = brunoTableCellRangePointerHit(pointer.eventTarget, pointer.grid);
+    if (direct !== undefined) return direct;
+  }
   if (outside) {
     if (outsideSamplingGeometry === undefined) return undefined;
     clientX = clampInside(
@@ -1181,10 +1198,14 @@ function hitAtPointer(
       outsideSamplingGeometry.bodyBottom,
     );
   }
+  const logicalHit = pointer.registration.resolvePointerHit?.(clientX, clientY);
+  if (logicalHit !== undefined) return logicalHit;
   const target =
     pointer.grid.ownerDocument.elementFromPoint?.(clientX, clientY) ??
     (pointer.eventTarget instanceof Element ? pointer.eventTarget : null);
-  return brunoTableCellRangePointerHit(target, pointer.grid);
+  const hit = brunoTableCellRangePointerHit(target, pointer.grid);
+  if (hit !== undefined) pointer.eventTarget = target;
+  return hit;
 }
 
 function clampInside(value: number, start: number, end: number): number {
@@ -1237,6 +1258,21 @@ function ownedMountedCells(grid: HTMLElement): readonly HTMLElement[] {
   return [
     ...grid.querySelectorAll<HTMLElement>(
       '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
+    ),
+  ].filter((cell) => cell.closest('[role="grid"]') === grid);
+}
+
+function ownedMountedPreviewLaneCells(
+  grid: HTMLElement,
+  axis: BrunoTableCellRangeAxis,
+  perpendicularIdentity: string,
+): readonly HTMLElement[] {
+  const cssEscape = grid.ownerDocument.defaultView?.CSS.escape;
+  if (cssEscape === undefined) return ownedMountedCells(grid);
+  const attribute = axis === "horizontal" ? "data-bruno-row-id" : "data-bruno-column-id";
+  return [
+    ...grid.querySelectorAll<HTMLElement>(
+      `[role="gridcell"][${attribute}="${cssEscape(perpendicularIdentity)}"]`,
     ),
   ].filter((cell) => cell.closest('[role="grid"]') === grid);
 }

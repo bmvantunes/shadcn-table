@@ -79,6 +79,7 @@ const clientTableRowRenderListeners = new Map<string, Set<RowRenderListener>>();
 const clientTableViewRenderListeners = new Map<string, Set<Listener>>();
 const clientTableGridSurfaceRenderListeners = new Map<string, Set<Listener>>();
 const clientTableHeaderRenderListeners = new Map<string, Set<Listener>>();
+const clientTableEditFooterRenderListeners = new Map<string, Set<Listener>>();
 const clientTableSortPanelRenderListeners = new Map<string, Set<Listener>>();
 let clientTableRowOrderPlanningListenerCount = 0;
 let clientTableCellRenderListenerCount = 0;
@@ -86,6 +87,7 @@ let clientTableRowRenderListenerCount = 0;
 let clientTableViewRenderListenerCount = 0;
 let clientTableGridSurfaceRenderListenerCount = 0;
 let clientTableHeaderRenderListenerCount = 0;
+let clientTableEditFooterRenderListenerCount = 0;
 let clientTableSortPanelRenderListenerCount = 0;
 let hasGlobalRowOrderPlanningListener = false;
 let hasGlobalCellRenderListener = false;
@@ -591,6 +593,28 @@ export function installBrunoTableClientHeaderRenderListenerForTable(
     },
     () => {
       clientTableHeaderRenderListenerCount -= 1;
+    },
+  );
+}
+
+export function recordBrunoTableClientEditFooterRender(tableId: string): void {
+  if (clientTableEditFooterRenderListenerCount === 0) return;
+  notifySafely(clientTableEditFooterRenderListeners.get(tableId) ?? [], (listener) => listener());
+}
+
+export function installBrunoTableClientEditFooterRenderListenerForTable(
+  tableId: string,
+  listener: Listener,
+): () => void {
+  return installTableScopedListener(
+    clientTableEditFooterRenderListeners,
+    tableId,
+    listener,
+    () => {
+      clientTableEditFooterRenderListenerCount += 1;
+    },
+    () => {
+      clientTableEditFooterRenderListenerCount -= 1;
     },
   );
 }

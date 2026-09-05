@@ -465,6 +465,48 @@ describe("BrunoTable one-axis Cell Range and Clipboard Snapshot", () => {
     });
   });
 
+  it("does not read the clock for pointer frames without a diagnostic listener", () => {
+    const range = new BrunoTableCellRangeRuntime("TABLE_ID_RANGE_WITHOUT_DIAGNOSTICS");
+    range.replace({ rowId: "ROW_A", columnId: "COL_ID_A" }, structure);
+    let pointerUp: ((event: PointerEvent) => void) | undefined;
+    const view = {
+      addEventListener: vi.fn((type: string, listener: (event: PointerEvent) => void) => {
+        if (type === "pointerup") pointerUp = listener;
+      }),
+      removeEventListener: vi.fn(),
+    } as unknown as Window;
+    const clock = vi.spyOn(performance, "now");
+    try {
+      range.startPointerGesture(
+        {
+          button: 0,
+          clientX: 0,
+          clientY: 0,
+          pointerId: 48,
+          shiftKey: false,
+          target: null,
+          preventDefault: vi.fn(),
+        } as unknown as PointerEvent,
+        { rowId: "ROW_A", columnId: "COL_ID_A", rowIndex: 0 },
+        gestureGrid(view),
+        vi.fn(),
+        vi.fn(),
+        () => false,
+      );
+      pointerUp?.({
+        clientX: 0,
+        clientY: 0,
+        pointerId: 48,
+        target: null,
+      } as unknown as PointerEvent);
+
+      expect(clock).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+      range.dispose();
+    }
+  });
+
   it.each([
     ["armed", "COMMIT"],
     ["armed", "CANCEL"],

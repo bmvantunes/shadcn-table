@@ -4,6 +4,9 @@ import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { cn } from "#lib/utils";
 import { CaretRightIcon, CheckIcon } from "@phosphor-icons/react";
 
+const createDropdownMenuHandle = MenuPrimitive.createHandle;
+type DropdownMenuHandle<Payload = unknown> = MenuPrimitive.Handle<Payload>;
+
 function DropdownMenu({ ...props }: MenuPrimitive.Root.Props) {
   return <MenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
 }
@@ -19,18 +22,23 @@ function DropdownMenuTrigger({ ...props }: MenuPrimitive.Trigger.Props) {
 function DropdownMenuContent({
   align = "start",
   alignOffset = 0,
+  anchor,
   side = "bottom",
   sideOffset = 4,
   className,
   ...props
 }: MenuPrimitive.Popup.Props &
-  Pick<MenuPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset">) {
+  Pick<
+    MenuPrimitive.Positioner.Props,
+    "align" | "alignOffset" | "anchor" | "side" | "sideOffset"
+  >) {
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner
         className="isolate outline-none"
         align={align}
         alignOffset={alignOffset}
+        anchor={anchor}
         side={side}
         sideOffset={sideOffset}
       >
@@ -235,6 +243,8 @@ function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"spa
 }
 
 export {
+  createDropdownMenuHandle,
+  type DropdownMenuHandle,
   DropdownMenu,
   DropdownMenuPortal,
   DropdownMenuTrigger,
