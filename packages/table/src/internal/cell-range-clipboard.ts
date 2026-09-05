@@ -1,6 +1,8 @@
 import { Store } from "@tanstack/store";
 import { assign, createActor, createMachine } from "xstate";
 
+import { BRUNO_TABLE_CELL_RANGE_FRAME_TIMING_DIAGNOSTIC_SENTINEL } from "./test-diagnostic-build-contract";
+
 export type BrunoTableCellRangeAxis = "horizontal" | "vertical";
 
 export type BrunoTableCellCoordinate = Readonly<{
@@ -261,7 +263,11 @@ export function createBrunoTableCellRangeGestureActor(): Readonly<{
 
 export type BrunoTableCellRangeInstrumentationEvent =
   | Readonly<{ readonly kind: "publication"; readonly tableId: string }>
-  | Readonly<{ readonly kind: "pointer-frame"; readonly tableId: string }>
+  | Readonly<{
+      readonly kind: "pointer-frame";
+      readonly tableId: string;
+      readonly durationMs: number;
+    }>
   | Readonly<{ readonly kind: "identity-span-materialization"; readonly tableId: string }>
   | Readonly<{
       readonly kind: "mounted-decoration";
@@ -393,6 +399,11 @@ export class BrunoTableCellRangeRuntime {
     this.observer = new MutationObserver((records) => {
       let registryChanged = false;
       for (const record of records) {
+        if (record.type === "attributes") {
+          registryChanged = this.unregisterMountedCells(record.target) || registryChanged;
+          registryChanged = this.registerMountedCells(record.target) || registryChanged;
+          continue;
+        }
         for (const removed of record.removedNodes) {
           registryChanged = this.unregisterMountedCells(removed) || registryChanged;
         }
@@ -402,7 +413,12 @@ export class BrunoTableCellRangeRuntime {
       }
       if (registryChanged) this.scheduleDecoration();
     });
-    this.observer.observe(grid, { childList: true, subtree: true });
+    this.observer.observe(grid, {
+      attributes: true,
+      attributeFilter: ["data-bruno-row-id", "data-bruno-column-id"],
+      childList: true,
+      subtree: true,
+    });
     this.scheduleDecoration();
   };
 
@@ -1045,54 +1061,66 @@ export class BrunoTableCellRangeRuntime {
     gesture: BrunoTableCellRangePointerGesture,
     allowAutoscroll = true,
   ): boolean => {
-    recordInstrumentation({ kind: "pointer-frame", tableId: this.tableId });
-    const structure = this.structure;
-    if (structure === undefined) return false;
-    const gestureActor = this.ensureGestureActor();
-    let axis = gestureActor.getSnapshot().axis;
-    if (axis === undefined) {
-      const horizontal = Math.abs(gesture.clientX - gesture.startX);
-      const vertical = Math.abs(gesture.clientY - gesture.startY);
-      if (
-        Math.max(horizontal, vertical) <= BRUNO_TABLE_CELL_RANGE_DRAG_SLOP ||
-        horizontal === vertical
-      ) {
-        return false;
+    const shouldRecordFrame =
+      __BRUNO_TABLE_TEST_DIAGNOSTICS__ && instrumentationListenersByTable.has(this.tableId);
+    const startedAt = shouldRecordFrame ? performance.now() : 0;
+    try {
+      const structure = this.structure;
+      if (structure === undefined) return false;
+      const gestureActor = this.ensureGestureActor();
+      let axis = gestureActor.getSnapshot().axis;
+      if (axis === undefined) {
+        const horizontal = Math.abs(gesture.clientX - gesture.startX);
+        const vertical = Math.abs(gesture.clientY - gesture.startY);
+        if (
+          Math.max(horizontal, vertical) <= BRUNO_TABLE_CELL_RANGE_DRAG_SLOP ||
+          horizontal === vertical
+        ) {
+          return false;
+        }
+        axis = horizontal > vertical ? "horizontal" : "vertical";
+        gestureActor.send({ type: "ACQUIRE_AXIS", axis });
       }
-      axis = horizontal > vertical ? "horizontal" : "vertical";
-      gestureActor.send({ type: "ACQUIRE_AXIS", axis });
-    }
-    const bounds = gesture.grid.getBoundingClientRect();
-    const hit = resolvePointerHit(gesture, bounds);
-    if (hit !== undefined) {
-      const next = this.extend(hit, structure, axis);
-      const focus = next.range?.focus ?? next.anchor;
-      if (focus !== undefined) {
-        const rowIndex = structure.rowIndexById.get(focus.rowId);
-        if (rowIndex !== undefined) gesture.activate({ ...focus, rowIndex });
+      const bounds = gesture.grid.getBoundingClientRect();
+      const hit = resolvePointerHit(gesture, bounds);
+      if (hit !== undefined) {
+        const next = this.extend(hit, structure, axis);
+        const focus = next.range?.focus ?? next.anchor;
+        if (focus !== undefined) {
+          const rowIndex = structure.rowIndexById.get(focus.rowId);
+          if (rowIndex !== undefined) gesture.activate({ ...focus, rowIndex });
+        }
       }
-    }
-    if (!allowAutoscroll) return false;
-    if (axis === "horizontal") {
+      if (!allowAutoscroll) return false;
+      if (axis === "horizontal") {
+        const delta =
+          gesture.clientX < bounds.left + BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
+            ? -BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP
+            : gesture.clientX > bounds.right - BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
+              ? BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP
+              : 0;
+        return delta !== 0 && gesture.scrollHorizontalByPhysical(delta);
+      }
       const delta =
-        gesture.clientX < bounds.left + BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
+        gesture.clientY < bounds.top + BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
           ? -BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP
-          : gesture.clientX > bounds.right - BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
+          : gesture.clientY > bounds.bottom - BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
             ? BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP
             : 0;
       if (delta === 0) return false;
-      return gesture.scrollHorizontalByPhysical(delta);
+      const before = gesture.grid.scrollTop;
+      gesture.grid.scrollTop += delta;
+      return gesture.grid.scrollTop !== before;
+    } finally {
+      if (shouldRecordFrame) {
+        void BRUNO_TABLE_CELL_RANGE_FRAME_TIMING_DIAGNOSTIC_SENTINEL;
+        recordInstrumentation({
+          durationMs: performance.now() - startedAt,
+          kind: "pointer-frame",
+          tableId: this.tableId,
+        });
+      }
     }
-    const delta =
-      gesture.clientY < bounds.top + BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
-        ? -BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP
-        : gesture.clientY > bounds.bottom - BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_ZONE
-          ? BRUNO_TABLE_CELL_RANGE_AUTOSCROLL_STEP
-          : 0;
-    if (delta === 0) return false;
-    const before = gesture.grid.scrollTop;
-    gesture.grid.scrollTop += delta;
-    return gesture.grid.scrollTop !== before;
   };
 
   private readonly detachPointerGesture = (

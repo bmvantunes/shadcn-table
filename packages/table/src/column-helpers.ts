@@ -1189,22 +1189,34 @@ function createSelectValueType(options: readonly unknown[]): SelectValueType<unk
     throw new TypeError("BrunoTable Select Column options must be semantically unique.");
   }
 
-  const findOption = (input: unknown) => options.find((option) => option === input);
-  const requireOption = (input: unknown): unknown => {
-    const option = findOption(input);
-    if (option === undefined) {
+  type SelectOptionAdmission = Readonly<{
+    readonly value: unknown;
+    readonly index: number;
+    readonly canonicalText: string;
+  }>;
+  const admissions = options.map(
+    (value, index): SelectOptionAdmission =>
+      Object.freeze({ value, index, canonicalText: canonicalOptions[index]! }),
+  );
+  const admissionByValue = new Map(admissions.map((admission) => [admission.value, admission]));
+  const admissionByCanonicalText = new Map(
+    admissions.map((admission) => [admission.canonicalText, admission]),
+  );
+  const requireAdmission = (input: unknown): SelectOptionAdmission => {
+    const admission = admissionByValue.get(input);
+    if (admission === undefined) {
       throw new TypeError("Value is not one of the configured Select options.");
     }
-    return option;
+    return admission;
   };
   const decodeOption = (input: unknown) => {
-    const option = findOption(input);
-    return option === undefined
+    const admission = admissionByValue.get(input);
+    return admission === undefined
       ? ({
           _tag: "Failure",
           message: "Value is not one of the configured Select options.",
         } as const)
-      : ({ _tag: "Success", value: option } as const);
+      : ({ _tag: "Success", value: admission.value } as const);
   };
 
   const descriptor: SelectValueType<unknown> = {
@@ -1216,21 +1228,21 @@ function createSelectValueType(options: readonly unknown[]): SelectValueType<unk
     editorLayout: "fullWidth",
     defaultWidth: 160,
     decodeRuntime: decodeOption,
-    equivalent: (left, right) => requireOption(left) === requireOption(right),
+    equivalent: (left, right) => requireAdmission(left) === requireAdmission(right),
     compare: (left, right) =>
-      compareIndexes(options.indexOf(requireOption(left)), options.indexOf(requireOption(right))),
-    formatCanonicalText: (value) => formatSelectCanonicalText(requireOption(value)),
+      compareIndexes(requireAdmission(left).index, requireAdmission(right).index),
+    formatCanonicalText: (value) => requireAdmission(value).canonicalText,
     parseCanonicalText: (text) => {
-      const index = canonicalOptions.indexOf(text);
-      return index === -1
+      const admission = admissionByCanonicalText.get(text);
+      return admission === undefined
         ? { _tag: "Failure", message: "Text is not one of the configured Select options." }
-        : { _tag: "Success", value: options[index] };
+        : { _tag: "Success", value: admission.value };
     },
-    formatDisplay: (value) => formatSelectCanonicalText(requireOption(value)),
+    formatDisplay: (value) => requireAdmission(value).canonicalText,
     encodePersisted: (value) => ({
       $brunoTableValue: "select",
       version: 1,
-      value: encodeSelectPrimitive(requireOption(value)),
+      value: encodeSelectPrimitive(requireAdmission(value).value),
     }),
     decodePersisted: (input) => {
       if (!isRecord(input) || input["$brunoTableValue"] !== "select" || input["version"] !== 1) {
@@ -1248,7 +1260,11 @@ function isSelectPrimitiveKind(kind: string): kind is "string" | "number" | "big
 }
 
 function formatSelectCanonicalText(value: unknown): string {
-  return typeof value === "bigint" ? value.toString(10) : String(value);
+  return typeof value === "string"
+    ? value
+    : typeof value === "bigint"
+      ? value.toString(10)
+      : String(value);
 }
 
 function compareIndexes(left: number, right: number): BrunoTableOrdering {

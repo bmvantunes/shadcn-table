@@ -119,16 +119,157 @@ describe("Effect BigDecimal Value Type", () => {
     expect(BigDecimal.format(expectedThird)).toBe(`3.${"3".repeat(99)}e-1`);
   });
 
-  it("rejects canonical text over the persistence budget at runtime admission", () => {
-    const overBudget = BigDecimal.make(BigInt(`1${"3".repeat(4_999)}`), 0);
+  it("rejects over-budget canonical text at the admission boundary", () => {
+    const coefficient = BigInt(`1${"3".repeat(4_999)}`);
+    const overBudget = BigDecimal.make(coefficient, 0);
+    const equivalentScaleVariant = BigDecimal.make(coefficient * 10n, 1);
+    const greater = BigDecimal.make(coefficient + 1n, 0);
+    const persistenceOnly = BigDecimal.make(coefficient + 2n, 0);
 
     expect(BrunoTableBigDecimalValueType.decodeRuntime(overBudget)).toEqual({
       _tag: "Failure",
       message: "Expected a wire-safe Effect BigDecimal value.",
     });
-    expect(() => BrunoTableBigDecimalValueType.encodePersisted(overBudget)).toThrow(
+    expect(BrunoTableBigDecimalValueType.decodeRuntime(equivalentScaleVariant)._tag).toBe(
+      "Failure",
+    );
+    expect(BrunoTableBigDecimalValueType.decodeRuntime(greater)._tag).toBe("Failure");
+    expect(() => BrunoTableBigDecimalValueType.encodePersisted(persistenceOnly)).toThrow(
       "BrunoTable BigDecimal Value Type received an invalid value.",
     );
+  });
+
+  it("rejects an unpersistable filter command before publishing state or a preference", () => {
+    type PriceRow = Readonly<{ readonly id: string; readonly price: BigDecimal.BigDecimal }>;
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_COMMAND_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: BrunoTableBigDecimalValueType,
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter<PriceRow>(
+      { rows: [], totalRows: 0, version: 1, status: "ready" },
+      (row) => row.id,
+      columns,
+      [],
+      [{ columnId: "COL_ID_COMMAND_PRICE", direction: "asc" }],
+    );
+    const onPersistChange = vi.fn();
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_BIGDECIMAL_COMMAND",
+      { getOnPersistChange: () => onPersistChange },
+    );
+    const view = runtime.getView();
+    const filterListener = vi.fn();
+    const queryListener = vi.fn();
+    const activeFilterCountListener = vi.fn();
+    const columnFilterListener = vi.fn();
+    view.subscribeFilter(filterListener);
+    view.subscribeQuery(queryListener);
+    view.subscribeActiveFilterCount(activeFilterCountListener);
+    view.subscribeColumnFilter("COL_ID_COMMAND_PRICE", columnFilterListener);
+    const previousQuery = view.getQuerySnapshot();
+    const previousFilters = view.getFilterSnapshot();
+    const previousColumnFilter = view.getColumnFilterSnapshot("COL_ID_COMMAND_PRICE");
+
+    const accepted = view.dispatchGridCommand({
+      type: "column.filter.replace",
+      columnId: "COL_ID_COMMAND_PRICE",
+      filter: {
+        columnId: "COL_ID_COMMAND_PRICE",
+        type: "equals",
+        filter: BigDecimal.make(BigInt(`1${"3".repeat(4_999)}`), 0),
+      },
+    });
+
+    expect(accepted).toBe(false);
+    expect(view.getQuerySnapshot()).toBe(previousQuery);
+    expect(view.getQuerySnapshot().generation).toBe(previousQuery.generation);
+    expect(view.getFilterSnapshot()).toBe(previousFilters);
+    expect(view.getFilterSnapshot().filters).toEqual([]);
+    expect(view.getColumnFilterSnapshot("COL_ID_COMMAND_PRICE")).toBe(previousColumnFilter);
+    expect(queryListener).not.toHaveBeenCalled();
+    expect(filterListener).not.toHaveBeenCalled();
+    expect(activeFilterCountListener).not.toHaveBeenCalled();
+    expect(columnFilterListener).not.toHaveBeenCalled();
+    expect(onPersistChange).not.toHaveBeenCalled();
+  });
+
+  it("rejects a runtime-admitted filter when persistence encoding throws", () => {
+    type PriceRow = Readonly<{ readonly id: string; readonly price: BigDecimal.BigDecimal }>;
+    const persistenceFailureValueType = {
+      codecId: "effect-bigdecimal-test-persistence-failure",
+      codecVersion: BrunoTableBigDecimalValueType.codecVersion,
+      filterFamily: BrunoTableBigDecimalValueType.filterFamily,
+      editorFamily: BrunoTableBigDecimalValueType.editorFamily,
+      cellAlign: BrunoTableBigDecimalValueType.cellAlign,
+      editorLayout: BrunoTableBigDecimalValueType.editorLayout,
+      defaultWidth: BrunoTableBigDecimalValueType.defaultWidth,
+      decodeRuntime: BrunoTableBigDecimalValueType.decodeRuntime,
+      equivalent: BrunoTableBigDecimalValueType.equivalent,
+      compare: BrunoTableBigDecimalValueType.compare,
+      formatCanonicalText: BrunoTableBigDecimalValueType.formatCanonicalText,
+      parseCanonicalText: BrunoTableBigDecimalValueType.parseCanonicalText,
+      formatDisplay: BrunoTableBigDecimalValueType.formatDisplay,
+      encodePersisted: (_value: BigDecimal.BigDecimal): never => {
+        throw new TypeError("test persistence failure");
+      },
+      decodePersisted: BrunoTableBigDecimalValueType.decodePersisted,
+    };
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_COMMAND_PRICE",
+        field: "price",
+        headerName: "Price",
+        valueType: persistenceFailureValueType,
+      },
+    ]);
+    const adapter = new BrunoTableClientRowPipelineAdapter<PriceRow>(
+      { rows: [], totalRows: 0, version: 1, status: "ready" },
+      (row) => row.id,
+      columns,
+      [],
+      [{ columnId: "COL_ID_COMMAND_PRICE", direction: "asc" }],
+    );
+    const onPersistChange = vi.fn();
+    const runtime = new BrunoTableGridRuntime(
+      adapter.getPublication(),
+      columns,
+      adapter.getQueryConfiguration(columns),
+      "TABLE_ID_BIGDECIMAL_PERSISTENCE_FAILURE",
+      { getOnPersistChange: () => onPersistChange },
+    );
+    const view = runtime.getView();
+    const queryListener = vi.fn();
+    const filterListener = vi.fn();
+    view.subscribeQuery(queryListener);
+    view.subscribeFilter(filterListener);
+    const previousQuery = view.getQuerySnapshot();
+    const previousFilters = view.getFilterSnapshot();
+    const admitted = decimal("1.25");
+
+    expect(BrunoTableBigDecimalValueType.decodeRuntime(admitted)._tag).toBe("Success");
+    expect(
+      view.dispatchGridCommand({
+        type: "column.filter.replace",
+        columnId: "COL_ID_COMMAND_PRICE",
+        filter: {
+          columnId: "COL_ID_COMMAND_PRICE",
+          type: "equals",
+          filter: admitted,
+        },
+      }),
+    ).toBe(false);
+    expect(view.getQuerySnapshot()).toBe(previousQuery);
+    expect(view.getFilterSnapshot()).toBe(previousFilters);
+    expect(queryListener).not.toHaveBeenCalled();
+    expect(filterListener).not.toHaveBeenCalled();
+    expect(onPersistChange).not.toHaveBeenCalled();
   });
 
   it("round-trips exact canonical text and tagged persistence without number coercion", () => {
@@ -229,46 +370,6 @@ describe("Effect BigDecimal Value Type", () => {
     if (decoded._tag === "Success") {
       expect(BrunoTableBigDecimalValueType.equivalent(decoded.value, exact)).toBe(true);
     }
-  });
-
-  it("rejects an over-budget command before a persistence notification can be emitted", () => {
-    type PriceRow = Readonly<{ readonly id: string; readonly price: BigDecimal.BigDecimal }>;
-    const columns = compileColumns([
-      {
-        columnId: "COL_ID_COMMAND_PRICE",
-        field: "price",
-        headerName: "Price",
-        valueType: BrunoTableBigDecimalValueType,
-      },
-    ]);
-    const adapter = new BrunoTableClientRowPipelineAdapter<PriceRow>(
-      { rows: [], totalRows: 0, version: 1, status: "ready" },
-      (row) => row.id,
-      columns,
-      [],
-      [{ columnId: "COL_ID_COMMAND_PRICE", direction: "asc" }],
-    );
-    const onPersistChange = vi.fn();
-    const runtime = new BrunoTableGridRuntime(
-      adapter.getPublication(),
-      columns,
-      adapter.getQueryConfiguration(columns),
-      "TABLE_ID_BIGDECIMAL_COMMAND",
-      { getOnPersistChange: () => onPersistChange },
-    );
-    const accepted = runtime.getView().dispatchGridCommand({
-      type: "column.filter.replace",
-      columnId: "COL_ID_COMMAND_PRICE",
-      filter: {
-        columnId: "COL_ID_COMMAND_PRICE",
-        type: "equals",
-        filter: BigDecimal.make(BigInt(`1${"3".repeat(4_999)}`), 0),
-      },
-    });
-
-    expect(accepted).toBe(false);
-    expect(runtime.getView().getFilterSnapshot().filters).toEqual([]);
-    expect(onPersistChange).not.toHaveBeenCalled();
   });
 
   it("uses allocation-safe semantic equality and order for scale variants and extreme scales", () => {

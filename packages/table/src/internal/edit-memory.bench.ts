@@ -74,6 +74,16 @@ function recordBudgetSample(
   });
 }
 
+function collectBenchmarkGarbage(): void {
+  const collect = (globalThis as typeof globalThis & { readonly gc?: () => void }).gc;
+  if (collect === undefined) {
+    throw new Error(
+      "Edit-memory benchmarks require --expose-gc; run the package test:bench:cell-edit script.",
+    );
+  }
+  collect();
+}
+
 describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", () => {
   const applySamples: number[] = [];
   const undoSamples: number[] = [];
@@ -562,15 +572,23 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
   );
 
   const massSourceConvergenceSamples: number[] = [];
-  const massSourceConvergenceTargets: BrunoTableCellEditRuntime[] = [];
+  let massSourceConvergenceTarget: BrunoTableCellEditRuntime | undefined;
   const massSourceConvergenceSampleCount = 3;
+  const prepareMassSourceConvergenceTarget = (): BrunoTableCellEditRuntime => {
+    const target = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => historySourceRows.get(rowId),
+    });
+    target.setBatchHistoryEnabled(true);
+    populateRetainedHistory(target);
+    return target;
+  };
   bench(
     "clears one 5,000-cell source convergence from 100 retained commands within one frame",
     () => {
-      const target = massSourceConvergenceTargets.shift();
-      if (target === undefined) {
-        throw new Error("Mass source-convergence benchmark exhausted its prepared fixture.");
-      }
+      const target = massSourceConvergenceTarget ?? prepareMassSourceConvergenceTarget();
+      massSourceConvergenceTarget = undefined;
+      collectBenchmarkGarbage();
       const startedAt = performance.now();
       target.reconcileSourceRows(undefined);
       massSourceConvergenceSamples.push(performance.now() - startedAt);
@@ -585,22 +603,17 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       );
       expectCleanMassConvergence(target);
       target.dispose();
+      if (massSourceConvergenceSamples.length < massSourceConvergenceSampleCount) {
+        massSourceConvergenceTarget = prepareMassSourceConvergenceTarget();
+      }
     },
     {
       setup: () => {
-        for (let index = 0; index <= massSourceConvergenceSampleCount; index += 1) {
-          const target = new BrunoTableCellEditRuntime({
-            columns,
-            getRow: (rowId) => historySourceRows.get(rowId),
-          });
-          target.setBatchHistoryEnabled(true);
-          populateRetainedHistory(target);
-          massSourceConvergenceTargets.push(target);
-        }
+        massSourceConvergenceTarget = prepareMassSourceConvergenceTarget();
       },
       teardown: () => {
-        for (const target of massSourceConvergenceTargets) target.dispose();
-        massSourceConvergenceTargets.length = 0;
+        massSourceConvergenceTarget?.dispose();
+        massSourceConvergenceTarget = undefined;
       },
       iterations: massSourceConvergenceSampleCount,
       time: 0,

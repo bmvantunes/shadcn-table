@@ -1,10 +1,22 @@
+import { Profiler } from "react";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
 import { BrunoTableClient } from "./index";
 import type { BrunoTableColumnId, BrunoTableColumns } from "./index";
-import { assertBrunoTableBenchmarkBudget } from "./internal/benchmark-budget";
+import {
+  accumulateBrunoTableBenchmarkFrameCallbackWork,
+  captureBrunoTableReactCommitWork,
+  combineBrunoTableBenchmarkFrameWork,
+  distributeBrunoTableReactCommitWork,
+  finalizeBrunoTableBenchmarkEvidence,
+  type BrunoTableReactCommitWork,
+} from "./internal/benchmark-budget";
+import {
+  BRUNO_TABLE_CAPABLE_HARDWARE_SAMPLE_PROTOCOL,
+  getBrunoTableBenchmarkEnvironment,
+} from "./internal/benchmark-profile";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
 import {
   installBrunoTableClientCellRenderListenerForTable,
@@ -25,9 +37,21 @@ const COLUMN_COUNT = 160;
 const ROW_COUNT = 10_000;
 const FIRST_CENTRE_COLUMN_ID = "COL_ID_DRAG_FILL_PERF_001";
 const SECOND_CENTRE_COLUMN_ID = "COL_ID_DRAG_FILL_PERF_002";
-const DRAG_FILL_FRAME_WARMUP_SAMPLES = 4;
-const DRAG_FILL_FRAME_MEASURED_SAMPLES = 12;
+const DRAG_FILL_FRAME_WARMUP_SAMPLES =
+  BRUNO_TABLE_CAPABLE_HARDWARE_SAMPLE_PROTOCOL.warmupSampleCount;
+const DRAG_FILL_FRAME_MEASURED_SAMPLES =
+  BRUNO_TABLE_CAPABLE_HARDWARE_SAMPLE_PROTOCOL.measuredSampleCount;
+const DRAG_FILL_FRAME_TOTAL_SAMPLES =
+  DRAG_FILL_FRAME_WARMUP_SAMPLES + DRAG_FILL_FRAME_MEASURED_SAMPLES;
+const HORIZONTAL_MAX_ROW_RENDERS_PER_FRAME = 10;
+const HORIZONTAL_MAX_CELL_RENDERS_PER_FRAME = 75;
+const HORIZONTAL_MAX_GRID_SURFACE_RENDERS_PER_FRAME = 0.75;
+const VERTICAL_MAX_ROW_RENDERS_PER_FRAME = 16;
+const VERTICAL_MAX_CELL_RENDERS_PER_FRAME = 125;
+const VERTICAL_MAX_GRID_SURFACE_RENDERS_PER_FRAME = 1;
 const DRAG_FILL_FRAME_BUDGET_MS = 8.33;
+const DRAG_FILL_DROPPED_FRAME_THRESHOLD_MS = 16.66;
+const DRAG_FILL_MAX_DROPPED_FRAME_COUNT = 2;
 const LARGE_FILL_COLUMN_COUNT = 5_001;
 const LARGE_FILL_FIRST_COLUMN_ID = "COL_ID_LARGE_FILL_0000";
 const LARGE_FILL_LAST_COLUMN_ID = "COL_ID_LARGE_FILL_5000";
@@ -73,6 +97,12 @@ const largeFillRow = Object.freeze({
 }) as LargeFillRow;
 
 type ClearableMock = Readonly<{ mockClear: () => unknown }>;
+
+type DragFillFrameWorkSample = {
+  admissionDurationMs: number;
+  callbackDurationMs: number;
+  frameTimestampMs: number;
+};
 
 const columns = Array.from({ length: COLUMN_COUNT }, (_unused, index) => ({
   columnId: `COL_ID_DRAG_FILL_PERF_${String(index).padStart(3, "0")}` as BrunoTableColumnId,
@@ -272,23 +302,51 @@ function mountedRowIds(grid: HTMLElement): readonly string[] {
   ];
 }
 
-function assertDragFillFrameBudget(name: string, frames: readonly BrunoTableDragFillFrame[]): void {
-  const durations = frames.flatMap((frame) => (frame.phase === "ran" ? [frame.durationMs] : []));
-  const requiredSampleCount = DRAG_FILL_FRAME_WARMUP_SAMPLES + DRAG_FILL_FRAME_MEASURED_SAMPLES;
-  expect(durations.length).toBeGreaterThanOrEqual(requiredSampleCount);
-  expect(durations.every((duration) => Number.isFinite(duration) && duration >= 0)).toBe(true);
-  assertBrunoTableBenchmarkBudget(name, durations, {
+function assertDragFillFrameBudget(
+  name: string,
+  samples: readonly DragFillFrameWorkSample[],
+  reactCommits: readonly BrunoTableReactCommitWork[],
+  callbackDurationsByTimestamp: ReadonlyMap<number, number>,
+): void {
+  const reactDurations = distributeBrunoTableReactCommitWork(
+    samples.map((sample) => sample.frameTimestampMs),
+    reactCommits,
+  );
+  const durations = samples.map((sample, index) =>
+    combineBrunoTableBenchmarkFrameWork({
+      admissionDurationMs: sample.admissionDurationMs,
+      renderedFrame: {
+        callbackDurationMs:
+          callbackDurationsByTimestamp.get(sample.frameTimestampMs) ?? Number.POSITIVE_INFINITY,
+        reactDurationMs: reactDurations[index] ?? Number.POSITIVE_INFINITY,
+      },
+      presentationFrame: { callbackDurationMs: 0, reactDurationMs: 0 },
+    }),
+  );
+  expect(durations).toHaveLength(DRAG_FILL_FRAME_TOTAL_SAMPLES);
+  const evidence = finalizeBrunoTableBenchmarkEvidence(durations, {
+    scenario: name,
+    profile: "chromium-capable-hardware-v1",
     warmupSampleCount: DRAG_FILL_FRAME_WARMUP_SAMPLES,
     measuredSampleCount: DRAG_FILL_FRAME_MEASURED_SAMPLES,
     budgetMs: DRAG_FILL_FRAME_BUDGET_MS,
+    droppedFrameThresholdMs: DRAG_FILL_DROPPED_FRAME_THRESHOLD_MS,
+    environment: getBrunoTableBenchmarkEnvironment(),
+    maxDroppedFrameCount: DRAG_FILL_MAX_DROPPED_FRAME_COUNT,
   });
+  expect(evidence.summary.sampleCount).toBe(DRAG_FILL_FRAME_MEASURED_SAMPLES);
+  expect(evidence.droppedFrames.comparison).toBe("measured sample > thresholdMs");
 }
 
 function resetDragFillInstrumentation(
   frames: BrunoTableDragFillFrame[],
+  frameWorkSamples: DragFillFrameWorkSample[],
+  reactCommits: BrunoTableReactCommitWork[],
   ...renderMocks: readonly ClearableMock[]
 ): void {
   frames.length = 0;
+  frameWorkSamples.length = 0;
+  reactCommits.length = 0;
   for (const renderMock of renderMocks) renderMock.mockClear();
 }
 
@@ -365,6 +423,8 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
 
       resetDragFillInstrumentation(
         frames,
+        [],
+        [],
         viewRenders,
         gridSurfaceRenders,
         rowRenders,
@@ -468,12 +528,30 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
     async (direction) => {
       const tableId = `TABLE_ID_DRAG_FILL_PERFORMANCE_${direction.toUpperCase()}`;
       const frames: BrunoTableDragFillFrame[] = [];
+      const frameWorkSamples: DragFillFrameWorkSample[] = [];
+      const reactCommits: BrunoTableReactCommitWork[] = [];
+      const callbackDurationsByTimestamp = new Map<number, number>();
+      let pendingAdmissionDurationMs = 0;
+      let currentAnimationFrameTimestamp: number | undefined;
+      let collectFrameWork = false;
+      let restoreFrameProbe = () => {};
       const viewRenders = vi.fn();
       const gridSurfaceRenders = vi.fn();
       const rowRenders = vi.fn();
       const cellRenders = vi.fn();
       const removeFrames = installBrunoTableClientDragFillFrameListener(tableId, (event) => {
         frames.push(event);
+        if (event.phase === "ran" && collectFrameWork) {
+          if (currentAnimationFrameTimestamp === undefined) {
+            throw new Error("Expected Drag Fill work to run inside an animation frame.");
+          }
+          frameWorkSamples.push({
+            admissionDurationMs: pendingAdmissionDurationMs,
+            callbackDurationMs: event.durationMs,
+            frameTimestampMs: currentAnimationFrameTimestamp,
+          });
+          pendingAdmissionDurationMs = 0;
+        }
       });
       const removeView = installBrunoTableClientViewRenderListenerForTable(tableId, viewRenders);
       const removeGridSurface = installBrunoTableClientGridSurfaceRenderListenerForTable(
@@ -485,18 +563,32 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
 
       try {
         await render(
-          <div dir={direction} style={{ width: 320 }}>
-            <BrunoTableClient
-              tableId={tableId}
-              columns={columns}
-              initialOrderBy={[{ columnId: FIRST_CENTRE_COLUMN_ID, direction: "asc" }]}
-              clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
-              getRowId={(row) => row.id}
-              editable
-              getRowVersion={(row) => row.revision}
-              onSaveEdits={() => Promise.resolve()}
-            />
-          </div>,
+          <Profiler
+            id={`drag-fill-performance-${direction}`}
+            onRender={(_id, _phase, actualDuration, _baseDuration, startTime, commitTime) => {
+              reactCommits.push(
+                captureBrunoTableReactCommitWork({
+                  actualDurationMs: actualDuration,
+                  commitTimeMs: commitTime,
+                  observedAtMs: performance.now(),
+                  startTimeMs: startTime,
+                }),
+              );
+            }}
+          >
+            <div dir={direction} style={{ width: 320 }}>
+              <BrunoTableClient
+                tableId={tableId}
+                columns={columns}
+                initialOrderBy={[{ columnId: FIRST_CENTRE_COLUMN_ID, direction: "asc" }]}
+                clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+                getRowId={(row) => row.id}
+                editable
+                getRowVersion={(row) => row.revision}
+                onSaveEdits={() => Promise.resolve()}
+              />
+            </div>
+          </Profiler>,
         );
         const grid = page
           .getByRole("grid", { name: `Data for ${tableId}` })
@@ -505,6 +597,29 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
         await settleBrunoTableBrowserFrames();
         expect(mountedDataCells(grid).length).toBeLessThan(250);
         mountedCentreLane(grid);
+
+        const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+        const requestAnimationFrameProbe = vi
+          .spyOn(window, "requestAnimationFrame")
+          .mockImplementation((callback) =>
+            nativeRequestAnimationFrame((timestamp) => {
+              const startedAt = performance.now();
+              currentAnimationFrameTimestamp = timestamp;
+              try {
+                callback(timestamp);
+              } finally {
+                currentAnimationFrameTimestamp = undefined;
+                if (collectFrameWork) {
+                  accumulateBrunoTableBenchmarkFrameCallbackWork(
+                    callbackDurationsByTimestamp,
+                    timestamp,
+                    performance.now() - startedAt,
+                  );
+                }
+              }
+            }),
+          );
+        restoreFrameProbe = () => requestAnimationFrameProbe.mockRestore();
 
         grid.focus();
         await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
@@ -518,6 +633,8 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
 
         resetDragFillInstrumentation(
           frames,
+          frameWorkSamples,
+          reactCommits,
           viewRenders,
           gridSurfaceRenders,
           rowRenders,
@@ -540,26 +657,41 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
         const initialScrollLeft = grid.scrollLeft;
         resetDragFillInstrumentation(
           frames,
+          frameWorkSamples,
+          reactCommits,
           viewRenders,
           gridSurfaceRenders,
           rowRenders,
           cellRenders,
         );
+        callbackDurationsByTimestamp.clear();
+        collectFrameWork = true;
+        const horizontalAdmissionStartedAt = performance.now();
         physicalCentreEdge.cell.dispatchEvent(
           pointer("pointermove", 701, physicalCentreEdge.point),
         );
-        await settleBrunoTableBrowserFrames(
-          DRAG_FILL_FRAME_WARMUP_SAMPLES + DRAG_FILL_FRAME_MEASURED_SAMPLES,
-        );
-
+        pendingAdmissionDurationMs = performance.now() - horizontalAdmissionStartedAt;
+        await settleBrunoTableBrowserFrames(DRAG_FILL_FRAME_TOTAL_SAMPLES);
+        collectFrameWork = false;
         expect(grid.scrollLeft).not.toBe(initialScrollLeft);
         expect(frames.some((frame) => frame.phase === "scheduled")).toBe(true);
         expect(frames.some((frame) => frame.phase === "ran")).toBe(true);
-        assertDragFillFrameBudget(`${direction} horizontal Drag Fill rAF`, frames);
+        assertDragFillFrameBudget(
+          `${direction} horizontal Drag Fill input-through-render work`,
+          frameWorkSamples,
+          reactCommits,
+          callbackDurationsByTimestamp,
+        );
         expect(viewRenders.mock.calls.length).toBeLessThanOrEqual(8);
-        expect(gridSurfaceRenders.mock.calls.length).toBeLessThanOrEqual(12);
-        expect(rowRenders.mock.calls.length).toBeLessThan(160);
-        expect(cellRenders.mock.calls.length).toBeLessThan(1_200);
+        expect(gridSurfaceRenders.mock.calls.length).toBeLessThan(
+          DRAG_FILL_FRAME_TOTAL_SAMPLES * HORIZONTAL_MAX_GRID_SURFACE_RENDERS_PER_FRAME,
+        );
+        expect(rowRenders.mock.calls.length).toBeLessThan(
+          DRAG_FILL_FRAME_TOTAL_SAMPLES * HORIZONTAL_MAX_ROW_RENDERS_PER_FRAME,
+        );
+        expect(cellRenders.mock.calls.length).toBeLessThan(
+          DRAG_FILL_FRAME_TOTAL_SAMPLES * HORIZONTAL_MAX_CELL_RENDERS_PER_FRAME,
+        );
         expect(mountedDataCells(grid).length).toBeLessThan(250);
 
         const horizontalFrameCountBeforeCancel = frames.length;
@@ -571,6 +703,10 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
             .every((frame) => frame.phase === "cancelled"),
         ).toBe(true);
         await assertNoAutoscrollFramesAfterCancel(frames, horizontalCancelSnapshot);
+
+        grid.scrollLeft = initialScrollLeft;
+        grid.dispatchEvent(new Event("scroll"));
+        await settleBrunoTableBrowserFrames(2);
 
         const verticalSource = cell(grid, sourceRowId, FIRST_CENTRE_COLUMN_ID);
         await userEvent.click(verticalSource);
@@ -586,27 +722,43 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
         const mountedRowsBeforeVerticalAutoscroll = mountedRowIds(grid);
         resetDragFillInstrumentation(
           frames,
+          frameWorkSamples,
+          reactCommits,
           viewRenders,
           gridSurfaceRenders,
           rowRenders,
           cellRenders,
         );
+        callbackDurationsByTimestamp.clear();
         verticalHandle.dispatchEvent(pointer("pointerdown", 702, centerOf(verticalHandle)));
+        collectFrameWork = true;
+        const verticalAdmissionStartedAt = performance.now();
         physicalBottomEdge.cell.dispatchEvent(
           pointer("pointermove", 702, physicalBottomEdge.point),
         );
-        await settleBrunoTableBrowserFrames(
-          DRAG_FILL_FRAME_WARMUP_SAMPLES + DRAG_FILL_FRAME_MEASURED_SAMPLES,
-        );
+        pendingAdmissionDurationMs = performance.now() - verticalAdmissionStartedAt;
+        await settleBrunoTableBrowserFrames(DRAG_FILL_FRAME_TOTAL_SAMPLES);
+        collectFrameWork = false;
 
         expect(grid.scrollTop).toBeGreaterThan(initialScrollTop);
         expect(frames.some((frame) => frame.phase === "scheduled")).toBe(true);
         expect(frames.some((frame) => frame.phase === "ran")).toBe(true);
-        assertDragFillFrameBudget(`${direction} vertical Drag Fill rAF`, frames);
+        assertDragFillFrameBudget(
+          `${direction} vertical Drag Fill input-through-render work`,
+          frameWorkSamples,
+          reactCommits,
+          callbackDurationsByTimestamp,
+        );
         expect(viewRenders.mock.calls.length).toBeLessThanOrEqual(12);
-        expect(gridSurfaceRenders.mock.calls.length).toBeLessThanOrEqual(16);
-        expect(rowRenders.mock.calls.length).toBeLessThan(250);
-        expect(cellRenders.mock.calls.length).toBeLessThan(2_000);
+        expect(gridSurfaceRenders.mock.calls.length).toBeLessThan(
+          DRAG_FILL_FRAME_TOTAL_SAMPLES * VERTICAL_MAX_GRID_SURFACE_RENDERS_PER_FRAME,
+        );
+        expect(rowRenders.mock.calls.length).toBeLessThan(
+          DRAG_FILL_FRAME_TOTAL_SAMPLES * VERTICAL_MAX_ROW_RENDERS_PER_FRAME,
+        );
+        expect(cellRenders.mock.calls.length).toBeLessThan(
+          DRAG_FILL_FRAME_TOTAL_SAMPLES * VERTICAL_MAX_CELL_RENDERS_PER_FRAME,
+        );
         expect(mountedDataCells(grid).length).toBeLessThan(250);
         const mountedRowsAfterVerticalAutoscroll = mountedRowIds(grid);
         expect(
@@ -625,6 +777,8 @@ describe("BrunoTable Drag Fill performance acceptance", () => {
         ).toBe(true);
         await assertNoAutoscrollFramesAfterCancel(frames, verticalCancelSnapshot);
       } finally {
+        collectFrameWork = false;
+        restoreFrameProbe();
         removeCells();
         removeRows();
         removeGridSurface();

@@ -40,6 +40,7 @@ import {
   type BrunoTableSetFilterIntent,
 } from "./client-facet";
 import { useBrunoTableClientFilterContext } from "./client-filter-context";
+import { isBrunoTableDocumentFocusChainActive } from "./focus-ownership";
 import {
   BRUNO_TABLE_CLIENT_FILTER_MAX_DEPTH,
   BRUNO_TABLE_CLIENT_FILTER_MAX_TOTAL_NODES,
@@ -227,6 +228,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
     const escapeFocusFrameRef = useRef<number | null>(null);
     const wasOpenRef = useRef(false);
     const triggerRef = useRef<HTMLButtonElement | null>(null);
+    const triggerOwnerDocumentRef = useRef<Document | null>(null);
     const label = `Filter ${column.headerName}`;
     const SetFilterFacet =
       setFilterFacet === undefined
@@ -235,6 +237,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
           ? undefined
           : setFilterFacet;
     const openFilter = useCallback((): void => {
+      triggerOwnerDocumentRef.current = triggerRef.current?.ownerDocument ?? null;
       setDirection(readBrunoTableFilterDirection(triggerRef.current));
       activateHeaderCommand(column.columnId);
       setOpen(true);
@@ -251,18 +254,22 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
         if (escapeFocusFrameRef.current !== null) {
           cancelAnimationFrame(escapeFocusFrameRef.current);
         }
-        if (!wasOpenRef.current || typeof document === "undefined") return;
-        const active = document.activeElement;
+        const ownerDocument = triggerOwnerDocumentRef.current;
+        if (!wasOpenRef.current || ownerDocument === null) return;
+        const active = ownerDocument.activeElement;
+        const OwnerHTMLElement = ownerDocument.defaultView?.HTMLElement;
         const overlay =
-          active instanceof HTMLElement
+          OwnerHTMLElement !== undefined && active instanceof OwnerHTMLElement
             ? active.closest<HTMLElement>("[data-bruno-filter-overlay]")
             : null;
         if (
+          active !== ownerDocument.body &&
           active !== triggerRef.current &&
           overlay?.dataset["brunoFilterOverlay"] !== column.columnId
         ) {
           return;
         }
+        if (!isBrunoTableDocumentFocusChainActive(ownerDocument)) return;
         restoreColumnFocus(column.columnId);
       },
       [column.columnId, restoreColumnFocus],
@@ -273,6 +280,7 @@ export const BrunoTableColumnFilter: NamedExoticComponent<BrunoTableColumnFilter
           open={open}
           onOpenChange={(nextOpen, eventDetails) => {
             if (nextOpen) {
+              triggerOwnerDocumentRef.current = triggerRef.current?.ownerDocument ?? null;
               if (escapeFocusFrameRef.current !== null) {
                 cancelAnimationFrame(escapeFocusFrameRef.current);
                 escapeFocusFrameRef.current = null;

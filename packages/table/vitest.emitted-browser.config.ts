@@ -2,8 +2,15 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 import { playwright } from "vite-plus/test/browser-playwright";
 
+import { reactCompilerOptions } from "../../config/react-compiler-options.mjs";
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react({
+      compiler: reactCompilerOptions,
+      exclude: [/\/node_modules\//, /\.d\.[cm]?tsx?$/],
+    }),
+  ],
   resolve: { dedupe: ["react", "react-dom"] },
   optimizeDeps: {
     include: [

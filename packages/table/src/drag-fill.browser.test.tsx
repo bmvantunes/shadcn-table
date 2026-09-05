@@ -168,6 +168,7 @@ test("keeps Drag Fill layout reads out of the hot pointer frame", async () => {
   handle!.dispatchEvent(pointer("pointerdown", 92, handleCenter));
 
   const gridBoundsRead = vi.spyOn(gridElement, "getBoundingClientRect");
+  const pointHitRead = vi.spyOn(document, "elementFromPoint");
   const selectorRead = vi.spyOn(gridElement, "querySelectorAll");
   const directionRead = vi.spyOn(window, "getComputedStyle");
   fourth.dispatchEvent(
@@ -178,7 +179,8 @@ test("keeps Drag Fill layout reads out of the hot pointer frame", async () => {
   );
   await settleBrunoTableBrowserFrames();
 
-  expect(gridBoundsRead).toHaveBeenCalledTimes(1);
+  expect(gridBoundsRead).not.toHaveBeenCalled();
+  expect(pointHitRead).not.toHaveBeenCalled();
   expect(
     selectorRead.mock.calls.some(([selector]) =>
       String(selector).includes("COL_ID_BRUNO_TABLE_ROW_SELECTION"),

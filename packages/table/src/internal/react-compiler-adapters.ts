@@ -1,4 +1,6 @@
 import {
+  createElement,
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -18,7 +20,11 @@ import type { BrunoTableActiveCell, BrunoTableNavigationRuntime } from "./naviga
 import {
   BRUNO_TABLE_ROW_HEIGHT,
   BrunoTableViewportRuntime,
+  type BrunoTableBodyColumnWindowSnapshot,
+  type BrunoTableRowRangeSnapshot,
   type BrunoTableViewportSnapshot,
+  type BrunoTableViewportBodyHitRequest,
+  type BrunoTableViewportBodyHit,
 } from "./virtual-viewport";
 
 import type { BrunoTableLogicalRowSpace } from "./bruno-table-view";
@@ -28,6 +34,52 @@ const subscribeNoop =
   (_listener: () => void): (() => void) =>
   () =>
     undefined;
+
+type BrunoTablePublishedRequiredRange = Readonly<{
+  rowSpace: BrunoTableLogicalRowSpace;
+  generation: number;
+  start: number;
+  end: number;
+}>;
+
+function BrunoTableRequiredRangeBridge({
+  generation,
+  getRowRangeSnapshot,
+  rowSpace,
+  subscribeRowRange,
+}: {
+  readonly generation: number;
+  readonly getRowRangeSnapshot: () => BrunoTableRowRangeSnapshot;
+  readonly rowSpace: BrunoTableLogicalRowSpace;
+  readonly subscribeRowRange: (listener: () => void) => () => void;
+}): null {
+  const publishedRangeRef = useRef<BrunoTablePublishedRequiredRange | undefined>(undefined);
+  const rowRange = useSyncExternalStore(
+    subscribeRowRange,
+    getRowRangeSnapshot,
+    getRowRangeSnapshot,
+  );
+  useEffect(() => {
+    if (rowRange !== getRowRangeSnapshot()) return;
+    const previous = publishedRangeRef.current;
+    if (
+      previous?.rowSpace === rowSpace &&
+      previous.generation === generation &&
+      previous.start === rowRange.rowStart &&
+      previous.end === rowRange.rowEnd
+    ) {
+      return;
+    }
+    rowSpace.setRequiredRange(rowRange.rowStart, rowRange.rowEnd);
+    publishedRangeRef.current = Object.freeze({
+      rowSpace,
+      generation,
+      start: rowRange.rowStart,
+      end: rowRange.rowEnd,
+    });
+  }, [generation, getRowRangeSnapshot, publishedRangeRef, rowRange, rowSpace]);
+  return null;
+}
 
 function allocateDocumentInstanceId(ownerDocument: Document): string {
   const next = (documentInstanceCounters.get(ownerDocument) ?? 0) + 1;
@@ -137,9 +189,23 @@ export type BrunoTableViewportAdapterState = Readonly<{
   attachRowLayer: (element: HTMLElement | null) => void;
   attachScrollbarOverlay: (element: HTMLElement | null) => void;
   subscribeViewportEnvironment: (listener: () => void) => () => void;
+  subscribeColumnWindow: (listener: () => void) => () => void;
+  getColumnWindowSnapshot: () => BrunoTableBodyColumnWindowSnapshot;
+  subscribeHeaderColumnWindow: (listener: () => void) => () => void;
+  getHeaderColumnWindowSnapshot: () => BrunoTableBodyColumnWindowSnapshot;
+  getHeaderColumnActivitySnapshot: (columnId: string) => boolean;
+  attachHeaderColumn: (columnId: string, element: HTMLElement | null) => void;
+  subscribeRowRange: (listener: () => void) => () => void;
+  getRowRangeSnapshot: () => BrunoTableRowRangeSnapshot;
+  getRowSlotKey: (logicalRowIndex: number) => number;
+  subscribeBodyRowColumnWindow: (logicalRowIndex: number, listener: () => void) => () => void;
+  getBodyRowColumnWindowSnapshot: (logicalRowIndex: number) => BrunoTableBodyColumnWindowSnapshot;
   scrollByLogical: (delta: number) => boolean;
   scrollVerticalByLogical: (delta: number) => boolean;
   adjustVerticalByLogical: (delta: number) => number | undefined;
+  resolveBodyHit: (
+    request: BrunoTableViewportBodyHitRequest,
+  ) => BrunoTableViewportBodyHit | undefined;
   previewColumnWidth: (columnId: string, width: number) => void;
   clearColumnWidthPreview: (publishSnapshot?: boolean) => void;
   revealCell: (
@@ -221,8 +287,8 @@ export function BrunoTableViewportAdapterBoundary({
     return next;
   });
   const [viewportBindings] = useState(() => ({
-    subscribe: viewport.subscribe,
-    getSnapshot: viewport.getSnapshot,
+    subscribe: viewport.subscribeRender,
+    getSnapshot: viewport.getRenderSnapshot,
     setLayout: viewport.setLayout,
     setLeadingUtilityWidth: viewport.setLeadingUtilityWidth,
     resetVertical: viewport.resetVertical,
@@ -233,23 +299,26 @@ export function BrunoTableViewportAdapterBoundary({
     attachRowLayer: viewport.attachRowLayer,
     attachScrollbarOverlay: viewport.attachScrollbarOverlay,
     subscribeEnvironment: viewport.subscribeEnvironment,
+    subscribeColumnWindow: viewport.subscribeColumnWindow,
+    getColumnWindowSnapshot: viewport.getColumnWindowSnapshot,
+    subscribeHeaderColumnWindow: viewport.subscribeHeaderColumnWindow,
+    getHeaderColumnWindowSnapshot: viewport.getHeaderColumnWindowSnapshot,
+    getHeaderColumnActivitySnapshot: viewport.getHeaderColumnActivitySnapshot,
+    attachHeaderColumn: viewport.attachHeaderColumn,
+    subscribeRowRange: viewport.subscribeRowRange,
+    getRowRangeSnapshot: viewport.getRowRangeSnapshot,
+    getRowSlotKey: viewport.getRowSlotKey,
+    subscribeBodyRowColumnWindow: viewport.subscribeBodyRowColumnWindow,
+    getBodyRowColumnWindowSnapshot: viewport.getBodyRowColumnWindowSnapshot,
     scrollByLogical: viewport.scrollByLogical,
     scrollVerticalByLogical: viewport.scrollVerticalByLogical,
     adjustVerticalByLogical: viewport.adjustVerticalByLogical,
+    resolveBodyHit: viewport.resolveBodyHit,
     previewColumnWidth: viewport.previewColumnWidth,
     clearColumnWidthPreview: viewport.clearColumnWidthPreview,
     revealCell: viewport.revealCell,
   }));
   const appliedColumnLayoutSignatureRef = useRef<string | undefined>(undefined);
-  const publishedRangeRef = useRef<
-    | {
-        readonly rowSpace: BrunoTableLogicalRowSpace;
-        readonly generation: number;
-        readonly start: number;
-        readonly end: number;
-      }
-    | undefined
-  >(undefined);
   const viewportSnapshot = useSyncExternalStore(
     viewportBindings.subscribe,
     viewportBindings.getSnapshot,
@@ -271,15 +340,9 @@ export function BrunoTableViewportAdapterBoundary({
       installedRowSpace.findRowIndex,
     );
     viewportBindings.resetVertical();
-    const resetWindow = viewportBindings.getSnapshot().virtualWindow;
-    installedRowSpace.setRequiredRange(resetWindow.rowStart, resetWindow.rowEnd);
-    publishedRangeRef.current = Object.freeze({
-      rowSpace: installedRowSpace,
-      generation: installedQueryGeneration,
-      start: resetWindow.rowStart,
-      end: resetWindow.rowEnd,
-    });
-  }, [installedQueryGeneration, installedRowSpace, logicalColumns, viewportBindings]);
+    const resetRange = viewportBindings.getRowRangeSnapshot();
+    installedRowSpace.setRequiredRange(resetRange.rowStart, resetRange.rowEnd);
+  }, [installedRowSpace, logicalColumns, viewportBindings]);
   useLayoutEffect(() => {
     const changed = navigation.installCommittedQuery(
       installedQueryGeneration,
@@ -341,47 +404,48 @@ export function BrunoTableViewportAdapterBoundary({
     navigation,
     viewportBindings,
   ]);
-  useLayoutEffect(() => {
-    if (viewportSnapshot !== viewportBindings.getSnapshot()) return;
-    const start = viewportSnapshot.virtualWindow.rowStart;
-    const end = viewportSnapshot.virtualWindow.rowEnd;
-    const previous = publishedRangeRef.current;
-    if (
-      previous?.rowSpace === installedRowSpace &&
-      previous.generation === installedQueryGeneration &&
-      previous.start === start &&
-      previous.end === end
-    ) {
-      return;
-    }
-    installedRowSpace.setRequiredRange(start, end);
-    publishedRangeRef.current = Object.freeze({
-      rowSpace: installedRowSpace,
-      generation: installedQueryGeneration,
-      start,
-      end,
-    });
-  }, [installedQueryGeneration, installedRowSpace, viewportBindings, viewportSnapshot]);
   useEffect(() => () => viewportBindings.dispose(), [viewportBindings]);
 
-  return children({
-    instanceId,
-    columns: logicalColumns,
-    columnLayout,
-    viewportSnapshot,
-    attach: viewportBindings.attach,
-    attachBodyLayer: viewportBindings.attachBodyLayer,
-    attachPinnedEditorHost: viewportBindings.attachPinnedEditorHost,
-    attachRowLayer: viewportBindings.attachRowLayer,
-    attachScrollbarOverlay: viewportBindings.attachScrollbarOverlay,
-    subscribeViewportEnvironment: viewportBindings.subscribeEnvironment,
-    scrollByLogical: viewportBindings.scrollByLogical,
-    scrollVerticalByLogical: viewportBindings.scrollVerticalByLogical,
-    adjustVerticalByLogical: viewportBindings.adjustVerticalByLogical,
-    previewColumnWidth: viewportBindings.previewColumnWidth,
-    clearColumnWidthPreview: viewportBindings.clearColumnWidthPreview,
-    revealCell: viewportBindings.revealCell,
-  });
+  return createElement(
+    Fragment,
+    null,
+    createElement(BrunoTableRequiredRangeBridge, {
+      generation: installedQueryGeneration,
+      getRowRangeSnapshot: viewportBindings.getRowRangeSnapshot,
+      rowSpace: installedRowSpace,
+      subscribeRowRange: viewportBindings.subscribeRowRange,
+    }),
+    children({
+      instanceId,
+      columns: logicalColumns,
+      columnLayout,
+      viewportSnapshot,
+      attach: viewportBindings.attach,
+      attachBodyLayer: viewportBindings.attachBodyLayer,
+      attachPinnedEditorHost: viewportBindings.attachPinnedEditorHost,
+      attachRowLayer: viewportBindings.attachRowLayer,
+      attachScrollbarOverlay: viewportBindings.attachScrollbarOverlay,
+      subscribeViewportEnvironment: viewportBindings.subscribeEnvironment,
+      subscribeColumnWindow: viewportBindings.subscribeColumnWindow,
+      getColumnWindowSnapshot: viewportBindings.getColumnWindowSnapshot,
+      subscribeHeaderColumnWindow: viewportBindings.subscribeHeaderColumnWindow,
+      getHeaderColumnWindowSnapshot: viewportBindings.getHeaderColumnWindowSnapshot,
+      getHeaderColumnActivitySnapshot: viewportBindings.getHeaderColumnActivitySnapshot,
+      attachHeaderColumn: viewportBindings.attachHeaderColumn,
+      subscribeRowRange: viewportBindings.subscribeRowRange,
+      getRowRangeSnapshot: viewportBindings.getRowRangeSnapshot,
+      getRowSlotKey: viewportBindings.getRowSlotKey,
+      subscribeBodyRowColumnWindow: viewportBindings.subscribeBodyRowColumnWindow,
+      getBodyRowColumnWindowSnapshot: viewportBindings.getBodyRowColumnWindowSnapshot,
+      scrollByLogical: viewportBindings.scrollByLogical,
+      scrollVerticalByLogical: viewportBindings.scrollVerticalByLogical,
+      adjustVerticalByLogical: viewportBindings.adjustVerticalByLogical,
+      resolveBodyHit: viewportBindings.resolveBodyHit,
+      previewColumnWidth: viewportBindings.previewColumnWidth,
+      clearColumnWidthPreview: viewportBindings.clearColumnWidthPreview,
+      revealCell: viewportBindings.revealCell,
+    }),
+  );
 }
 
 type BrunoTableFocusHandoff = Readonly<{
