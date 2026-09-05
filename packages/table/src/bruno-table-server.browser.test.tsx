@@ -1305,7 +1305,7 @@ describe("BrunoTableServer", () => {
         screen.getByRole("gridcell", { name: "Desk Beta" }).element().id,
       ),
     );
-    expect(surfaceRenders).toHaveBeenCalledTimes(1);
+    expect(surfaceRenders).not.toHaveBeenCalled();
     expect(headerRenders).not.toHaveBeenCalled();
     removeSurfaceListener();
     removeHeaderListener();
@@ -2852,6 +2852,67 @@ describe("BrunoTableServer", () => {
       restoreRows();
       restoreGrid();
       restoreView();
+    }
+  });
+
+  test("rebases a queued Server keyboard reveal when its row moves before the frame", async () => {
+    const transport = makeViewport(1_000);
+    const screen = await render(
+      <div style={{ height: 240, width: 600 }}>
+        <BrunoTableServer {...serverProps(transport.viewport, "ready")} />
+      </div>,
+    );
+    const sink = transport.requests[0]!.sink;
+    sink.setRowData(
+      { 0: { symbol: "FIRST", price: 1 }, 1: { symbol: "MOVING", price: 2 } },
+      { 0: "first", 1: "moving" },
+    );
+    const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" }).element();
+    await expect.element(screen.getByRole("gridcell", { name: "MOVING" })).toBeInTheDocument();
+    grid.focus();
+    await settleBrunoTableBrowserFrames();
+    const destination = Math.ceil(grid.clientHeight / 36) + 1;
+    const actEnvironment = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean;
+    };
+    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    const frames: FrameRequestCallback[] = [];
+    const frameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return 1_000_000 + frames.length;
+    });
+    try {
+      await act(async () => {
+        grid.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+        );
+      });
+      expect(frames.length).toBeGreaterThan(0);
+      await act(async () => {
+        sink.setRowData(
+          { 1: { symbol: "REPLACEMENT", price: 3 }, [destination]: { symbol: "MOVING", price: 2 } },
+          { 1: "replacement", [destination]: "moving" },
+        );
+      });
+      frameSpy.mockRestore();
+      await act(async () => {
+        for (const callback of frames) callback(performance.now());
+      });
+      await settleBrunoTableBrowserFrames();
+      expect(grid.scrollTop).toBeGreaterThan(0);
+      const moving = screen.getByRole("gridcell", { name: "MOVING" }).element();
+      expect(grid.getAttribute("aria-activedescendant")).toBe(moving.id);
+      expect(moving.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        grid.getBoundingClientRect().bottom,
+      );
+    } finally {
+      frameSpy.mockRestore();
+      if (previousActEnvironment === undefined) {
+        Reflect.deleteProperty(actEnvironment, "IS_REACT_ACT_ENVIRONMENT");
+      } else {
+        actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+      }
     }
   });
 

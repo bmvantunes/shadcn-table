@@ -18,6 +18,10 @@ const config: UserConfig = defineConfig({
   plugins: [reactWithCompiler()],
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    benchmark: {
+      include: ["src/**/*.bench.ts"],
+      reporters: ["default", "./scripts/benchmark-completeness.ts"],
+    },
   },
   pack: {
     entry: {

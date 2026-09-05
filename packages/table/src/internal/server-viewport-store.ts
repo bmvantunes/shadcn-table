@@ -26,6 +26,7 @@ export type BrunoTableServerViewportStoreSnapshot<TRow> = Readonly<{
   readonly authoritativeTotalRows: boolean;
   readonly requiredWindow: BrunoTableServerViewportWindow;
   readonly rowSpace: BrunoTableRowSpaceSnapshot<TRow>;
+  readonly findRowIndex: (rowId: string) => number | undefined;
   readonly affectedRowIds?: ReadonlySet<string>;
 }>;
 
@@ -60,6 +61,7 @@ export class BrunoTableServerViewportStore<TRow> {
     authoritativeTotalRows: false,
     requiredWindow: this.requiredWindow,
     rowSpace: EMPTY_ROW_SPACE,
+    findRowIndex: () => undefined,
   });
 
   public constructor(
@@ -354,6 +356,7 @@ export class BrunoTableServerViewportStore<TRow> {
   ): void {
     if (structureChanged) this.structureVersion += 1;
     const indexToRowId = this.indexToRowId;
+    const rowIndexById = this.rowIndexById;
     const rowsById = this.rowsById;
     const readCell = this.readCell;
     const rowSpace: BrunoTableRowSpaceSnapshot<TRow> = Object.freeze({
@@ -372,6 +375,7 @@ export class BrunoTableServerViewportStore<TRow> {
       authoritativeTotalRows: this.authoritativeTotalRows,
       requiredWindow: this.requiredWindow,
       rowSpace,
+      findRowIndex: (rowId: string) => rowIndexById.get(rowId),
       ...(affectedRowIds === undefined ? {} : { affectedRowIds }),
     });
     notify(this.listeners);

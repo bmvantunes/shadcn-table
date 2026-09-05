@@ -38,6 +38,7 @@ import type { BrunoTableCompiledGroupRowsColumn } from "./client-grouping-presen
 // The public Quick Filter contract documents this limit alongside its tuple type.
 
 export type BrunoTableClientReconciliationEvent = Readonly<{
+  readonly durationMs: number;
   readonly residentRows: number;
   readonly changedRows: number;
   readonly resolvedRowIds: number;
@@ -1388,6 +1389,8 @@ function createInitialCoherent<TRow>(
   columns: readonly CompiledColumn[],
   valueCache: ClientCanonicalValueCache,
 ): CoherentResult<TRow> {
+  const reconciliationDiagnostic = reconciliationListener;
+  const reconciliationStartedAt = reconciliationDiagnostic === undefined ? 0 : performance.now();
   const rowIdValues = Array.from<BrunoTableRowId>({ length: rows.length });
   const admittedValues = Array.from<BrunoTableClientAdmittedRow>({ length: rows.length });
   const identityBuckets = new Map<number, Map<BrunoTableRowId, BrunoTableClientAdmittedRow>>();
@@ -1408,9 +1411,10 @@ function createInitialCoherent<TRow>(
     bucket.set(rowId, admitted);
     identityBuckets.set(bucketIndex, bucket);
   }
-  reconciliationListener?.(
+  reconciliationDiagnostic?.(
     Object.freeze({
       residentRows: rows.length,
+      durationMs: Math.max(0, performance.now() - reconciliationStartedAt),
       changedRows: rows.length,
       resolvedRowIds: rows.length,
       identityPatches: rows.length,
@@ -1443,6 +1447,8 @@ function createCoherent<TRow>(
   if (!resolveCurrentRowIds && previous.rows === rows && previous.validatedColumns === columns) {
     return Object.freeze({ coherent: previous });
   }
+  const reconciliationDiagnostic = reconciliationListener;
+  const reconciliationStartedAt = reconciliationDiagnostic === undefined ? 0 : performance.now();
   const sourceChange = persistentSequenceChange(previous.rows, rows);
   const indexesToResolve = resolveCurrentRowIds
     ? Array.from({ length: rows.length }, (_unused, index) => index)
@@ -1525,9 +1531,10 @@ function createCoherent<TRow>(
     identityPatches,
     removedRowIds,
   );
-  reconciliationListener?.(
+  reconciliationDiagnostic?.(
     Object.freeze({
       residentRows: rows.length,
+      durationMs: Math.max(0, performance.now() - reconciliationStartedAt),
       changedRows: sourceChange.changedIndexes.length,
       resolvedRowIds: indexesToResolve.length,
       identityPatches: identityPatches.size,

@@ -1,6 +1,6 @@
 import { Fragment, useLayoutEffect } from "react";
 
-import type { ReactElement } from "react";
+import type { ReactElement, RefCallback } from "react";
 
 import {
   recordBrunoTableClientCellRender,
@@ -75,7 +75,7 @@ export function BrunoTableRowCommitDiagnosticProbe({
   return <Fragment key={BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_SENTINEL} />;
 }
 
-export function BrunoTableCellCommitDiagnosticProbe({
+export function createBrunoTableCellCommitDiagnosticRef({
   columnId,
   commitEvidence,
   rowId,
@@ -85,10 +85,11 @@ export function BrunoTableCellCommitDiagnosticProbe({
   readonly commitEvidence: unknown;
   readonly rowId: string;
   readonly tableId: string | undefined;
-}): ReactElement {
+}): RefCallback<HTMLTableCellElement> {
   void commitEvidence;
-  useLayoutEffect(() => recordBrunoTableClientCellRender(rowId, columnId, tableId));
-  return <Fragment key={BRUNO_TABLE_COMMIT_PROBE_DIAGNOSTIC_SENTINEL} />;
+  return (element) => {
+    if (element !== null) recordBrunoTableClientCellRender(rowId, columnId, tableId);
+  };
 }
 
 export function BrunoTableRowSelectionCommitDiagnosticProbe({

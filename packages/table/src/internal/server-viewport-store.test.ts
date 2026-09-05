@@ -285,6 +285,7 @@ describe("BrunoTableServerViewportStore", () => {
     const first = { symbol: "A", exact: { value: "1.50" } } as const;
     const second = { symbol: "B", exact: { value: "2.00" } } as const;
     store.setRowData(generation, { 0: first, 1: second }, { 0: "a", 1: "b" });
+    const beforeMove = store.getSnapshot();
 
     store.setRowData(
       generation,
@@ -298,5 +299,10 @@ describe("BrunoTableServerViewportStore", () => {
     expect(store.getSnapshot().rowSpace.getRow("b")).toBe(second);
     expect(store.getSnapshot().rowSpace.getRowId(0)).toBe("b");
     expect(store.getSnapshot().rowSpace.getRowId(1)).toBe("a");
+    expect(beforeMove.rowSpace.getRowId(0)).toBe("a");
+    expect(beforeMove.findRowIndex("a")).toBe(0);
+    expect(beforeMove.findRowIndex("b")).toBe(1);
+    expect(store.getSnapshot().findRowIndex("a")).toBe(1);
+    expect(store.getSnapshot().findRowIndex("b")).toBe(0);
   });
 });

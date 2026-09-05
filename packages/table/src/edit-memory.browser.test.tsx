@@ -148,6 +148,7 @@ test("keeps legacy edit safety chrome without exposing unavailable review comman
       <BrunoTableEditSafetyFooter
         dispatchGridCommand={() => false}
         runtime={editMemory}
+        tableId="TABLE_ID_EDIT_SAFETY_CONFLICT"
         renderReview={() => null}
       />,
     );
@@ -2135,6 +2136,7 @@ test("hosts save failure notifications in the table's owner document", async () 
       <BrunoTableEditSafetyFooter
         dispatchGridCommand={() => false}
         runtime={runtime}
+        tableId="TABLE_ID_EDIT_SAFETY_IFRAME"
         renderReview={() => null}
         renderConflictReview={() => null}
         renderBlockedReview={() => null}

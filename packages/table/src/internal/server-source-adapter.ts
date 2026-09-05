@@ -188,6 +188,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   private readonly listeners = new Set<Listener>();
   private readonly resultRowCountListeners = new Set<Listener>();
   private readonly structureListeners = new Set<Listener>();
+  private readonly metadataListeners = new Set<Listener>();
   private quickFilterFields: readonly string[];
   private projectionFields: readonly string[];
   private completeRawSelect: readonly [string, ...string[]] | undefined;
@@ -233,6 +234,12 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   });
   private publication: BrunoTableRowPipelinePublication<TRow>;
   private structureSnapshot: BrunoTableServerStructureSnapshot;
+  private metadataSnapshot: Readonly<
+    Pick<
+      BrunoTableServerStructureSnapshot,
+      "totalRows" | "generation" | "navigationMode" | "loading"
+    >
+  >;
   private readonly groupedPresentation = new BrunoTableGroupedPresentationCompiler();
   private groupedPresentationIdentity: readonly CompiledColumn[] | undefined;
   private groupedPresentationRevision = 0;
@@ -296,10 +303,11 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
     this.observedStructureVersion = initialStoreSnapshot.structureVersion;
     this.structureSnapshot = createStructureSnapshot(
       this.publication,
-      this.store.findRowIndex,
+      initialStoreSnapshot.findRowIndex,
       this.queryGeneration,
       this.generationNavigationMode,
     );
+    this.metadataSnapshot = metadataFromStructure(this.structureSnapshot);
     this.store.subscribe(this.reconcileStorePublication);
   }
 
@@ -319,6 +327,18 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
 
   public readonly getStructureSnapshot = (): BrunoTableServerStructureSnapshot =>
     this.structureSnapshot;
+
+  public readonly getMetadataSnapshot = (): Readonly<
+    Pick<
+      BrunoTableServerStructureSnapshot,
+      "totalRows" | "generation" | "navigationMode" | "loading"
+    >
+  > => this.metadataSnapshot;
+
+  public readonly subscribeMetadata = (listener: Listener): (() => void) => {
+    this.metadataListeners.add(listener);
+    return () => this.metadataListeners.delete(listener);
+  };
 
   public readonly subscribeStructure = (listener: Listener): (() => void) => {
     this.structureListeners.add(listener);
@@ -945,7 +965,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
               this.groupedPresentation,
               projection.rowsWidth,
               this.store.getSnapshot().rowSpace,
-              this.store.findRowIndex,
+              this.store.getSnapshot().findRowIndex,
               this.setRequiredRange,
               this.queryGeneration,
               this.active === undefined
@@ -1025,7 +1045,7 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
   private reconcileStructureSnapshot(): void {
     const next = createStructureSnapshot(
       this.publication,
-      this.store.findRowIndex,
+      this.store.getSnapshot().findRowIndex,
       this.queryGeneration,
       this.generationNavigationMode,
     );
@@ -1040,8 +1060,27 @@ export class BrunoTableServerRowPipelineAdapter<TRow> {
       return;
     }
     this.structureSnapshot = next;
-    notify(this.structureListeners);
+    const metadataChanged =
+      next.totalRows !== this.metadataSnapshot.totalRows ||
+      next.generation !== this.metadataSnapshot.generation ||
+      next.navigationMode !== this.metadataSnapshot.navigationMode ||
+      next.loading !== this.metadataSnapshot.loading;
+    if (metadataChanged) this.metadataSnapshot = metadataFromStructure(next);
+    notify(
+      metadataChanged
+        ? [...this.metadataListeners, ...this.structureListeners]
+        : this.structureListeners,
+    );
   }
+}
+
+function metadataFromStructure(snapshot: BrunoTableServerStructureSnapshot) {
+  return Object.freeze({
+    totalRows: snapshot.totalRows,
+    generation: snapshot.generation,
+    navigationMode: snapshot.navigationMode,
+    loading: snapshot.loading,
+  });
 }
 
 function createServerGroupedProjectionPublication<TRow>(
@@ -1479,7 +1518,7 @@ function snapshotCompleteRawSelect(candidate: unknown): readonly [string, ...str
   return Object.freeze([first, ...candidate.slice(1)]);
 }
 
-function notify(listeners: ReadonlySet<Listener>): void {
+function notify(listeners: Iterable<Listener>): void {
   let firstError: unknown;
   for (const listener of listeners) {
     try {

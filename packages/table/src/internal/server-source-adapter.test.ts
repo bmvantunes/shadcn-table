@@ -68,6 +68,105 @@ function makeViewport<TRow = Row>() {
 }
 
 describe("BrunoTableServerRowPipelineAdapter", () => {
+  it("notifies structure subscribers even when a metadata subscriber throws", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const request = transport.getRequest()!;
+    request.sink.setRowCount(100);
+    const failure = new Error("metadata subscriber failed");
+    const observedTotals: number[] = [];
+    adapter.subscribeMetadata(() => {
+      throw failure;
+    });
+    adapter.subscribeStructure(() => {
+      observedTotals.push(adapter.getStructureSnapshot().totalRows);
+    });
+    expect(() => request.sink.setRowCount(200, true)).toThrow(failure);
+    expect(observedTotals).toEqual([200]);
+    expect(adapter.getMetadataSnapshot().totalRows).toBe(200);
+  });
+
+  it("isolates query metadata from immutable sparse identity publications", () => {
+    const transport = makeViewport();
+    const adapter = new BrunoTableServerRowPipelineAdapter<Row>(
+      columns,
+      undefined,
+      [],
+      query.orderBy,
+      completeRawSelect,
+    );
+    adapter.reconcileSource({
+      viewport: transport.viewport,
+      completeRawSelect,
+      totalRows: 100,
+      version: 1,
+      status: "ready",
+    });
+    adapter.replace(transport.viewport, query);
+    const request = transport.getRequest()!;
+    request.sink.setRowCount(100);
+    adapter.setRequiredRange(0, 3);
+    request.sink.setRowData(
+      { 0: { symbol: "A", price: 1 }, 1: { symbol: "B", price: 2 }, 2: { symbol: "C", price: 3 } },
+      { 0: "a", 1: "b", 2: "c" },
+    );
+    const metadata = adapter.getMetadataSnapshot();
+    const originalIdentities = adapter.getStructureSnapshot();
+    const onMetadata = vi.fn();
+    const onIdentity = vi.fn();
+    const removeMetadata = adapter.subscribeMetadata(onMetadata);
+    const removeIdentity = adapter.subscribeStructure(onIdentity);
+    try {
+      adapter.setRequiredRange(1, 4);
+      const retainedIdentities = adapter.getStructureSnapshot();
+      expect(retainedIdentities.getRowId(0)).toBeUndefined();
+      expect(retainedIdentities.getRowId(1)).toBe("b");
+      expect(originalIdentities.findRowIndex("a")).toBe(0);
+      expect(retainedIdentities.findRowIndex("a")).toBeUndefined();
+      request.sink.setRowData({ 3: { symbol: "D", price: 4 } }, { 3: "d" });
+      expect(adapter.getStructureSnapshot().getRowId(3)).toBe("d");
+      expect(originalIdentities.getRowId(0)).toBe("a");
+      expect(originalIdentities.getRowId(3)).toBeUndefined();
+      expect(retainedIdentities.getRowId(3)).toBeUndefined();
+      expect(originalIdentities.findRowIndex("d")).toBeUndefined();
+      expect(retainedIdentities.findRowIndex("d")).toBeUndefined();
+      expect(adapter.getStructureSnapshot().findRowIndex("d")).toBe(3);
+      expect(onIdentity).toHaveBeenCalledTimes(2);
+      expect(onMetadata).not.toHaveBeenCalled();
+      expect(adapter.getMetadataSnapshot()).toBe(metadata);
+      request.sink.setRowCount(200, true);
+      expect(onMetadata).toHaveBeenCalledOnce();
+      expect(adapter.getMetadataSnapshot().totalRows).toBe(200);
+      const beforeQuery = adapter.getMetadataSnapshot();
+      adapter.replace(transport.viewport, {
+        ...query,
+        orderBy: [{ columnId: "COL_ID_SYMBOL", direction: "desc" }],
+      });
+      expect(adapter.getMetadataSnapshot().generation).not.toBe(beforeQuery.generation);
+      expect(onMetadata.mock.calls.length).toBeGreaterThan(1);
+      expect(originalIdentities.findRowIndex("a")).toBe(0);
+      expect(retainedIdentities.findRowIndex("b")).toBe(1);
+      expect(adapter.getStructureSnapshot().findRowIndex("b")).toBeUndefined();
+    } finally {
+      removeMetadata();
+      removeIdentity();
+    }
+  });
+
   it("rejects unsupported Server arithmetic before construction or column reconciliation", () => {
     const unsupportedColumns = compileColumns([
       {
