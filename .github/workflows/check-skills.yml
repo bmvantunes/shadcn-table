@@ -1,0 +1,223 @@
+# check-skills.yml — Drop this into your library repo's .github/workflows/
+#
+# Validates intent skills on PRs. After a release or manual run, opens or
+# updates one review PR when existing skills, artifact coverage, or workspace
+# package coverage need review.
+#
+# Triggers: pull requests touching skills/artifacts, new release published, or
+# manual workflow_dispatch.
+#
+# intent-workflow-version: 3
+#
+# Template variables (replaced by `intent setup`):
+#   shadcn-table — e.g. @tanstack/query or my-workspace workspace
+
+name: Check Skills
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/check-skills.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "skills/**"
+      - "**/skills/**"
+      - "_artifacts/**"
+      - "**/_artifacts/**"
+      - "packages/*/package.json"
+      - "packages/table/README.md"
+      - "packages/table/src/**"
+      - "packages/table/tsconfig*.json"
+      - "packages/shadcn/src/**"
+      - "tsconfig.json"
+      - "packages/table/scripts/agent-skills-contract.mjs"
+      - "packages/table/scripts/agent-skills-contract.test.mjs"
+      - "packages/table/scripts/assert-agent-skills-package.mjs"
+      - "packages/table/scripts/assert-build-output.mjs"
+      - "packages/table/scripts/assert-intent-discovery.mjs"
+      - "packages/table/scripts/assert-intent-staleness.mjs"
+      - "docs/grid/**"
+      - "docs/adr/**"
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Check current Intent compatibility
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Validate with current Intent
+        run: pnpm dlx @tanstack/intent@latest validate packages/table/skills --check --github-summary
+
+      - name: Discover and load workspace skills with current Intent
+        run: |
+          pnpm dlx @tanstack/intent@latest list --json > "$RUNNER_TEMP/intent-list.json"
+          pnpm dlx @tanstack/intent@latest load @bruno/table#define-columns --json > "$RUNNER_TEMP/intent-load.json"
+          node packages/table/scripts/assert-intent-discovery.mjs \
+            "$RUNNER_TEMP/intent-list.json" \
+            "$RUNNER_TEMP/intent-load.json"
+
+  validate:
+    name: Validate authoritative skill contracts
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install lockfile-pinned workspace without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify staleness, package contents, and safe consumer discovery
+        run: pnpm run test:skills
+
+      - name: Compile the public API contracts taught by the skills
+        run: |
+          pnpm --filter @bruno/shadcn run build
+          pnpm --filter @bruno/table run test:types:source
+
+  review-state:
+    name: Analyze intent skill coverage
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+    outputs:
+      has_review: ${{ steps.stale.outputs.has_review }}
+      pr_body_base64: ${{ steps.payload.outputs.pr_body_base64 }}
+      review_items_base64: ${{ steps.payload.outputs.review_items_base64 }}
+      review_branch: ${{ steps.review-branch.outputs.branch }}
+      review_version: ${{ steps.review-branch.outputs.version }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Check skills
+        id: stale
+        run: |
+          pnpm dlx @tanstack/intent@latest stale --github-review --package-label "shadcn-table"
+
+      - name: Choose a fresh review branch
+        id: review-branch
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || 'manual' }}
+        run: |
+          VERSION="$(printf '%s' "$RELEASE_TAG" | tr -c 'A-Za-z0-9_-' '-')"
+          if [ -z "$VERSION" ]; then VERSION="manual"; fi
+          VERSION="${VERSION:0:100}"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'branch=skills/review-%s-%s-%s\n' "$VERSION" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Export inert review payload
+        id: payload
+        run: |
+          printf 'review_items_base64=' >> "$GITHUB_OUTPUT"
+          base64 -w 0 review-items.json >> "$GITHUB_OUTPUT"
+          printf '\n' >> "$GITHUB_OUTPUT"
+          printf 'pr_body_base64=' >> "$GITHUB_OUTPUT"
+          if [ -f pr-body.md ]; then base64 -w 0 pr-body.md >> "$GITHUB_OUTPUT"; fi
+          printf '\n' >> "$GITHUB_OUTPUT"
+
+  review:
+    name: Publish intent skill review
+    needs: review-state
+    concurrency:
+      group: ${{ needs.review-state.outputs.review_branch }}
+      cancel-in-progress: false
+    if: github.event_name != 'pull_request' && needs.review-state.outputs.has_review == 'true'
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Materialize inert review payload
+        env:
+          PR_BODY_BASE64: ${{ needs.review-state.outputs.pr_body_base64 }}
+          REVIEW_ITEMS_BASE64: ${{ needs.review-state.outputs.review_items_base64 }}
+        run: |
+          printf '%s' "$PR_BODY_BASE64" | base64 --decode > "$RUNNER_TEMP/pr-body.md"
+          printf '%s' "$REVIEW_ITEMS_BASE64" | base64 --decode > "$RUNNER_TEMP/review-items.json"
+          test -s "$RUNNER_TEMP/pr-body.md"
+          test -s "$RUNNER_TEMP/review-items.json"
+
+      - name: Open review PR
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.review-state.outputs.review_version }}
+          BRANCH: ${{ needs.review-state.outputs.review_branch }}
+        run: |
+          git check-ref-format --branch "$DEFAULT_BRANCH" >/dev/null
+          git check-ref-format --branch "$BRANCH" >/dev/null
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
+
+          git fetch origin "$BRANCH" || true
+          if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+            git commit --allow-empty -m "chore: review intent skills for ${VERSION}"
+            git push origin "$BRANCH"
+          fi
+
+          # Every run attempt owns a fresh branch; never select a fork's same-named PR.
+          gh pr create \
+            --title "Review intent skills (${VERSION})" \
+            --body-file "$RUNNER_TEMP/pr-body.md" \
+            --head "$BRANCH" \
+            --base "$DEFAULT_BRANCH"

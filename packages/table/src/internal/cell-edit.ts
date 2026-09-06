@@ -3208,8 +3208,8 @@ export class BrunoTableCellEditRuntime {
       if (this.draftReviewSubscriberCount > 0) {
         this.publishDraftReview(nextDrafts, new Set(historyPatches.keys()));
       }
-      for (const patch of historyPatches.values()) {
-        if (this.cellStores.size > 0) this.publishCell(patch.cellKey, nextDrafts);
+      if (this.cellStores.size > 0) {
+        for (const patch of historyPatches.values()) this.publishCell(patch.cellKey, nextDrafts);
       }
       this.publishActivitySnapshot();
       if (firstCommittedChange !== undefined) {
@@ -3233,8 +3233,9 @@ export class BrunoTableCellEditRuntime {
           if (this.draftReviewSubscriberCount > 0) {
             this.publishDraftReview(previousDrafts, new Set(historyPatches.keys()));
           }
-          for (const patch of historyPatches.values()) {
-            if (this.cellStores.size > 0) this.publishCell(patch.cellKey, previousDrafts);
+          if (this.cellStores.size > 0) {
+            for (const patch of historyPatches.values())
+              this.publishCell(patch.cellKey, previousDrafts);
           }
           this.publishActivitySnapshot();
           return;
@@ -4579,9 +4580,13 @@ export class BrunoTableCellEditRuntime {
     this.clearSupersededRejectedOperations(command.patches.keys());
     batch(() => {
       this.setDraftMemory(nextDrafts, nextUndoStack, nextRedoStack, command.patches.keys());
-      this.publishDraftReview(nextDrafts, new Set(command.patches.keys()));
+      if (this.draftReviewSubscriberCount > 0) {
+        this.publishDraftReview(nextDrafts, new Set(command.patches.keys()));
+      }
       for (const patch of command.patches.values()) {
-        this.invalidateDraftCell(patch.cellKey, false);
+        const entry = patch.after ?? patch.before;
+        if (entry !== undefined) this.traversalIndex.invalidateCell(entry.rowId, entry.columnId);
+        else this.invalidateDraftCell(patch.cellKey, false);
         if (this.cellStores.size > 0) this.publishCell(patch.cellKey, nextDrafts);
       }
       this.publishActivitySnapshot();

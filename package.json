@@ -6,11 +6,13 @@
     "test": "vp test",
     "test:browser": "vp test --project browser --project table-browser --run",
     "test:browser:performance": "vp run @bruno/table#test:browser:performance",
+    "test:skills": "vp run @bruno/table#test:skills",
     "check": "vp check",
     "prepare": "vp config"
   },
   "devDependencies": {
-    "@tanstack/intent": "^0.3.6",
+    "@bruno/table": "workspace:*",
+    "@tanstack/intent": "^0.3.8",
     "@types/node": "^26.1.1",
     "bumpp": "^11.1.0",
     "oxc-transform-react": "^0.145.0",
@@ -24,5 +26,16 @@
       "version": "11.18.0",
       "onFail": "download"
     }
+  },
+  "intent": {
+    "skills": [
+      "workspace:@bruno/table",
+      "@tanstack/react-table",
+      "@tanstack/table-core"
+    ],
+    "exclude": [
+      "@tanstack/table-core#pagination",
+      "@tanstack/table-core#row-pinning"
+    ]
   }
 }

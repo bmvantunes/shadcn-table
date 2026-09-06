@@ -435,7 +435,15 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       }
     }
   };
-  populateRetainedHistory(historyReconciliationRuntime);
+  let retainedHistoryPrepared = false;
+  const prepareRetainedHistory = (): void => {
+    if (retainedHistoryPrepared) return;
+    populateRetainedHistory(historyReconciliationRuntime);
+    if (historyReconciliationRuntime.getActivitySnapshot().undoCount !== 100) {
+      throw new Error("Retained-history scenarios require all 100 commands.");
+    }
+    retainedHistoryPrepared = true;
+  };
   let retainedConflictIndex = 0;
   const retainedConflictSamples: number[] = [];
   bench(
@@ -474,6 +482,7 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
       time: 0,
       warmupIterations: 0,
       warmupTime: 0,
+      setup: prepareRetainedHistory,
       teardown: () => {
         for (let index = 0; index < retainedConflictIndex; index += 1) {
           historySourceRows.set(
@@ -511,7 +520,13 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         throw new Error("One-cell convergence changed unrelated retained drafts.");
       }
     },
-    { iterations: 100, time: 0, warmupIterations: 0, warmupTime: 0 },
+    {
+      iterations: 100,
+      time: 0,
+      warmupIterations: 0,
+      warmupTime: 0,
+      setup: prepareRetainedHistory,
+    },
   );
 
   let equivalentColumnIndex = 0;
@@ -536,7 +551,13 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         throw new Error("Equivalent column recompilation read retained Row Identities.");
       }
     },
-    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+    {
+      iterations: 100,
+      time: 0,
+      warmupIterations: 2,
+      warmupTime: 0,
+      setup: prepareRetainedHistory,
+    },
   );
 
   let permissionRevoked = false;
@@ -568,7 +589,13 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         throw new Error("Static permission recompilation changed retained command count.");
       }
     },
-    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+    {
+      iterations: 100,
+      time: 0,
+      warmupIterations: 2,
+      warmupTime: 0,
+      setup: prepareRetainedHistory,
+    },
   );
 
   const massSourceConvergenceSamples: number[] = [];

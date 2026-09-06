@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "library_version": "0.0.0",
+  "skills": {
+    "choose-row-model": {
+      "skill_version": "1.0.0",
+      "sources_sha": {
+        "bmvantunes/shadcn-table:docs/adr/0002-expose-client-and-server-table-variants.md": "a86231d876bf7846558d2f2627c68d0b8e9d00cdcce417f67931d7bbc0bff8b6",
+        "bmvantunes/shadcn-table:docs/grid/requirements.md": "4a5d9e424762e50abbb89a8241f689660346134c19c99dcd815d80e5f0d638b0",
+        "bmvantunes/shadcn-table:docs/grid/server-viewport-model.md": "82c479400429495e2bbb22db7b0a8f85771ef2c2ab3090074a5c04cabb78d2a2",
+        "bmvantunes/shadcn-table:packages/table/README.md": "230592a4af6957c6d90c8fd3a75d266544001d1bb220c897a08334443c73035c"
+      }
+    },
+    "define-columns": {
+      "skill_version": "1.0.0",
+      "sources_sha": {
+        "bmvantunes/shadcn-table:docs/grid/research/reui-data-grid-patterns.md": "3ed0a4f42d68ed6ee7a95cce17a88ac072a67fc3b5c0197bc67fb0adbd725a9f",
+        "bmvantunes/shadcn-table:docs/grid/research/strict-column-api-prototype.md": "fb5c1aeb6d4ad5c3cb2331b50ce3dfa9eed12fd8585085167d01d85033ba70b5",
+        "bmvantunes/shadcn-table:docs/adr/0001-require-explicit-column-identity.md": "b99de7f60303776eeb01171c404ad9e870fed6b09984b81e9a20dc981f3976c5",
+        "bmvantunes/shadcn-table:docs/grid/public-api-design.md": "20a6f3c3683e999471fd0d64d154d70b627a9adf6c193e972de668323201ea63",
+        "bmvantunes/shadcn-table:packages/table/README.md": "230592a4af6957c6d90c8fd3a75d266544001d1bb220c897a08334443c73035c"
+      }
+    },
+    "edit-cells": {
+      "skill_version": "1.0.0",
+      "sources_sha": {
+        "bmvantunes/shadcn-table:docs/grid/requirements.md": "4a5d9e424762e50abbb89a8241f689660346134c19c99dcd815d80e5f0d638b0",
+        "bmvantunes/shadcn-table:docs/adr/0032-project-edit-review-rows-through-a-consumer-seam.md": "f60ac7238d1668f7882d26fc089aee666a13c387dbc166028115715b9a6c0be4",
+        "bmvantunes/shadcn-table:docs/grid/research/editable-safety-ui-prototype.md": "1e8dfc7a6ed32fb7bb03eb92ca3f461d13ba3498575ea7d6510d16a5749523e4",
+        "bmvantunes/shadcn-table:docs/adr/0021-use-repetition-only-drag-fill.md": "fadcf195f4a02ae9a5ee89c9ca2b342ff7232f121cc66bdeb5b08c94e1e548b0",
+        "bmvantunes/shadcn-table:docs/adr/0022-reconcile-void-save-operations-through-live-source.md": "cf7485c9be9575e8fc67f3ae01c874ff461ad2d931214b30ef2a0806ac26eef1",
+        "bmvantunes/shadcn-table:docs/grid/editing-and-conflicts.md": "a1266f24975b12043157b4e4017efa303dea44c83e14a39e2822268a38cea247",
+        "bmvantunes/shadcn-table:packages/table/README.md": "230592a4af6957c6d90c8fd3a75d266544001d1bb220c897a08334443c73035c"
+      }
+    }
+  }
+}

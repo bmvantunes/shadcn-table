@@ -8,6 +8,7 @@ import { transformSync } from "oxc-transform-react";
 import { parseAstAsync } from "vite";
 
 import { assertReactCompilerStrictness } from "../../../config/react-compiler-options.mjs";
+import { BRUNO_TABLE_PACKAGED_SKILL_FILES } from "./agent-skills-contract.mjs";
 
 assertReactCompilerStrictness(transformSync);
 
@@ -762,8 +763,15 @@ if (
   throw new Error("The private export-target validator failed its nested-condition smoke check.");
 }
 
-if (JSON.stringify(packageJson.files) !== JSON.stringify(["dist"])) {
-  throw new Error("The @bruno/table package must publish its complete dist directory.");
+if (JSON.stringify(packageJson.files) !== JSON.stringify(["dist", "skills"])) {
+  throw new Error(
+    "The @bruno/table package must publish its complete dist and Agent Skill directories.",
+  );
+}
+if (
+  JSON.stringify(packageJson.intent?.resources) !== JSON.stringify(BRUNO_TABLE_PACKAGED_SKILL_FILES)
+) {
+  throw new Error("The @bruno/table package must declare every reviewed Agent Skill resource.");
 }
 
 await assertPackedConsumers();

@@ -65,6 +65,27 @@ afterEach(() => {
 });
 
 describe("BrunoTable Cell Edit Session", () => {
+  it("opens a current draft review after unsubscribed undo and redo and keeps it live", () => {
+    const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
+    expect(runtime.start("row-1", "COL_ID_SCORE")).toBe(true);
+    expect(runtime.commit("7")).toBe(true);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.redoBatchDraft()).toBe(true);
+
+    const unsubscribe = runtime.subscribeDraftReview(() => undefined);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { rowId: "row-1", columnId: "COL_ID_SCORE", mine: 7 },
+    ]);
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toEqual([]);
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.getDraftReviewSnapshot()).toMatchObject([
+      { rowId: "row-1", columnId: "COL_ID_SCORE", mine: 7 },
+    ]);
+    unsubscribe();
+  });
+
   it("records bounded Batch draft history and retains redo intent at zero drafts", () => {
     const runtime = new BrunoTableCellEditRuntime({ columns, getRow: () => row });
     runtime.setBatchHistoryEnabled(true);
@@ -4343,6 +4364,7 @@ describe("BrunoTable Cell Edit Session", () => {
       },
     ]);
     const runtime = new BrunoTableCellEditRuntime({ columns: draftColumns, getRow: () => row });
+    runtime.setBatchHistoryEnabled(true);
     const traversalInvalidation = vi.fn();
     const unsubscribeTraversal = runtime.subscribeTraversalInvalidation(traversalInvalidation);
     runtime.reconcileTraversal(draftColumns, {
@@ -4364,8 +4386,12 @@ describe("BrunoTable Cell Edit Session", () => {
     expect(traversalInvalidation).toHaveBeenCalledOnce();
     expect(runtime.findTraversalDestination(0, "COL_ID_START", 1)).toBeUndefined();
     expect(runtime.findRangeTraversalDestination(range, row.id, "COL_ID_START", 1)).toBeUndefined();
+    expect(runtime.undoBatchDraft()).toBe(true);
+    expect(runtime.findTraversalDestination(0, "COL_ID_START", 1)?.columnId).toBe("COL_ID_SCORE");
+    expect(runtime.redoBatchDraft()).toBe(true);
+    expect(runtime.findTraversalDestination(0, "COL_ID_START", 1)).toBeUndefined();
     runtime.reconcileTraversalRows(undefined);
-    expect(traversalInvalidation).toHaveBeenCalledTimes(2);
+    expect(traversalInvalidation).toHaveBeenCalledTimes(4);
     unsubscribeTraversal();
     runtime.dispose();
   });
