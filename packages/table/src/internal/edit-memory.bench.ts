@@ -74,6 +74,16 @@ function recordBudgetSample(
   });
 }
 
+function collectBenchmarkGarbage(): void {
+  const collect = (globalThis as typeof globalThis & { readonly gc?: () => void }).gc;
+  if (collect === undefined) {
+    throw new Error(
+      "Edit-memory benchmarks require --expose-gc; run the package test:bench:cell-edit script.",
+    );
+  }
+  collect();
+}
+
 describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", () => {
   const applySamples: number[] = [];
   const undoSamples: number[] = [];
@@ -159,7 +169,7 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
         throw new Error("One-row Save reconciliation retained its Immediate lock.");
       }
     },
-    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0 },
+    { iterations: 100, time: 0, warmupIterations: 2, warmupTime: 0, throws: true },
   );
 
   const rejectedRows = new Map(saveRows);
@@ -564,39 +574,52 @@ describe("BrunoTable sparse edit-memory benchmark (8.33 ms/120 Hz reference)", (
   const massSourceConvergenceSamples: number[] = [];
   const massSourceConvergenceTargets: BrunoTableCellEditRuntime[] = [];
   const massSourceConvergenceSampleCount = 3;
+  let massSourceConvergenceCalibration = true;
+  const prepareMassSourceConvergenceTarget = (): BrunoTableCellEditRuntime => {
+    const target = new BrunoTableCellEditRuntime({
+      columns,
+      getRow: (rowId) => historySourceRows.get(rowId),
+    });
+    target.setBatchHistoryEnabled(true);
+    populateRetainedHistory(target);
+    return target;
+  };
   bench(
     "clears one 5,000-cell source convergence from 100 retained commands within one frame",
     () => {
       const target = massSourceConvergenceTargets.shift();
-      if (target === undefined) {
-        throw new Error("Mass source-convergence benchmark exhausted its prepared fixture.");
+      if (target === undefined) throw new Error("Mass convergence fixture was not prepared.");
+      const calibration = massSourceConvergenceCalibration;
+      massSourceConvergenceCalibration = false;
+      try {
+        const startedAt = performance.now();
+        target.reconcileSourceRows(undefined);
+        const elapsedMs = performance.now() - startedAt;
+        if (!calibration) massSourceConvergenceSamples.push(elapsedMs);
+        assertBrunoTableBenchmarkBudget(
+          "5,000-identity retained-history source convergence",
+          massSourceConvergenceSamples,
+          {
+            budgetMs: referenceFrameBudgetMs,
+            measuredSampleCount: massSourceConvergenceSampleCount,
+            warmupSampleCount: 0,
+          },
+        );
+        expectCleanMassConvergence(target);
+      } finally {
+        target.dispose();
       }
-      const startedAt = performance.now();
-      target.reconcileSourceRows(undefined);
-      massSourceConvergenceSamples.push(performance.now() - startedAt);
-      assertBrunoTableBenchmarkBudget(
-        "5,000-identity retained-history source convergence",
-        massSourceConvergenceSamples,
-        {
-          budgetMs: referenceFrameBudgetMs,
-          measuredSampleCount: massSourceConvergenceSampleCount,
-          warmupSampleCount: 0,
-        },
-      );
-      expectCleanMassConvergence(target);
-      target.dispose();
     },
     {
-      setup: () => {
-        for (let index = 0; index <= massSourceConvergenceSampleCount; index += 1) {
-          const target = new BrunoTableCellEditRuntime({
-            columns,
-            getRow: (rowId) => historySourceRows.get(rowId),
-          });
-          target.setBatchHistoryEnabled(true);
-          populateRetainedHistory(target);
-          massSourceConvergenceTargets.push(target);
+      setup: (_task, mode) => {
+        // Tinybench 2.9 probes the callback once before each phase, outside its timer.
+        massSourceConvergenceCalibration = true;
+        massSourceConvergenceSamples.length = 0;
+        const targetCount = mode === "run" ? massSourceConvergenceSampleCount + 1 : 1;
+        for (let index = 0; index < targetCount; index += 1) {
+          massSourceConvergenceTargets.push(prepareMassSourceConvergenceTarget());
         }
+        collectBenchmarkGarbage();
       },
       teardown: () => {
         for (const target of massSourceConvergenceTargets) target.dispose();

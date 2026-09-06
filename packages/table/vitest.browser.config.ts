@@ -40,7 +40,14 @@ export default defineConfig({
   test: {
     name: "table-browser",
     include: ["src/**/*.browser.test.tsx"],
-    benchmark: { include: ["src/**/*.browser.bench.tsx"] },
+    exclude: [
+      "src/**/*.performance.browser.test.tsx",
+      "src/drag-fill-performance.browser.test.tsx",
+    ],
+    benchmark: {
+      include: ["src/**/*.browser.bench.tsx"],
+      reporters: ["default", "./scripts/benchmark-completeness.ts"],
+    },
     setupFiles: ["./src/vitest.browser.setup.ts"],
     browser: {
       enabled: true,

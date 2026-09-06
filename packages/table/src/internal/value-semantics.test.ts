@@ -230,6 +230,67 @@ describe("compiled Column Value Semantics", () => {
     );
   });
 
+  it("uses compiled Select indexes without runtime find or indexOf calls", () => {
+    const options = Array.from({ length: 32 }, (_unused, index) => `option-${String(index)}`) as [
+      string,
+      ...string[],
+    ];
+    const [compiled] = compileColumns([
+      BrunoTableSelectColumn({
+        columnId: "COL_ID_STATUS",
+        field: "status",
+        headerName: "Status",
+        options,
+      }),
+    ] satisfies BrunoTableColumns<Readonly<{ readonly status: string }>>);
+    const semantics = compiled!.semantics;
+    const first = options[0];
+    const last = options[31];
+    if (first === undefined || last === undefined) throw new Error("Select fixture is incomplete.");
+
+    const find = vi.spyOn(Array.prototype, "find");
+    const indexOf = vi.spyOn(Array.prototype, "indexOf");
+    let findCallCount = 0;
+    let indexOfCallCount = 0;
+    let observed:
+      | Readonly<{
+          readonly comparison: number;
+          readonly equivalent: boolean;
+          readonly canonicalText: string;
+          readonly display: string;
+          readonly parsed: unknown;
+          readonly decoded: unknown;
+        }>
+      | undefined;
+    try {
+      const persisted = semantics.encodePersisted(last);
+      observed = {
+        comparison: semantics.compare(first, last),
+        equivalent: semantics.equivalent(first, first),
+        canonicalText: semantics.formatCanonicalText(last),
+        display: semantics.formatDisplay(first),
+        parsed: semantics.parseCanonicalText(last),
+        decoded: semantics.decodePersisted(persisted),
+      };
+    } finally {
+      findCallCount = find.mock.calls.length;
+      indexOfCallCount = indexOf.mock.calls.length;
+      find.mockRestore();
+      indexOf.mockRestore();
+    }
+
+    expect(findCallCount).toBe(0);
+    expect(indexOfCallCount).toBe(0);
+    expect(observed).toEqual({
+      comparison: -1,
+      equivalent: true,
+      canonicalText: last,
+      display: first,
+      parsed: { _tag: "Success", value: last },
+      decoded: { _tag: "Success", value: last },
+    });
+  });
+
   it("keeps field-only preset defaults out of computed columns", () => {
     const preset = BrunoTableNumberColumn.withDefaults({
       headerName: "Price",

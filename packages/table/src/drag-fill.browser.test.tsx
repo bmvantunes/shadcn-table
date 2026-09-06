@@ -4,7 +4,7 @@ import { cleanup, render } from "vitest-browser-react";
 
 import { BrunoTableClient } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
-import type { BrunoTableColumns } from "./public-types";
+import type { BrunoTableColumns, BrunoTableSaveEditsHandler } from "./public-types";
 
 type Row = Readonly<{
   readonly id: string;
@@ -136,6 +136,129 @@ test("repeats an editable Client linear range through one Batch Drag Fill gestur
   expect(onSaveEdits).not.toHaveBeenCalled();
 });
 
+test("releases Drag Fill against native scroll before the next viewport publication", async () => {
+  const sourceRows = Array.from({ length: 100 }, (_, index) => ({
+    ...rows[0]!,
+    id: `row-${index}`,
+    first: String(index).padStart(3, "0"),
+  }));
+  const onSaveEdits = vi.fn<BrunoTableSaveEditsHandler<Row, typeof columns, bigint>>(() =>
+    Promise.resolve(),
+  );
+  const screen = await render(
+    <BrunoTableClient<Row, typeof columns, (row: Row) => bigint>
+      tableId="TABLE_ID_DRAG_FILL_NATIVE_RELEASE"
+      columns={columns}
+      initialOrderBy={[{ columnId: "COL_ID_FIRST", direction: "asc" }]}
+      clientSource={{ rows: sourceRows, totalRows: sourceRows.length, version: 1, status: "ready" }}
+      getRowId={(row) => row.id}
+      editable
+      getRowVersion={(row) => row.revision}
+      onSaveEdits={onSaveEdits}
+    />,
+  );
+  const grid = screen.getByRole("grid").element() as HTMLElement;
+  grid.focus();
+  await settleBrunoTableBrowserFrames();
+  const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]");
+  expect(handle).not.toBeNull();
+  const destination = centerOf(
+    screen.getByRole("gridcell", { name: "001", exact: true }).element(),
+  );
+  handle!.dispatchEvent(pointer("pointerdown", 94, centerOf(handle!)));
+  // No frame may publish between native movement and release at the captured grid.
+  grid.scrollTop = 36;
+  grid.dispatchEvent(pointer("pointerup", 94, destination));
+  await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledTimes(1));
+  expect(onSaveEdits.mock.calls[0]![0].map((change) => change.rowId).toSorted()).toEqual([
+    "row-1",
+    "row-2",
+  ]);
+});
+
+test("releases horizontal Drag Fill at the native boundary with Row Selection", async () => {
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const screen = await render(
+    <div style={{ width: 240 }}>
+      <BrunoTableClient
+        tableId="TABLE_ID_DRAG_FILL_SELECTION_RELEASE"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_FIRST", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        rowSelection
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={onSaveEdits}
+      />
+    </div>,
+  );
+  const grid = screen.getByRole("grid").element() as HTMLElement;
+  grid.focus();
+  await userEvent.keyboard("{ArrowRight}{Shift>}{ArrowRight}{/Shift}");
+  await settleBrunoTableBrowserFrames();
+  const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]");
+  expect(handle).not.toBeNull();
+  const y = centerOf(screen.getByRole("gridcell", { name: "alpha", exact: true }).element()).y;
+  handle!.dispatchEvent(pointer("pointerdown", 194, centerOf(handle!)));
+  grid.scrollLeft = grid.scrollWidth;
+  grid.dispatchEvent(pointer("pointerup", 194, { x: grid.getBoundingClientRect().right - 50, y }));
+  await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledTimes(1));
+  await expect
+    .element(screen.getByRole("gridcell", { name: "fourth", exact: true }))
+    .not.toBeInTheDocument();
+});
+
+test.each([
+  "release",
+  "direction",
+  "ancestor-direction",
+  "ancestor-scroll",
+  "resize",
+  "element-resize",
+] as const)("cancels Drag Fill when the grid moves before %s", async (cause) => {
+  const onSaveEdits = vi.fn(() => Promise.resolve());
+  const screen = await render(
+    <div style={{ width: 480 }}>
+      <BrunoTableClient
+        tableId="TABLE_ID_DRAG_FILL_MOVED_RELEASE"
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_FIRST", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={onSaveEdits}
+      />
+    </div>,
+  );
+  const grid = screen.getByRole("grid").element() as HTMLElement;
+  grid.focus();
+  await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+  await settleBrunoTableBrowserFrames();
+  const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]");
+  expect(handle).not.toBeNull();
+  const destination = screen.getByRole("gridcell", { name: "fourth", exact: true }).element();
+  handle!.dispatchEvent(pointer("pointerdown", 95, centerOf(handle!)));
+  destination.dispatchEvent(pointer("pointermove", 95, centerOf(destination)));
+  await settleBrunoTableBrowserFrames();
+  // Layout can change without a pointer frame or a resize notification being delivered.
+  if (cause === "direction") grid.style.direction = "rtl";
+  else if (cause === "ancestor-direction") grid.parentElement!.style.direction = "rtl";
+  else grid.style.transform = "translateY(36px)";
+  if (cause !== "release" && cause !== "direction" && cause !== "ancestor-direction") {
+    if (cause === "ancestor-scroll") document.dispatchEvent(new Event("scroll"));
+    else if (cause === "element-resize") grid.style.width = "300px";
+    else window.dispatchEvent(new Event("resize"));
+    await settleBrunoTableBrowserFrames();
+    expect(grid.querySelector("[data-bruno-drag-fill-preview]")).toBeNull();
+  }
+  destination.dispatchEvent(pointer("pointerup", 95, centerOf(destination)));
+  await settleBrunoTableBrowserFrames();
+  expect(onSaveEdits).not.toHaveBeenCalled();
+  await expect.element(screen.getByRole("gridcell", { name: "fourth", exact: true })).toBeVisible();
+});
+
 test("keeps Drag Fill layout reads out of the hot pointer frame", async () => {
   await render(
     <div style={{ width: 320 }}>
@@ -168,6 +291,7 @@ test("keeps Drag Fill layout reads out of the hot pointer frame", async () => {
   handle!.dispatchEvent(pointer("pointerdown", 92, handleCenter));
 
   const gridBoundsRead = vi.spyOn(gridElement, "getBoundingClientRect");
+  const pointHitRead = vi.spyOn(document, "elementFromPoint");
   const selectorRead = vi.spyOn(gridElement, "querySelectorAll");
   const directionRead = vi.spyOn(window, "getComputedStyle");
   fourth.dispatchEvent(
@@ -178,7 +302,8 @@ test("keeps Drag Fill layout reads out of the hot pointer frame", async () => {
   );
   await settleBrunoTableBrowserFrames();
 
-  expect(gridBoundsRead).toHaveBeenCalledTimes(1);
+  expect(gridBoundsRead).not.toHaveBeenCalled();
+  expect(pointHitRead).not.toHaveBeenCalled();
   expect(
     selectorRead.mock.calls.some(([selector]) =>
       String(selector).includes("COL_ID_BRUNO_TABLE_ROW_SELECTION"),

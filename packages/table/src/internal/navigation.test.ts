@@ -57,6 +57,10 @@ describe("BrunoTableNavigationRuntime", () => {
       columnId: "COL_ID_NAME",
     });
     expect(navigation.installCommittedQuery(1, "projection-reset", ["next"], columns)).toBe(false);
+    // A later restore still requests the adapter's viewport reset/publication.
+    expect(navigation.installCommittedQuery(2, "restore", ["restored-again"], columns)).toBe(true);
+    expect(navigation.getSnapshot()).toBeUndefined();
+    expect(navigation.installCommittedQuery(2, "restore", ["restored-again"], columns)).toBe(false);
   });
 
   it("applies a first commanded projection reset exactly once", () => {

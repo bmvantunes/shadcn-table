@@ -32,6 +32,7 @@ import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit";
 import type { BrunoTableGridCommand } from "./column-management";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 import { recordBrunoTableReviewCellSubscription } from "./grid-subscription-instrumentation";
+import { recordBrunoTableClientEditFooterRender } from "./render-instrumentation";
 import { BrunoTableRowSelectionRuntime } from "./row-selection";
 
 type SaveFailureToasterOwner = object;
@@ -1038,6 +1039,7 @@ type BrunoTableEditSafetyFooterProps = Readonly<{
   readonly renderReview: (rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode;
   readonly renderConflictReview?: BrunoTableConflictReviewRenderer | undefined;
   readonly renderBlockedReview?: BrunoTableBlockedReviewRenderer | undefined;
+  readonly tableId: string;
 }>;
 
 export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafetyFooterProps> =
@@ -1047,7 +1049,11 @@ export const BrunoTableEditSafetyFooter: NamedExoticComponent<BrunoTableEditSafe
     renderReview,
     renderConflictReview,
     renderBlockedReview,
+    tableId,
   }: BrunoTableEditSafetyFooterProps): ReactElement {
+    if (__BRUNO_TABLE_TEST_DIAGNOSTICS__) {
+      recordBrunoTableClientEditFooterRender(tableId);
+    }
     return (
       <footer
         aria-label="Edit safety"

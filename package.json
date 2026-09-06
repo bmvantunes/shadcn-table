@@ -5,6 +5,7 @@
   "scripts": {
     "test": "vp test",
     "test:browser": "vp test --project browser --project table-browser --run",
+    "test:browser:performance": "vp run @bruno/table#test:browser:performance",
     "check": "vp check",
     "prepare": "vp config"
   },

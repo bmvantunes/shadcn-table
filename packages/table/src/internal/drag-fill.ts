@@ -427,6 +427,14 @@ type DragFillRegistration = Readonly<{
   ) => BrunoTableDragFillApplyResult;
   /** Excludes sticky headers, pinned overlays, and the row-selection utility from auto-scroll. */
   readonly interactionGeometry?: (() => BrunoTableDragFillInteractionGeometry) | undefined;
+  /** Cached logical hit testing supplied by the viewport; avoids forced layout in hot frames. */
+  readonly resolvePointerHit?:
+    | ((
+        clientX: number,
+        clientY: number,
+        phase: "preview" | "release",
+      ) => BrunoTableCellCoordinate | undefined)
+    | undefined;
   readonly scrollHorizontalByPhysical: (delta: number) => boolean;
   readonly scrollVerticalByLogical?: ((delta: number) => boolean) | undefined;
   readonly describeCoordinate?: (coordinate: BrunoTableCellCoordinate) => string;
@@ -438,6 +446,9 @@ type PointerGesture = Readonly<{
   readonly view: Window;
   readonly sourceShapeIdentity: object;
   readonly source: BrunoTableDragFillSource;
+  readonly gridBounds: DOMRectReadOnly;
+  readonly gridDirection: string;
+  readonly interactionGeometry: BrunoTableDragFillInteractionGeometry;
   readonly startX: number;
   readonly startY: number;
   readonly registration: DragFillRegistration;
@@ -628,6 +639,8 @@ export class BrunoTableDragFillRuntime {
       return;
     }
     const capturedSource = freezeSource(source);
+    const gridBounds = registration.grid.getBoundingClientRect();
+    const interactionGeometry = readInteractionGeometry(registration, gridBounds);
     const sourceAxis = capturedSource.canonicalTexts.length > 1 ? capturedSource.axis : undefined;
     const gesture =
       sourceAxis === undefined ? undefined : captureGesture(capturedSource, structure, sourceAxis);
@@ -638,6 +651,9 @@ export class BrunoTableDragFillRuntime {
       view,
       sourceShapeIdentity: source.shapeIdentity,
       source: capturedSource,
+      gridBounds,
+      gridDirection: view.getComputedStyle(registration.grid).direction,
+      interactionGeometry,
       structure,
       startX: event.clientX,
       startY: event.clientY,
@@ -664,6 +680,8 @@ export class BrunoTableDragFillRuntime {
           view.addEventListener("pointermove", this.onPointerMove, true);
           view.addEventListener("pointerup", this.onPointerUp, true);
           view.addEventListener("pointercancel", this.onPointerCancel, true);
+          view.addEventListener("scroll", this.onAncestorScroll, true);
+          view.addEventListener("resize", this.onEnvironmentResize);
         },
         release: () => this.releasePointer(pointer),
       },
@@ -683,6 +701,19 @@ export class BrunoTableDragFillRuntime {
   private readonly onPointerUp = (event: PointerEvent): void => {
     const pointer = this.pointer;
     if (pointer === undefined || event.pointerId !== pointer.pointerId) return;
+    // A layout move can occur before its observer is delivered. Never commit using
+    // the admission geometry after it has moved; this read is release-only.
+    const currentBounds = pointer.grid.getBoundingClientRect();
+    if (
+      currentBounds.left !== pointer.gridBounds.left ||
+      currentBounds.right !== pointer.gridBounds.right ||
+      currentBounds.top !== pointer.gridBounds.top ||
+      currentBounds.bottom !== pointer.gridBounds.bottom ||
+      pointer.view.getComputedStyle(pointer.grid).direction !== pointer.gridDirection
+    ) {
+      this.cancel();
+      return;
+    }
     pointer.clientX = event.clientX;
     pointer.clientY = event.clientY;
     pointer.eventTarget = event.target;
@@ -797,6 +828,24 @@ export class BrunoTableDragFillRuntime {
     if (event.pointerId === this.pointer?.pointerId) this.cancel();
   };
 
+  private readonly onAncestorScroll = (event: Event): void => {
+    const pointer = this.pointer;
+    if (pointer === undefined || event.target === pointer.grid) return;
+    const OwnerElement = pointer.grid.ownerDocument.defaultView?.Element;
+    if (
+      event.target === pointer.view ||
+      event.target === pointer.grid.ownerDocument ||
+      (OwnerElement !== undefined &&
+        event.target instanceof OwnerElement &&
+        event.target.contains(pointer.grid))
+    )
+      this.cancel();
+  };
+
+  private readonly onEnvironmentResize = (): void => {
+    this.cancel();
+  };
+
   private readonly schedulePointerFrame = (pointer: PointerGesture): void => {
     if (pointer.frame !== null) return;
     const shouldRecordFrame =
@@ -840,11 +889,14 @@ export class BrunoTableDragFillRuntime {
     pointer.gesture ??= captureGesture(pointer.source, pointer.structure, axis);
     if (pointer.gesture === undefined) return false;
     if (lockedAxis === undefined) this.actor.send({ type: "LOCK_AXIS", axis });
-    const gridBounds = pointer.grid.getBoundingClientRect();
-    const geometry = allowAutoscroll
-      ? readInteractionGeometry(pointer.registration, gridBounds)
-      : undefined;
-    const hit = hitAtPointer(pointer, gridBounds, geometry);
+    const gridBounds = pointer.gridBounds;
+    const geometry = allowAutoscroll ? pointer.interactionGeometry : undefined;
+    const hit = hitAtPointer(
+      pointer,
+      gridBounds,
+      allowAutoscroll ? "preview" : "release",
+      geometry,
+    );
     if (hit !== undefined) {
       const targetIdentity = axis === "horizontal" ? hit.columnId : hit.rowId;
       if (pointer.projectedAxis !== axis || pointer.projectedTargetIdentity !== targetIdentity) {
@@ -934,14 +986,19 @@ export class BrunoTableDragFillRuntime {
     this.clearPreview();
     const pointer = this.pointer;
     if (pointer === undefined || preview === undefined) return;
-    for (const cell of ownedMountedCells(pointer.grid)) {
+    const perpendicularSource =
+      preview.axis === "horizontal" ? pointer.source.rowIds[0] : pointer.source.columnIds[0];
+    if (perpendicularSource === undefined) return;
+    for (const cell of ownedMountedPreviewLaneCells(
+      pointer.grid,
+      preview.axis,
+      perpendicularSource,
+    )) {
       const rowId = cell.dataset["brunoRowId"];
       const columnId = cell.dataset["brunoColumnId"];
       if (rowId === undefined || columnId === undefined) continue;
       const parallelIdentity = preview.axis === "horizontal" ? columnId : rowId;
       const perpendicularIdentity = preview.axis === "horizontal" ? rowId : columnId;
-      const perpendicularSource =
-        preview.axis === "horizontal" ? pointer.source.rowIds[0] : pointer.source.columnIds[0];
       const index = pointer.gesture?.indexById.get(parallelIdentity);
       if (
         perpendicularIdentity !== perpendicularSource ||
@@ -1064,6 +1121,8 @@ export class BrunoTableDragFillRuntime {
     pointer.view.removeEventListener("pointermove", this.onPointerMove, true);
     pointer.view.removeEventListener("pointerup", this.onPointerUp, true);
     pointer.view.removeEventListener("pointercancel", this.onPointerCancel, true);
+    pointer.view.removeEventListener("scroll", this.onAncestorScroll, true);
+    pointer.view.removeEventListener("resize", this.onEnvironmentResize);
     try {
       if (pointer.grid.hasPointerCapture(pointer.pointerId)) {
         pointer.grid.releasePointerCapture(pointer.pointerId);
@@ -1159,6 +1218,7 @@ function sameProjection(
 function hitAtPointer(
   pointer: PointerGesture,
   bounds: DOMRectReadOnly,
+  phase: "preview" | "release",
   outsideSamplingGeometry?: BrunoTableDragFillInteractionGeometry,
 ) {
   const outside =
@@ -1181,10 +1241,14 @@ function hitAtPointer(
       outsideSamplingGeometry.bodyBottom,
     );
   }
+  const logicalHit = pointer.registration.resolvePointerHit?.(clientX, clientY, phase);
+  if (logicalHit !== undefined) return logicalHit;
   const target =
     pointer.grid.ownerDocument.elementFromPoint?.(clientX, clientY) ??
     (pointer.eventTarget instanceof Element ? pointer.eventTarget : null);
-  return brunoTableCellRangePointerHit(target, pointer.grid);
+  const hit = brunoTableCellRangePointerHit(target, pointer.grid);
+  if (hit !== undefined) pointer.eventTarget = target;
+  return hit;
 }
 
 function clampInside(value: number, start: number, end: number): number {
@@ -1237,6 +1301,21 @@ function ownedMountedCells(grid: HTMLElement): readonly HTMLElement[] {
   return [
     ...grid.querySelectorAll<HTMLElement>(
       '[role="gridcell"][data-bruno-row-id][data-bruno-column-id]',
+    ),
+  ].filter((cell) => cell.closest('[role="grid"]') === grid);
+}
+
+function ownedMountedPreviewLaneCells(
+  grid: HTMLElement,
+  axis: BrunoTableCellRangeAxis,
+  perpendicularIdentity: string,
+): readonly HTMLElement[] {
+  const cssEscape = grid.ownerDocument.defaultView?.CSS.escape;
+  if (cssEscape === undefined) return ownedMountedCells(grid);
+  const attribute = axis === "horizontal" ? "data-bruno-row-id" : "data-bruno-column-id";
+  return [
+    ...grid.querySelectorAll<HTMLElement>(
+      `[role="gridcell"][${attribute}="${cssEscape(perpendicularIdentity)}"]`,
     ),
   ].filter((cell) => cell.closest('[role="grid"]') === grid);
 }

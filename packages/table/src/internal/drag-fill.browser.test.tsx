@@ -167,6 +167,49 @@ function pointer(
 }
 
 describe("BrunoTable Drag Fill browser runtime", () => {
+  test("cancels an iframe fill when an owner-realm ancestor scrolls", async () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    try {
+      const ownerDocument = frame.contentDocument!;
+      const ownerView = ownerDocument.defaultView!;
+      const ownerFrame = () =>
+        new Promise<void>((resolve) => ownerView.requestAnimationFrame(() => resolve()));
+      const fixture = createGrid(["COL_ID_A", "COL_ID_B", "COL_ID_C"]);
+      const grid = ownerDocument.importNode(fixture.grid, true);
+      fixture.grid.remove();
+      const ancestor = ownerDocument.createElement("div");
+      ancestor.append(grid);
+      ownerDocument.body.append(ancestor);
+      const apply = vi.fn(() => Object.freeze({ kind: "accepted" as const }));
+      runtime.register({
+        grid,
+        getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+        getStructure: () => fixture.structure,
+        apply,
+        scrollHorizontalByPhysical: () => false,
+        describeCoordinate: ({ rowId, columnId }) => `${rowId}/${columnId}`,
+      });
+      await ownerFrame();
+      await ownerFrame();
+      const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+      const target = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_C"]')!;
+      handle.dispatchEvent(pointer("pointerdown", 190, centerOf(handle)));
+      target.dispatchEvent(pointer("pointermove", 190, centerOf(target)));
+      await ownerFrame();
+      expect(grid.querySelectorAll("[data-bruno-drag-fill-preview]").length).toBeGreaterThan(0);
+      ancestor.dispatchEvent(new Event("scroll"));
+      expect(grid.querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+      ownerView.dispatchEvent(pointer("pointerup", 190, centerOf(target)));
+      expect(apply).not.toHaveBeenCalled();
+    } finally {
+      runtime.dispose();
+      frame.remove();
+    }
+  });
+
   test("previews only mounted cells and materializes a virtualized extension once on release", async () => {
     const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C", "COL_ID_D"];
     const { grid, structure } = createGrid(columns, ["COL_ID_A", "COL_ID_D"]);
@@ -1408,6 +1451,38 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     expect(runtime.getNotificationSnapshot().message).toBe(
       "ROW_ID_1/COL_ID_1: Fill destinations may contain at most 16384 cells. (+16384 more) Nothing was applied.",
     );
+  });
+
+  test("extends a stationary in-bounds pointer preview as autoscroll reveals cells", async () => {
+    const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B", "COL_ID_C"]);
+    grid.style.width = "160px";
+    const second = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_B"]')!;
+    const third = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_C"]')!;
+    let sampledColumn = "COL_ID_B";
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      apply: () => Object.freeze({ kind: "accepted" as const }),
+      resolvePointerHit: () => ({ rowId: "ROW_ID_1", columnId: sampledColumn }),
+      scrollHorizontalByPhysical: () => {
+        if (sampledColumn === "COL_ID_C") return false;
+        sampledColumn = "COL_ID_C";
+        return true;
+      },
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const bounds = grid.getBoundingClientRect();
+    const edge = { x: bounds.right - 4, y: centerOf(second).y };
+    handle.dispatchEvent(pointer("pointerdown", 67, centerOf(handle)));
+    second.dispatchEvent(pointer("pointermove", 67, edge));
+    await nextFrame();
+    await nextFrame();
+    expect(third).toHaveAttribute("data-bruno-drag-fill-preview", "");
+    window.dispatchEvent(pointer("pointercancel", 67, edge));
   });
 
   test("extends the preview through cells revealed by outside-grid autoscroll", async () => {

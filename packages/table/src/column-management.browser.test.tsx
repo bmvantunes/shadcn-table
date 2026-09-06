@@ -5,7 +5,10 @@ import { detectPlatform } from "@tanstack/react-hotkeys";
 
 import { BrunoTableClient, BrunoTableToolbar } from "./index";
 import type { BrunoTableColumnId, BrunoTableColumns } from "./index";
-import { BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE } from "./internal/column-management";
+import {
+  BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE,
+  brunoTableColumnCssVariable,
+} from "./internal/column-management";
 import type { BrunoTableGridCommand } from "./internal/column-management";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
 import { installBrunoTableColumnCommandSubscriptionListener } from "./internal/grid-subscription-instrumentation";
@@ -371,9 +374,10 @@ async function waitForAnimationFrames(count = 2): Promise<void> {
 
 async function closeColumnMenus(screen: BrowserScreen): Promise<void> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (screen.getByRole("menu").all().length === 0) return;
+    if (screen.getByRole("menu").all().length === 0) break;
     await userEvent.keyboard("{Escape}");
   }
+  await expect.element(screen.getByRole("menu", { includeHidden: true })).not.toBeInTheDocument();
 }
 
 function columnOrder(grid: Element): readonly string[] {
@@ -814,6 +818,42 @@ afterEach(async () => {
 });
 
 describe("BrunoTable column management browser surface", () => {
+  test("does not reclaim focus after the user leaves a closing column menu", async () => {
+    const screen = await render(
+      <>
+        <button type="button">Next action</button>
+        <BrunoTableClient {...tableProps} />
+      </>,
+    );
+    await openColumnMenu(screen);
+    const menu = screen.getByRole("menu").element();
+    menu.style.animationDuration = "400ms";
+    await userEvent.keyboard("{Escape}");
+    const nextAction = screen.getByRole("button", { name: "Next action" });
+    nextAction.element().focus();
+    await expect.element(nextAction).toHaveFocus();
+    await vi.waitFor(() => expect(menu.isConnected).toBe(false));
+    await expect.element(nextAction).toHaveFocus();
+  });
+
+  test("counts header commits when its column menu opens and closes", async () => {
+    const headerRenders = vi.fn();
+    const removeHeader = installBrunoTableClientHeaderRenderListener(headerRenders);
+    try {
+      const screen = await render(<BrunoTableClient {...tableProps} />);
+      headerRenders.mockClear();
+      await screen.getByRole("button", { name: "Column menu for Name" }).click();
+      await expect.element(screen.getByRole("menu")).toBeVisible();
+      expect(headerRenders).toHaveBeenCalled();
+      headerRenders.mockClear();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(screen.getByRole("menu")).not.toBeInTheDocument();
+      expect(headerRenders).toHaveBeenCalled();
+    } finally {
+      removeHeader();
+    }
+  });
+
   test.each(columnManagementMatrix)(
     "keyboard reaches and dispatches the $name column-menu command",
     async (matrixCase) => {
@@ -891,6 +931,10 @@ describe("BrunoTable column management browser surface", () => {
             .toHaveAttribute("data-pinned-region", "start");
         }
 
+        // Finish fixture setup, including the menu's exit and viewport commit,
+        // before charging the next complete command to its render bounds.
+        await closeColumnMenus(screen);
+        await waitForAnimationFrames();
         commands.splice(0);
         viewRenders.mockClear();
         gridSurfaceRenders.mockClear();
@@ -1049,6 +1093,10 @@ describe("BrunoTable column management browser surface", () => {
           ),
         );
 
+        await closeColumnMenus(screen);
+        // Bound the complete command separately from the verification-only reopening below.
+        expect(headerRenders.mock.calls.length).toBeLessThanOrEqual(4);
+        const headerCommitsBeforeVerification = headerRenders.mock.calls.length;
         if (
           matrixCase.action === "pin-start" ||
           matrixCase.action === "pin-end" ||
@@ -1078,9 +1126,12 @@ describe("BrunoTable column management browser surface", () => {
           await userEvent.keyboard("{Escape}");
         }
 
+        await closeColumnMenus(screen);
+        expect(
+          headerRenders.mock.calls.length - headerCommitsBeforeVerification,
+        ).toBeLessThanOrEqual(3);
         expect(viewRenders.mock.calls.length).toBeLessThanOrEqual(3);
         expect(gridSurfaceRenders.mock.calls.length).toBeLessThanOrEqual(3);
-        expect(headerRenders.mock.calls.length).toBeLessThanOrEqual(4);
         expect(rowOrderPlans.mock.calls.length).toBeLessThanOrEqual(2);
         expect(cellRenders.mock.calls.length).toBeLessThanOrEqual(rows.length * columns.length * 2);
       } finally {
@@ -1247,6 +1298,86 @@ describe("BrunoTable column management browser surface", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element()));
   });
 
+  test("exposes the visible column menu trigger and named popup relationship", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+    const trigger = screen.getByRole("button", { name: "Column menu for Name" });
+    await expect.element(trigger).toHaveAttribute("aria-haspopup", "menu");
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Column menu for Name", exact: true });
+    await expect.element(menu).toBeInTheDocument();
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger.element().getAttribute("aria-controls")).toBe(menu.element().id);
+    await userEvent.keyboard("{Escape}");
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+    const otherTrigger = screen.getByRole("button", { name: "Column menu for Score" });
+    await userEvent.click(otherTrigger);
+    const otherMenu = screen.getByRole("menu", { name: "Column menu for Score", exact: true });
+    await expect.element(otherMenu).toBeInTheDocument();
+    await expect.element(otherTrigger).toHaveAttribute("aria-expanded", "true");
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(otherTrigger.element().getAttribute("aria-controls")).toBe(otherMenu.element().id);
+  });
+
+  test("opens header menus by keyboard without synthesizing clicks", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+    const trigger = screen.getByRole("button", { name: "Column menu for Name" });
+    const clicked = vi.fn();
+    trigger.element().addEventListener("click", clicked);
+    try {
+      trigger.element().focus();
+      await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+      await expect.element(screen.getByRole("menu")).toBeInTheDocument();
+      expect(clicked).not.toHaveBeenCalled();
+    } finally {
+      trigger.element().removeEventListener("click", clicked);
+    }
+  });
+
+  test("opens column menus inside a form without submitting it", async () => {
+    const submit = vi.fn();
+    const screen = await render(
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <BrunoTableClient<Row, typeof columns> {...tableProps} />
+      </form>,
+    );
+    const trigger = screen.getByRole("button", { name: "Column menu for Name" });
+    await userEvent.click(trigger);
+    await expect.element(screen.getByRole("menu")).toBeInTheDocument();
+    expect(submit).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    trigger.element().focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(screen.getByRole("menu")).toBeInTheDocument();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("keeps one supported Base UI trigger for the shared mounted-header menu", async () => {
+    const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
+    const grid = screen.getByRole("grid").element();
+    const headerRow = grid.querySelector("thead");
+    expect(headerRow).not.toBeNull();
+    expect(headerRow?.querySelectorAll('[data-slot="dropdown-menu-trigger"]')).toHaveLength(0);
+
+    const visibleTriggers = screen.getByRole("button", { name: /^Column menu for /u }).all();
+    expect(visibleTriggers).toHaveLength(3);
+    for (const trigger of visibleTriggers) {
+      expect(trigger.element()).not.toHaveAttribute("data-slot", "dropdown-menu-trigger");
+    }
+
+    await userEvent.click(screen.getByRole("button", { name: "Column menu for Name" }));
+    await expect.element(screen.getByRole("menu")).toBeInTheDocument();
+    expect(headerRow?.querySelectorAll('[data-slot="dropdown-menu-trigger"]')).toHaveLength(1);
+    expect(
+      headerRow?.querySelector('[data-slot="dropdown-menu-trigger"]')?.getAttribute("style"),
+    ).toContain("position: absolute");
+  });
+
   test("opens the column menu from the semantic ContextMenu key", async () => {
     const screen = await render(<BrunoTableClient<Row, typeof columns> {...tableProps} />);
     const trigger = screen.getByRole("button", { name: "Column menu for Name" });
@@ -1258,11 +1389,17 @@ describe("BrunoTable column management browser surface", () => {
   });
 
   test("leaves lookalike custom controls outside the column-menu workflow", async () => {
+    const customClick = vi.fn();
     const customColumns = [
       {
         ...columns[0],
         cellRenderer: ({ row }: { readonly row: Row }) => (
-          <button aria-label={`Column menu for custom ${row.name}`} type="button">
+          <button
+            aria-label={`Column menu for custom ${row.name}`}
+            data-bruno-column-menu-trigger="COL_ID_NAME"
+            onClick={customClick}
+            type="button"
+          >
             Custom action
           </button>
         ),
@@ -1289,6 +1426,7 @@ describe("BrunoTable column management browser surface", () => {
 
     await new Promise(requestAnimationFrame);
     expect(shortcut.defaultPrevented).toBe(false);
+    expect(customClick).not.toHaveBeenCalled();
     await expect.element(screen.getByRole("menu")).not.toBeInTheDocument();
     await expect.element(customAction).toHaveFocus();
   });
@@ -1698,8 +1836,8 @@ describe("BrunoTable column management browser surface", () => {
       }
 
       expect(columnOrder(grid)).toEqual(initialMountedColumns);
-      expect(gridSurfaceRenders).toHaveLength(0);
-      expect(rowRenders).toHaveLength(0);
+      expect(gridSurfaceRenders).not.toHaveBeenCalled();
+      expect(rowRenders).not.toHaveBeenCalled();
       expect(grid.style.getPropertyValue(BRUNO_TABLE_LIVE_RIGHT_PADDING_CSS_VARIABLE)).toBe(
         "1600px",
       );
@@ -2574,8 +2712,8 @@ describe("BrunoTable column management browser surface", () => {
       ): Promise<void> => {
         await new Promise((resolve) => requestAnimationFrame(resolve));
         expect(commands).toHaveLength(expectedCommandCount);
-        expect(rowRenders).toHaveLength(0);
-        expect(toolbarRenders).toHaveLength(0);
+        expect(rowRenders).not.toHaveBeenCalled();
+        expect(toolbarRenders).not.toHaveBeenCalled();
         expect(previewStyleWrites.mock.calls.length).toBeGreaterThan(0);
         expect(previewStyleWrites.mock.calls.length).toBeLessThanOrEqual(maxStyleWrites);
         previewStyleWrites.mockClear();
@@ -2751,7 +2889,7 @@ describe("BrunoTable column management browser surface", () => {
       expect(gridSurfaceRenders.mock.calls.length).toBeLessThanOrEqual(4);
       expect(rowOrderPlans.mock.calls.length).toBeLessThanOrEqual(4);
       expect(rowRenders.mock.calls.length).toBeLessThanOrEqual(expectedMountedRows * 4);
-      expect(toolbarRenders).toHaveLength(0);
+      expect(toolbarRenders).not.toHaveBeenCalled();
       expect(cellRenders.mock.calls.length).toBeLessThanOrEqual(expectedMountedRows * 24 * 8);
     } finally {
       removeCommand();
@@ -2763,6 +2901,107 @@ describe("BrunoTable column management browser surface", () => {
       removeRows();
       removeCells();
       removePreviewStyleWrites();
+    }
+  });
+
+  test("refreshes reorder geometry after edge autoscroll crosses a centre window", async () => {
+    const tableId = "TABLE_ID_COLUMN_REORDER_AUTOSCROLL_WINDOW";
+    const gridSurfaceRenders = vi.fn();
+    const rowOrderPlans = vi.fn();
+    const rowRenders = vi.fn();
+    const previewStyleWrites = vi.fn();
+    const removeGridSurface = installBrunoTableClientGridSurfaceRenderListenerForTable(
+      tableId,
+      gridSurfaceRenders,
+    );
+    const removeRowOrderPlans = installBrunoTableClientRowOrderPlanningListenerForTable(
+      tableId,
+      rowOrderPlans,
+    );
+    const removeRows = installBrunoTableClientRowRenderListenerForTable(tableId, rowRenders);
+    const removePreviewStyleWrites =
+      installBrunoTableClientColumnPreviewStyleWriteListener(previewStyleWrites);
+    try {
+      const screen = await render(
+        <div style={{ width: 480 }}>
+          <BrunoTableClient<Row, typeof performanceColumns>
+            tableId={tableId}
+            getRowId={(row: Row) => row.id}
+            columns={performanceColumns}
+            initialOrderBy={tableProps.initialOrderBy}
+            clientSource={performanceSource}
+          />
+        </div>,
+      );
+      const grid = screen.getByRole("grid", { name: `Data for ${tableId}` }).element();
+      const mountedCenterHeaders = () =>
+        [
+          ...grid.querySelectorAll<HTMLElement>(
+            "thead th[data-bruno-column-id]:not([data-pinned-region])",
+          ),
+        ].filter((header) => header.dataset["brunoColumnId"] !== undefined);
+      const initialMountedIds = new Set(
+        mountedCenterHeaders().map((header) => header.dataset["brunoColumnId"]!),
+      );
+      const reorderHandle = screen.getByRole("button", { name: "Reorder Name" }).element();
+      const pinnedEndHeader = grid.querySelector<HTMLElement>('thead th[data-pinned-region="end"]');
+      expect(pinnedEndHeader).not.toBeNull();
+      const startX = reorderHandle.getBoundingClientRect().left + 2;
+      reorderHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: startX,
+          pointerId: 39,
+        }),
+      );
+      gridSurfaceRenders.mockClear();
+      rowOrderPlans.mockClear();
+      rowRenders.mockClear();
+      previewStyleWrites.mockClear();
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: pinnedEndHeader!.getBoundingClientRect().left - 2,
+          pointerId: 39,
+        }),
+      );
+
+      let enteringHeader: HTMLElement | undefined;
+      for (let frame = 0; frame < 30 && enteringHeader === undefined; frame += 1) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        enteringHeader = mountedCenterHeaders().find(
+          (header) => !initialMountedIds.has(header.dataset["brunoColumnId"]!),
+        );
+      }
+      expect(grid.scrollLeft).toBeGreaterThan(0);
+      expect(enteringHeader).not.toBeUndefined();
+      const enteringId = enteringHeader!.dataset["brunoColumnId"]!;
+      const enteringRect = enteringHeader!.getBoundingClientRect();
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: enteringRect.left + enteringRect.width / 4,
+          pointerId: 39,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(previewStyleWrites).toHaveBeenCalledWith(
+          brunoTableColumnCssVariable("transform", enteringId),
+        );
+      });
+      expect(gridSurfaceRenders).not.toHaveBeenCalled();
+      expect(rowOrderPlans).not.toHaveBeenCalled();
+      expect(rowRenders).not.toHaveBeenCalled();
+
+      window.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 39 }));
+      await vi.waitFor(() => expect(grid.querySelector("[data-bruno-reorder-target]")).toBeNull());
+    } finally {
+      removePreviewStyleWrites();
+      removeRows();
+      removeRowOrderPlans();
+      removeGridSurface();
     }
   });
 
@@ -3157,6 +3396,154 @@ describe("BrunoTable column management browser surface", () => {
       expect(document.activeElement?.getAttribute("aria-label")).toBe("Column menu for Name"),
     );
     expect(grid.contains(document.activeElement)).toBe(true);
+  });
+
+  test("bounds reordered-column focus retries when the committed header stays unmounted", async () => {
+    const screen = await render(
+      <BrunoTableClient<Row, typeof manyColumns>
+        tableId="TABLE_ID_COLUMN_MANAGEMENT_REORDER_FOCUS_BUDGET"
+        getRowId={(row: Row) => row.id}
+        columns={manyColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={source}
+      />,
+    );
+    const grid = screen.getByRole("grid").element();
+    const reorderHandle = screen.getByRole("button", { name: "Reorder Name" }).element();
+    const startX = reorderHandle.getBoundingClientRect().left + 1;
+    const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+    const nativeQuerySelectorAll = grid.querySelectorAll.bind(grid);
+    let hideReorderedHeader = false;
+    let scheduledAfterCommit = 0;
+    const querySelectorAll = vi.spyOn(grid, "querySelectorAll").mockImplementation((selectors) => {
+      if (hideReorderedHeader && selectors === "th[data-bruno-column-id]") {
+        return [] as unknown as NodeListOf<Element>;
+      }
+      return nativeQuerySelectorAll(selectors);
+    });
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        if (hideReorderedHeader) scheduledAfterCommit += 1;
+        return nativeRequestAnimationFrame(callback);
+      });
+
+    try {
+      reorderHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: startX,
+          pointerId: 23,
+        }),
+      );
+      grid.scrollLeft = 1_000;
+      grid.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise<void>((resolve) =>
+        nativeRequestAnimationFrame(() =>
+          nativeRequestAnimationFrame(() => nativeRequestAnimationFrame(() => resolve())),
+        ),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: grid.getBoundingClientRect().right - 2,
+          pointerId: 23,
+        }),
+      );
+      hideReorderedHeader = true;
+
+      for (let frame = 0; frame < 8; frame += 1) {
+        await new Promise<void>((resolve) => nativeRequestAnimationFrame(() => resolve()));
+      }
+      const settledRequestCount = scheduledAfterCommit;
+      for (let frame = 0; frame < 3; frame += 1) {
+        await new Promise<void>((resolve) => nativeRequestAnimationFrame(() => resolve()));
+      }
+
+      expect(document.activeElement).toBe(grid);
+      expect(scheduledAfterCommit).toBe(settledRequestCount);
+    } finally {
+      requestAnimationFrame.mockRestore();
+      querySelectorAll.mockRestore();
+    }
+  });
+
+  test("does not steal external focus while a reordered header remains unmounted", async () => {
+    const screen = await render(
+      <BrunoTableClient<Row, typeof manyColumns>
+        tableId="TABLE_ID_COLUMN_MANAGEMENT_REORDER_EXTERNAL_FOCUS"
+        getRowId={(row: Row) => row.id}
+        columns={manyColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SCORE", direction: "asc" }]}
+        clientSource={source}
+      />,
+    );
+    const grid = screen.getByRole("grid").element();
+    const reorderHandle = screen.getByRole("button", { name: "Reorder Name" }).element();
+    const external = document.createElement("button");
+    external.type = "button";
+    external.textContent = "External focus destination";
+    document.body.append(external);
+    const startX = reorderHandle.getBoundingClientRect().left + 1;
+    const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+    const nativeQuerySelectorAll = grid.querySelectorAll.bind(grid);
+    let hideReorderedHeader = false;
+    let scheduledAfterCommit = 0;
+    const querySelectorAll = vi.spyOn(grid, "querySelectorAll").mockImplementation((selectors) => {
+      if (hideReorderedHeader && selectors === "th[data-bruno-column-id]") {
+        return [] as unknown as NodeListOf<Element>;
+      }
+      return nativeQuerySelectorAll(selectors);
+    });
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        if (hideReorderedHeader) scheduledAfterCommit += 1;
+        return nativeRequestAnimationFrame(callback);
+      });
+
+    try {
+      reorderHandle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: startX,
+          pointerId: 24,
+        }),
+      );
+      grid.scrollLeft = 1_000;
+      grid.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await new Promise<void>((resolve) =>
+        nativeRequestAnimationFrame(() =>
+          nativeRequestAnimationFrame(() => nativeRequestAnimationFrame(() => resolve())),
+        ),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: grid.getBoundingClientRect().right - 2,
+          pointerId: 24,
+        }),
+      );
+      hideReorderedHeader = true;
+      external.focus();
+
+      for (let frame = 0; frame < 8; frame += 1) {
+        await new Promise<void>((resolve) => nativeRequestAnimationFrame(() => resolve()));
+      }
+      const settledRequestCount = scheduledAfterCommit;
+      for (let frame = 0; frame < 3; frame += 1) {
+        await new Promise<void>((resolve) => nativeRequestAnimationFrame(() => resolve()));
+      }
+
+      expect(document.activeElement).toBe(external);
+      expect(scheduledAfterCommit).toBe(settledRequestCount);
+    } finally {
+      requestAnimationFrame.mockRestore();
+      querySelectorAll.mockRestore();
+      external.remove();
+    }
   });
 
   test("cancels a reorder on pointercancel without committing or leaving a preview", async () => {

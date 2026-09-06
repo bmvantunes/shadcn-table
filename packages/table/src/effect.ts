@@ -48,13 +48,13 @@ const persistedType = "effect-bigdecimal";
 const codecVersion = 1;
 const maximumBigDecimalTextCodeUnits = 4_096;
 
-type AdmittedBigDecimal = {
-  readonly value: BigDecimal.BigDecimal;
-  readonly canonicalText: string;
+type AdmittedBigDecimalState = {
   readonly comparisonMetadata: WireSafeBigDecimalComparisonMetadata;
+  readonly canonicalText: string;
 };
 
-const admittedWireSafeValues = new WeakMap<object, AdmittedBigDecimal>();
+const admittedOwnedValues = new WeakMap<object, AdmittedBigDecimalState>();
+const admittedSourceValues = new WeakMap<object, BigDecimal.BigDecimal>();
 
 type BigDecimalAggregateResults = {
   readonly countDistinct: "bigint";
@@ -80,7 +80,7 @@ function failure(message: string): BrunoTableDecodeResult<never> {
 function admitBigDecimalParts(
   coefficient: bigint,
   sourceScale: number,
-): AdmittedBigDecimal | undefined {
+): BigDecimal.BigDecimal | undefined {
   const normalized = BigDecimal.normalize(BigDecimal.make(coefficient, sourceScale));
   if (!Number.isSafeInteger(normalized.scale)) return undefined;
 
@@ -92,42 +92,53 @@ function admitBigDecimalParts(
   if (comparisonMetadata === undefined) return undefined;
   const canonicalText = BigDecimal.format(owned);
   if (canonicalText.length > maximumBigDecimalTextCodeUnits) return undefined;
-
-  return Object.freeze({
-    value: owned,
+  admittedOwnedValues.set(owned, {
     canonicalText,
     comparisonMetadata,
   });
+  return owned;
+}
+
+function admittedRuntimeBigDecimal(input: unknown): BigDecimal.BigDecimal | undefined {
+  if (typeof input === "object" && input !== null) {
+    if (admittedOwnedValues.has(input)) return input as BigDecimal.BigDecimal;
+    const admitted = admittedSourceValues.get(input);
+    if (admitted !== undefined) return admitted;
+  }
+  const inspection = inspectWireSafeBigDecimal(input);
+  if (inspection._tag !== "Success") return undefined;
+  const admitted = admitBigDecimalParts(inspection.coefficient, inspection.scale);
+  if (admitted === undefined) return undefined;
+  admittedSourceValues.set(inspection.source, admitted);
+  return admitted;
 }
 
 function decodeRuntimeBigDecimal(input: unknown): BrunoTableDecodeResult<BigDecimal.BigDecimal> {
-  if (typeof input === "object" && input !== null) {
-    const admitted = admittedWireSafeValues.get(input);
-    if (admitted !== undefined) return success(admitted.value);
-  }
-  const inspection = inspectWireSafeBigDecimal(input);
-  if (inspection._tag !== "Success") {
-    return failure("Expected a wire-safe Effect BigDecimal value.");
-  }
-  const admitted = admitBigDecimalParts(inspection.coefficient, inspection.scale);
-  if (admitted === undefined) {
-    return failure("Expected a wire-safe Effect BigDecimal value.");
-  }
-  admittedWireSafeValues.set(inspection.source, admitted);
-  admittedWireSafeValues.set(admitted.value, admitted);
-  return success(admitted.value);
+  const admitted = admittedRuntimeBigDecimal(input);
+  return admitted === undefined
+    ? failure("Expected a wire-safe Effect BigDecimal value.")
+    : success(admitted);
 }
 
-function requireAdmittedBigDecimal(input: unknown): AdmittedBigDecimal {
-  const decoded = decodeRuntimeBigDecimal(input);
-  if (decoded._tag === "Failure") {
-    throw new TypeError("BrunoTable BigDecimal Value Type received an invalid value.");
-  }
-  const admitted = admittedWireSafeValues.get(decoded.value);
+function requireAdmittedBigDecimal(input: unknown): BigDecimal.BigDecimal {
+  const admitted = admittedRuntimeBigDecimal(input);
   if (admitted === undefined) {
     throw new TypeError("BrunoTable BigDecimal Value Type received an invalid value.");
   }
   return admitted;
+}
+
+function requireAdmittedBigDecimalState(value: BigDecimal.BigDecimal): AdmittedBigDecimalState {
+  const state = admittedOwnedValues.get(value);
+  if (state === undefined) {
+    throw new TypeError("BrunoTable BigDecimal Value Type received an invalid value.");
+  }
+  return state;
+}
+
+function requireCanonicalBigDecimalText(input: unknown): string {
+  const admitted = requireAdmittedBigDecimal(input);
+  return requireAdmittedBigDecimalState(admitted).canonicalText;
 }
 
 function compareBigDecimal(
@@ -137,10 +148,12 @@ function compareBigDecimal(
   const admittedLeft = requireAdmittedBigDecimal(left);
   const admittedRight = left === right ? admittedLeft : requireAdmittedBigDecimal(right);
   if (admittedLeft === admittedRight) return 0;
+  const leftState = requireAdmittedBigDecimalState(admittedLeft);
+  const rightState = requireAdmittedBigDecimalState(admittedRight);
 
   const comparison = compareWireSafeBigDecimalComparisonMetadata(
-    admittedLeft.comparisonMetadata,
-    admittedRight.comparisonMetadata,
+    leftState.comparisonMetadata,
+    rightState.comparisonMetadata,
   );
   if (comparison === undefined || Number.isNaN(comparison)) {
     throw new TypeError("BrunoTable BigDecimal comparison metadata ownership was violated.");
@@ -232,15 +245,13 @@ export const BrunoTableBigDecimalValueType: BrunoTableValueType<
     equivalent: (left: BigDecimal.BigDecimal, right: BigDecimal.BigDecimal): boolean =>
       compareBigDecimal(left, right) === 0,
     compare: compareBigDecimal,
-    formatCanonicalText: (value: BigDecimal.BigDecimal): string =>
-      requireAdmittedBigDecimal(value).canonicalText,
+    formatCanonicalText: requireCanonicalBigDecimalText,
     parseCanonicalText: parseBigDecimalText,
-    formatDisplay: (value: BigDecimal.BigDecimal): string =>
-      requireAdmittedBigDecimal(value).canonicalText,
+    formatDisplay: requireCanonicalBigDecimalText,
     encodePersisted: (value: BigDecimal.BigDecimal) => ({
       $brunoTableValue: persistedType,
       version: codecVersion,
-      value: requireAdmittedBigDecimal(value).canonicalText,
+      value: requireCanonicalBigDecimalText(value),
     }),
     decodePersisted: (input: unknown): BrunoTableDecodeResult<BigDecimal.BigDecimal> => {
       const decoded = decodePersistedText(input);
