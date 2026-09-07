@@ -2,9 +2,19 @@
   "name": "@bruno/table",
   "version": "0.0.0",
   "description": "A high-performance, strongly typed data grid for React.",
+  "keywords": [
+    "tanstack-intent"
+  ],
+  "homepage": "https://github.com/bmvantunes/shadcn-table/tree/main/packages/table#readme",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bmvantunes/shadcn-table.git",
+    "directory": "packages/table"
+  },
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "type": "module",
   "sideEffects": false,
@@ -33,6 +43,9 @@
     "test:browser": "vp test --config vitest.browser.config.ts --run",
     "test:browser:performance": "NODE_ENV=production vp test --config vitest.performance-browser.config.ts --run --mode production",
     "test:browser:emitted": "vp test --config vitest.emitted-browser.config.ts --run",
+    "test:skills:unit": "node --test scripts/agent-skills-contract.test.mjs",
+    "test:skills": "intent validate skills --check && node scripts/assert-intent-staleness.mjs && node scripts/agent-skills-contract.mjs && vp run test:skills:unit && vp run test:skills:package",
+    "test:skills:package": "node scripts/assert-agent-skills-package.mjs",
     "test:bench:hotkeys": "vp test bench src/internal/hotkey-adapter.bench.ts --run",
     "test:bench:hotkeys:browser": "vp test bench --config vitest.browser.config.ts src/internal/hotkey-adapter.browser.bench.tsx --run",
     "test:bench:column-management": "vp test bench src/internal/column-management.bench.ts --run",
@@ -45,7 +58,7 @@
     "test:bench:server-viewport": "vp test bench src/internal/server-viewport-store.bench.ts --run",
     "test:types:source": "tsc --project tsconfig.type-tests.json",
     "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json && tsc --project tests/emitted-consumer/tsconfig.emitted-server.json && tsc --project tests/emitted-effect-consumer/tsconfig.emitted.json",
-    "prepublishOnly": "vp run @bruno/shadcn#build && vp run build && vp run check && vp run test && vp run test:browser && vp run test:browser:performance && vp run test:types:source && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:hotkeys && vp run test:bench:hotkeys:browser && vp run test:bench:column-management && vp run test:bench:toolbar && vp run test:bench:row-selection && vp run test:bench:cell-range && vp run test:bench:drag-fill && vp run test:bench:cell-edit && vp run test:bench:client-grouping && vp run test:bench:server-viewport"
+    "prepublishOnly": "vp run @bruno/shadcn#build && vp run build && vp run check && vp run test:skills && vp run test && vp run test:browser && vp run test:browser:performance && vp run test:types:source && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:hotkeys && vp run test:bench:hotkeys:browser && vp run test:bench:column-management && vp run test:bench:toolbar && vp run test:bench:row-selection && vp run test:bench:cell-range && vp run test:bench:drag-fill && vp run test:bench:cell-edit && vp run test:bench:client-grouping && vp run test:bench:server-viewport"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
@@ -59,6 +72,7 @@
     "@bruno/shadcn": "workspace:*",
     "@effect/atom-react": "4.0.0-rc.111",
     "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/intent": "^0.3.8",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
@@ -90,5 +104,29 @@
   },
   "inlinedDependencies": {
     "effect-view-server": "4.2.8"
+  },
+  "intent": {
+    "version": 1,
+    "repo": "https://github.com/bmvantunes/shadcn-table",
+    "docs": "https://github.com/bmvantunes/shadcn-table/tree/main/docs/grid",
+    "resources": [
+      "skills/choose-row-model/SKILL.md",
+      "skills/define-columns/SKILL.md",
+      "skills/edit-cells/SKILL.md",
+      "skills/references/docs/adr/0001-require-explicit-column-identity.md",
+      "skills/references/docs/adr/0002-expose-client-and-server-table-variants.md",
+      "skills/references/docs/adr/0021-use-repetition-only-drag-fill.md",
+      "skills/references/docs/adr/0022-reconcile-void-save-operations-through-live-source.md",
+      "skills/references/docs/adr/0032-project-edit-review-rows-through-a-consumer-seam.md",
+      "skills/references/docs/grid/editing-and-conflicts.md",
+      "skills/references/docs/grid/public-api-design.md",
+      "skills/references/docs/grid/requirements.md",
+      "skills/references/docs/grid/research/editable-safety-ui-prototype.md",
+      "skills/references/docs/grid/research/reui-data-grid-patterns.md",
+      "skills/references/docs/grid/research/strict-column-api-prototype.md",
+      "skills/references/docs/grid/server-viewport-model.md",
+      "skills/references/packages/table/README.md",
+      "skills/sync-state.json"
+    ]
   }
 }

@@ -38,6 +38,34 @@ function rowSpace(rowIds: readonly string[]) {
 }
 
 describe("BrunoTable editable traversal index", () => {
+  it("coalesces repeated single-cell invalidation and preserves additional dirty columns", () => {
+    const row: Row = { id: "row", enabled: false, alternate: false };
+    const eligible = new Set<string>();
+    const evaluate = vi.fn((_rowId: string, _row: object, column: CompiledFieldColumn) =>
+      eligible.has(column.columnId),
+    );
+    const index = new BrunoTableCellEditTraversalIndex(() => row, evaluate);
+    const columns = makeColumns();
+    index.reconcile(columns, rowSpace([row.id]));
+    evaluate.mockClear();
+
+    eligible.add("COL_ID_ALTERNATE");
+    index.invalidateCell(row.id, "COL_ID_ALTERNATE");
+    index.invalidateCell(row.id, "COL_ID_ALTERNATE");
+    expect(index.find(0, "COL_ID_ENABLED", 1)?.columnId).toBe("COL_ID_ALTERNATE");
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    evaluate.mockClear();
+
+    eligible.clear();
+    eligible.add("COL_ID_ENABLED");
+    index.invalidateCell(row.id, "COL_ID_ALTERNATE");
+    index.invalidateCell(row.id, "COL_ID_ENABLED");
+    index.invalidateCell(row.id, "COL_ID_ALTERNATE");
+    expect(index.find(0, "COL_ID_ALTERNATE", -1)?.columnId).toBe("COL_ID_ENABLED");
+    expect(index.find(0, "COL_ID_ENABLED", 1)).toBeUndefined();
+    expect(evaluate).toHaveBeenCalledTimes(2);
+  });
+
   it("paces initial and remapped row-space identity projection without rescanning equivalent columns", () => {
     const rowCount = 5_000;
     const rows = new Map<string, Row>(
@@ -1070,13 +1098,47 @@ describe("BrunoTable editable traversal index", () => {
 
     expect(index.buildNextSlice(80, Number.POSITIVE_INFINITY)).toBe(true);
     expect(getRow).toHaveBeenCalledTimes(2);
-    expect(index.getCachedRowCount()).toBe(rowCount - 2);
+    expect(index.getCachedRowCount()).toBe(0);
     expect(index.isReady()).toBe(false);
     expect(index.find(0, columns[0]!.columnId, 1)).toBeUndefined();
     while (index.buildNextSlice(80, Number.POSITIVE_INFINITY));
     expect(index.getCachedRowCount()).toBe(0);
     expect(index.isReady()).toBe(true);
   });
+
+  it.each([false, true])(
+    "retains unchanged eligibility when new dirty identities match the old cache count (projection changes: %s)",
+    (projectionChanges) => {
+      const rows = new Map<string, Row>([
+        ["first", { id: "first", enabled: true, alternate: false }],
+        ["retained", { id: "retained", enabled: true, alternate: false }],
+      ]);
+      const evaluate = vi.fn((_rowId: string, row: object, column: CompiledFieldColumn) =>
+        column.columnId === "COL_ID_ENABLED" ? (row as Row).enabled : (row as Row).alternate,
+      );
+      const columns = makeColumns();
+      const index = new BrunoTableCellEditTraversalIndex((id) => rows.get(id), evaluate, true);
+      const projection = rowSpace(
+        projectionChanges ? ["first", "retained"] : ["first", "retained", "new"],
+      );
+      index.reconcile(columns, projection);
+      while (index.buildNextSlice());
+      evaluate.mockClear();
+      rows.set("first", { id: "first", enabled: false, alternate: false });
+      rows.set("new", { id: "new", enabled: false, alternate: false });
+      index.reconcileRows(new Set(["first", "new"]));
+      index.reconcile(
+        columns,
+        projectionChanges ? rowSpace(["first", "retained", "new"]) : projection,
+      );
+      while (index.buildNextSlice(2, Number.POSITIVE_INFINITY)) {
+        expect(index.find(0, "COL_ID_ENABLED", 1)).toBeUndefined();
+      }
+      expect(evaluate).toHaveBeenCalledTimes(4);
+      expect(index.getCachedRowCount()).toBe(3);
+      expect(index.find(0, "COL_ID_ENABLED", 1)?.rowId).toBe("retained");
+    },
+  );
 
   it("evicts removed filtered rows and bounds caches across unknown source replacements", () => {
     const first: Row = { id: "first", enabled: true, alternate: false };

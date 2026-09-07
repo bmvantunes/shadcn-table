@@ -26,7 +26,7 @@ export type BrunoTableCellEditTraversalRange =
 type RowCache = {
   row: object;
   validationGeneration: number;
-  readonly eligiblePredicateColumnIds: Set<string>;
+  eligiblePredicateColumnIds: Set<string> | undefined;
 };
 
 type UnknownProjection = {
@@ -40,6 +40,7 @@ type UnknownProjection = {
   readonly pendingDetachedRowIds: string[];
   readonly pendingDetachedRowIdSet: Set<string>;
   readonly claimedDirtyRowIds: Set<string>;
+  claimedCachedRowCount: number;
   dirtyRowIterator: IterableIterator<string> | undefined;
   rowIndex: number;
 };
@@ -147,7 +148,7 @@ export class BrunoTableCellEditTraversalIndex {
   private predicateColumnsById = new Map<string, CompiledFieldColumn>();
   private validRowIndexes: number[] = [];
   private eligiblePredicateRowIndexes: number[] = [];
-  private readonly dirtyColumnIdsByRowId = new Map<string, Set<string>>();
+  private readonly dirtyColumnIdsByRowId = new Map<string, string | Set<string>>();
   private dirtyRowIds = new Set<string>();
   private verticalRangeCache:
     | {
@@ -334,7 +335,8 @@ export class BrunoTableCellEditTraversalIndex {
         }
       }
       validRowIndexes.push(rowIndex);
-      if (rowCache.eligiblePredicateColumnIds.size > 0) eligiblePredicateRowIndexes.push(rowIndex);
+      if ((rowCache.eligiblePredicateColumnIds?.size ?? 0) > 0)
+        eligiblePredicateRowIndexes.push(rowIndex);
     }
     this.rowIds = rowIds;
     this.validRowIndexes = validRowIndexes;
@@ -397,6 +399,7 @@ export class BrunoTableCellEditTraversalIndex {
               const rowId = dirtyRow.value;
               this.pendingDirtyRowIds.add(rowId);
               this.dirtyRowIds.delete(rowId);
+              this.claimUnknownProjectionRow(projection, rowId);
               const rowIndex = projection.rowIndexById.get(rowId);
               if (rowIndex !== undefined) {
                 enqueueUnknownProjectionRow(projection, rowIndex);
@@ -450,10 +453,9 @@ export class BrunoTableCellEditTraversalIndex {
         const rowCache = this.rowCacheById.get(authorityRowId);
         if (rowCache !== undefined) {
           for (const columnId of this.pendingPredicateAuthorityColumnIds) {
-            rowCache.eligiblePredicateColumnIds.delete(columnId);
-            this.eligiblePredicateRowIdsByColumnId.get(columnId)?.delete(authorityRowId);
             const column = this.predicateColumnsById.get(columnId);
             if (column !== undefined) this.evaluateCell(authorityRowId, rowCache, column);
+            else rowCache.eligiblePredicateColumnIds?.delete(columnId);
           }
         }
         continue;
@@ -469,7 +471,7 @@ export class BrunoTableCellEditTraversalIndex {
           const rowId = this.rowIds[rowIndex];
           if (
             rowId !== undefined &&
-            this.rowCacheById.get(rowId)?.eligiblePredicateColumnIds.size !== 0
+            (this.rowCacheById.get(rowId)?.eligiblePredicateColumnIds?.size ?? 0) !== 0
           ) {
             authorityProjection.push(rowIndex);
           }
@@ -524,7 +526,7 @@ export class BrunoTableCellEditTraversalIndex {
           : this.createRowCache(rowId, row);
       if (rowCache !== existing) this.rowCacheById.set(rowId, rowCache);
       insertSorted(this.validRowIndexes, rowIndex);
-      if (rowCache.eligiblePredicateColumnIds.size > 0) {
+      if ((rowCache.eligiblePredicateColumnIds?.size ?? 0) > 0) {
         insertSorted(this.eligiblePredicateRowIndexes, rowIndex);
       }
     }
@@ -583,12 +585,13 @@ export class BrunoTableCellEditTraversalIndex {
       this.mergeLateUnknownInvalidation(rowId);
       return;
     }
-    let columnIds = this.dirtyColumnIdsByRowId.get(rowId);
+    const columnIds = this.dirtyColumnIdsByRowId.get(rowId);
     if (columnIds === undefined) {
-      columnIds = new Set();
-      this.dirtyColumnIdsByRowId.set(rowId, columnIds);
-    }
-    columnIds.add(columnId);
+      this.dirtyColumnIdsByRowId.set(rowId, columnId);
+    } else if (typeof columnIds === "string") {
+      if (columnIds !== columnId)
+        this.dirtyColumnIdsByRowId.set(rowId, new Set([columnIds, columnId]));
+    } else columnIds.add(columnId);
   };
 
   public readonly reconcileRange = (range: BrunoTableCellEditTraversalRange | undefined): void => {
@@ -693,7 +696,7 @@ export class BrunoTableCellEditTraversalIndex {
     const rowIndex = projection?.rowIndexById.get(rowId);
     if (projection !== undefined && rowIndex !== undefined) {
       enqueueUnknownProjectionRow(projection, rowIndex);
-      projection.claimedDirtyRowIds.add(rowId);
+      this.claimUnknownProjectionRow(projection, rowId);
       this.pendingDirtyRowIds.delete(rowId);
       this.dirtyRowIds.delete(rowId);
     }
@@ -712,7 +715,7 @@ export class BrunoTableCellEditTraversalIndex {
     }
     if (this.pendingDirtyRowIds.has(rowId) || this.dirtyRowIds.has(rowId)) {
       enqueueUnknownProjectionRow(projection, rowIndex);
-      projection.claimedDirtyRowIds.add(rowId);
+      this.claimUnknownProjectionRow(projection, rowId);
       this.pendingDirtyRowIds.delete(rowId);
       this.dirtyRowIds.delete(rowId);
       return;
@@ -723,12 +726,23 @@ export class BrunoTableCellEditTraversalIndex {
       return;
     }
     projection.validRowIndexes.push(rowIndex);
-    if (rowCache.eligiblePredicateColumnIds.size > 0) {
+    if ((rowCache.eligiblePredicateColumnIds?.size ?? 0) > 0) {
       projection.eligiblePredicateRowIndexes.push(rowIndex);
     }
   };
 
   private readonly installUnknownProjection = (projection: UnknownProjection): void => {
+    // Every old cached identity is queued for replacement/removal. Dropping the
+    // obsolete indexes together avoids repeatedly shrinking each column's Set.
+    if (
+      projection.claimedCachedRowCount === this.rowCacheById.size &&
+      this.pendingPredicateAuthorityRowIterator === undefined &&
+      this.pendingPredicateAuthorityEligibleRowIndexes === undefined &&
+      this.pendingPredicateAuthorityColumnIds.size === 0
+    ) {
+      this.rowCacheById.clear();
+      this.eligiblePredicateRowIdsByColumnId.clear();
+    }
     this.rowIds = projection.rowIds;
     this.rowIndexById = projection.rowIndexById;
     this.validRowIndexes = projection.validRowIndexes;
@@ -746,6 +760,15 @@ export class BrunoTableCellEditTraversalIndex {
     this.verticalRangeCache = undefined;
   };
 
+  private readonly claimUnknownProjectionRow = (
+    projection: UnknownProjection,
+    rowId: string,
+  ): void => {
+    if (projection.claimedDirtyRowIds.has(rowId)) return;
+    projection.claimedDirtyRowIds.add(rowId);
+    if (this.rowCacheById.has(rowId)) projection.claimedCachedRowCount += 1;
+  };
+
   private readonly createUnknownProjection = (
     rowSpace: BrunoTableCellEditTraversalRowSpace,
   ): UnknownProjection => ({
@@ -759,6 +782,7 @@ export class BrunoTableCellEditTraversalIndex {
     pendingDetachedRowIds: [],
     pendingDetachedRowIdSet: new Set(),
     claimedDirtyRowIds: new Set(),
+    claimedCachedRowCount: 0,
     dirtyRowIterator: undefined,
     rowIndex: 0,
   });
@@ -789,7 +813,9 @@ export class BrunoTableCellEditTraversalIndex {
 
   private readonly stageDirtyRows = (): void => {
     if (this.dirtyRowIds.size === 0) return;
+    let invalidatedCachedRowCount = 0;
     for (const rowId of this.dirtyRowIds) {
+      if (this.rowCacheById.has(rowId)) invalidatedCachedRowCount += 1;
       const rowIndex = this.rowIndexById.get(rowId);
       this.pendingDirtyRowIds.add(rowId);
       this.dirtyColumnIdsByRowId.delete(rowId);
@@ -802,6 +828,17 @@ export class BrunoTableCellEditTraversalIndex {
         this.pendingRowIndexSet.add(rowIndex);
         this.pendingRowIndexes.push(rowIndex);
       }
+    }
+    // Count cached identities, not batch size: new rows must never authorize
+    // discarding unchanged eligibility. Preserve any in-flight authority pass.
+    if (
+      invalidatedCachedRowCount === this.rowCacheById.size &&
+      this.pendingPredicateAuthorityRowIterator === undefined &&
+      this.pendingPredicateAuthorityEligibleRowIndexes === undefined &&
+      this.pendingPredicateAuthorityColumnIds.size === 0
+    ) {
+      this.rowCacheById.clear();
+      this.eligiblePredicateRowIdsByColumnId.clear();
     }
     this.dirtyRowIds.clear();
     this.verticalRangeCache = undefined;
@@ -839,7 +876,7 @@ export class BrunoTableCellEditTraversalIndex {
       this.rowCacheById.set(rowId, rowCache);
     }
     insertSorted(this.validRowIndexes, rowIndex);
-    if (rowCache.eligiblePredicateColumnIds.size === 0) {
+    if ((rowCache.eligiblePredicateColumnIds?.size ?? 0) === 0) {
       removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
       return;
     }
@@ -850,7 +887,7 @@ export class BrunoTableCellEditTraversalIndex {
     const cache: RowCache = {
       row,
       validationGeneration: this.validationGeneration,
-      eligiblePredicateColumnIds: new Set(),
+      eligiblePredicateColumnIds: undefined,
     };
     for (const { column } of this.predicateColumns) this.evaluateCell(rowId, cache, column);
     return cache;
@@ -863,7 +900,7 @@ export class BrunoTableCellEditTraversalIndex {
   ): void => {
     const eligible = this.evaluatePredicate(rowId, rowCache.row, column);
     if (eligible) {
-      rowCache.eligiblePredicateColumnIds.add(column.columnId);
+      (rowCache.eligiblePredicateColumnIds ??= new Set()).add(column.columnId);
       let rowIds = this.eligiblePredicateRowIdsByColumnId.get(column.columnId);
       if (rowIds === undefined) {
         rowIds = new Set();
@@ -871,7 +908,7 @@ export class BrunoTableCellEditTraversalIndex {
       }
       rowIds.add(rowId);
     } else {
-      rowCache.eligiblePredicateColumnIds.delete(column.columnId);
+      rowCache.eligiblePredicateColumnIds?.delete(column.columnId);
       this.eligiblePredicateRowIdsByColumnId.get(column.columnId)?.delete(rowId);
     }
   };
@@ -896,6 +933,9 @@ export class BrunoTableCellEditTraversalIndex {
     if (changedColumnIds.size === 0) return;
     for (const columnId of changedColumnIds) {
       this.pendingPredicateAuthorityColumnIds.add(columnId);
+      // This column's complete reverse index is obsolete. Rebuild it during
+      // the pending pass instead of deleting the old membership row by row.
+      this.eligiblePredicateRowIdsByColumnId.delete(columnId);
     }
     this.pendingPredicateAuthorityRowIterator = this.rowCacheById.keys();
     this.pendingPredicateAuthorityEligibleRowIndexes = undefined;
@@ -917,11 +957,16 @@ export class BrunoTableCellEditTraversalIndex {
         this.refreshRow(rowId);
         continue;
       }
-      for (const columnId of columnIds) {
-        const column = this.predicateColumnsById.get(columnId);
+      if (typeof columnIds === "string") {
+        const column = this.predicateColumnsById.get(columnIds);
         if (column !== undefined) this.evaluateCell(rowId, rowCache, column);
+      } else {
+        for (const columnId of columnIds) {
+          const column = this.predicateColumnsById.get(columnId);
+          if (column !== undefined) this.evaluateCell(rowId, rowCache, column);
+        }
       }
-      if (rowCache.eligiblePredicateColumnIds.size === 0)
+      if ((rowCache.eligiblePredicateColumnIds?.size ?? 0) === 0)
         removeSorted(this.eligiblePredicateRowIndexes, rowIndex);
       else insertSorted(this.eligiblePredicateRowIndexes, rowIndex);
     }
@@ -936,8 +981,10 @@ export class BrunoTableCellEditTraversalIndex {
   private readonly removeRowCache = (rowId: string): void => {
     const cache = this.rowCacheById.get(rowId);
     if (cache === undefined) return;
-    for (const columnId of cache.eligiblePredicateColumnIds)
-      this.eligiblePredicateRowIdsByColumnId.get(columnId)?.delete(rowId);
+    if (cache.eligiblePredicateColumnIds !== undefined) {
+      for (const columnId of cache.eligiblePredicateColumnIds)
+        this.eligiblePredicateRowIdsByColumnId.get(columnId)?.delete(rowId);
+    }
     this.rowCacheById.delete(rowId);
   };
 
