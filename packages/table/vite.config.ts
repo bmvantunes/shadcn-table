@@ -24,6 +24,9 @@ const config: UserConfig = defineConfig({
     },
   },
   pack: {
+    outputOptions: {
+      banner: (chunk) => (chunk.name === "index" ? '"use client";' : ""),
+    },
     entry: {
       index: "src/index.ts",
       effect: "src/effect.ts",

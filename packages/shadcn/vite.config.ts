@@ -31,6 +31,7 @@ const config: UserConfig = defineConfig({
     ],
   },
   pack: {
+    banner: { js: '"use client";' },
     entry: {
       "*": ["src/components/*.tsx", "!src/components/*.test.tsx"],
       "internal/compiler-smoke": "src/compiler-smoke.tsx",

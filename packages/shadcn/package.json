@@ -2,11 +2,21 @@
   "name": "@bruno/shadcn",
   "version": "0.0.0",
   "description": "Base UI-powered shadcn components for BrunoTable and other React applications.",
+  "homepage": "https://github.com/bmvantunes/shadcn-table/tree/main/packages/shadcn#readme",
+  "bugs": {
+    "url": "https://github.com/bmvantunes/shadcn-table/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bmvantunes/shadcn-table.git",
+    "directory": "packages/shadcn"
+  },
   "files": [
     "dist/*.d.mts",
     "dist/*.mjs",
-    "src/styles/globals.css"
+    "src/styles/globals.css",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "type": "module",
   "sideEffects": [

@@ -8,6 +8,7 @@
     "test:browser:performance": "vp run @bruno/table#test:browser:performance",
     "test:skills": "vp run @bruno/table#test:skills",
     "check": "vp check",
+    "release:dry-run": "node scripts/release-dry-run.mjs",
     "prepare": "vp config"
   },
   "devDependencies": {
