@@ -6,6 +6,9 @@
     "tanstack-intent"
   ],
   "homepage": "https://github.com/bmvantunes/shadcn-table/tree/main/packages/table#readme",
+  "bugs": {
+    "url": "https://github.com/bmvantunes/shadcn-table/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -13,8 +16,12 @@
     "directory": "packages/table"
   },
   "files": [
-    "dist",
-    "skills"
+    "dist/*.mjs",
+    "dist/*.d.mts",
+    "skills",
+    "USAGE.md",
+    "RELEASE.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "type": "module",
   "sideEffects": false,
@@ -44,6 +51,7 @@
     "test:browser:performance": "NODE_ENV=production vp test --config vitest.performance-browser.config.ts --run --mode production",
     "test:browser:emitted": "vp test --config vitest.emitted-browser.config.ts --run",
     "test:skills:unit": "node --test scripts/agent-skills-contract.test.mjs",
+    "test:release:package": "node --test scripts/release-package.test.mjs",
     "test:skills": "intent validate skills --check && node scripts/assert-intent-staleness.mjs && node scripts/agent-skills-contract.mjs && vp run test:skills:unit && vp run test:skills:package",
     "test:skills:package": "node scripts/assert-agent-skills-package.mjs",
     "test:bench:hotkeys": "vp test bench src/internal/hotkey-adapter.bench.ts --run",
@@ -58,7 +66,7 @@
     "test:bench:server-viewport": "vp test bench src/internal/server-viewport-store.bench.ts --run",
     "test:types:source": "tsc --project tsconfig.type-tests.json",
     "test:types:emitted": "tsc --project tests/emitted-consumer/tsconfig.emitted.json && tsc --project tests/emitted-consumer/tsconfig.emitted-server.json && tsc --project tests/emitted-effect-consumer/tsconfig.emitted.json",
-    "prepublishOnly": "vp run @bruno/shadcn#build && vp run build && vp run check && vp run test:skills && vp run test && vp run test:browser && vp run test:browser:performance && vp run test:types:source && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:hotkeys && vp run test:bench:hotkeys:browser && vp run test:bench:column-management && vp run test:bench:toolbar && vp run test:bench:row-selection && vp run test:bench:cell-range && vp run test:bench:drag-fill && vp run test:bench:cell-edit && vp run test:bench:client-grouping && vp run test:bench:server-viewport"
+    "prepublishOnly": "vp run @bruno/shadcn#build && vp run build && vp run check && vp run test:skills && vp run test && vp run test:browser && vp run test:browser:performance && vp run test:types:source && vp run test:browser:emitted && vp run check:build && vp run test:types:emitted && vp run test:bench:hotkeys && vp run test:bench:hotkeys:browser && vp run test:bench:column-management && vp run test:bench:toolbar && vp run test:bench:row-selection && vp run test:bench:cell-range && vp run test:bench:drag-fill && vp run test:bench:cell-edit && vp run test:bench:client-grouping && vp run test:bench:server-viewport && vp run test:release:package"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

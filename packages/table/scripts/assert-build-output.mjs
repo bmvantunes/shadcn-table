@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,9 @@ import { parseAstAsync } from "vite";
 
 import { assertReactCompilerStrictness } from "../../../config/react-compiler-options.mjs";
 import { BRUNO_TABLE_PACKAGED_SKILL_FILES } from "./agent-skills-contract.mjs";
+import { assertInstalledHydration } from "./assert-installed-hydration.mjs";
+import { isolatedProcessEnvironment } from "../../../config/isolated-process-environment.mjs";
+import { assertInstalledIntent } from "./assert-installed-intent.mjs";
 
 assertReactCompilerStrictness(transformSync);
 
@@ -763,9 +766,19 @@ if (
   throw new Error("The private export-target validator failed its nested-condition smoke check.");
 }
 
-if (JSON.stringify(packageJson.files) !== JSON.stringify(["dist", "skills"])) {
+if (
+  JSON.stringify(packageJson.files) !==
+  JSON.stringify([
+    "dist/*.mjs",
+    "dist/*.d.mts",
+    "skills",
+    "USAGE.md",
+    "RELEASE.md",
+    "THIRD_PARTY_NOTICES.md",
+  ])
+) {
   throw new Error(
-    "The @bruno/table package must publish its complete dist and Agent Skill directories.",
+    "The @bruno/table package must publish runtime/declaration chunks and skills, excluding development fixtures.",
   );
 }
 if (
@@ -1648,6 +1661,14 @@ void toolbar;
     );
 
     await assertInstalledGraphExcludesEffect(consumerRoot);
+    await assertInstalledIntent(consumerRoot);
+    const usage = await readFile(new URL("../USAGE.md", import.meta.url), "utf8");
+    const examples = [...usage.matchAll(/```tsx\n([\s\S]*?)```/gu)];
+    for (const [index, example] of examples.entries()) {
+      if (example[1].startsWith("import ")) {
+        await writeFile(join(consumerRoot, `documentation-${index}.tsx`), example[1]);
+      }
+    }
     runTypeScriptConsumer(consumerRoot, "Effect-free @bruno/table root consumer");
     runCommand(process.execPath, ["runtime.mjs"], consumerRoot, "Effect-free root runtime");
     runCommand("pnpm", ["exec", "vp", "build"], consumerRoot, "Styled packed Vite consumer");
@@ -1671,6 +1692,7 @@ void toolbar;
       { NODE_ENV: "development" },
     );
     await assertBundledIdentityDiagnostics(join(consumerRoot, "dist-diagnostics", "assets"), true);
+    await assertInstalledHydration(consumerRoot);
   } finally {
     await rm(consumerRoot, { recursive: true, force: true });
   }
@@ -1773,10 +1795,13 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
     JSON.stringify({
       private: true,
       type: "module",
+      intent: { skills: ["@bruno/table"] },
       dependencies: {
         "@bruno/table": `file:${tarball}`,
         "@bruno/shadcn": `file:${shadcnTarball}`,
         "@types/react": "19.2.18",
+        "@types/react-dom": "19.2.4",
+        typescript: "7.0.2",
         ...(includeEffect
           ? {}
           : {
@@ -1784,8 +1809,20 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
               tailwindcss: "4.3.3",
               vite: "npm:@voidzero-dev/vite-plus-core@0.2.8",
               "vite-plus": "0.2.8",
+              "@vitejs/plugin-react": "6.1.0",
+              "oxc-transform-react": "0.145.0",
+              "@vitest/browser-playwright": "4.1.10",
+              playwright: "1.60.0",
+              "@tanstack/intent": "0.3.8",
             }),
-        ...(includeEffect ? { effect: "4.0.0-rc.111" } : {}),
+        ...(includeEffect
+          ? {
+              effect: "4.0.0-rc.111",
+              "effect-view-server": "4.2.8",
+              "@effect/atom-react": "4.0.0-rc.111",
+              "@types/node": "26.1.2",
+            }
+          : {}),
         react: "19.2.8",
         "react-dom": "19.2.8",
       },
@@ -1796,15 +1833,23 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
     JSON.stringify({
       compilerOptions: {
         strict: true,
+        exactOptionalPropertyTypes: true,
+        noUncheckedIndexedAccess: true,
         noEmit: true,
         module: "esnext",
         moduleResolution: "bundler",
         jsx: "react-jsx",
         lib: ["esnext", "dom"],
-        types: [],
+        types: includeEffect ? ["node"] : [],
         skipLibCheck: false,
       },
-      include: ["index.ts", "index.tsx"],
+      include: [
+        "index.ts",
+        "index.tsx",
+        "documentation-*.tsx",
+        "contracts-*.ts",
+        "contracts-*.tsx",
+      ],
     }),
   );
   runCommand(
@@ -1813,6 +1858,15 @@ async function createPackedConsumer(prefix, tarball, shadcnTarball, includeEffec
     consumerRoot,
     "packed consumer install",
   );
+  if (includeEffect) {
+    for (const [source, destination] of [
+      ["emitted-consumer/index.ts", "contracts-server.ts"],
+      ["emitted-consumer/jsx.tsx", "contracts-jsx.tsx"],
+      ["emitted-effect-consumer/index.ts", "contracts-effect.ts"],
+    ]) {
+      await cp(new URL(`../tests/${source}`, import.meta.url), join(consumerRoot, destination));
+    }
+  }
   return consumerRoot;
 }
 
@@ -1844,17 +1898,14 @@ function isEffectModuleSpecifier(specifier) {
 }
 
 function runTypeScriptConsumer(consumerRoot, label) {
-  const typescriptCli = fileURLToPath(
-    new URL("../../../node_modules/typescript/bin/tsc", import.meta.url),
-  );
-  runCommand(process.execPath, [typescriptCli, "--project", "tsconfig.json"], consumerRoot, label);
+  runCommand("pnpm", ["exec", "tsc", "--project", "tsconfig.json"], consumerRoot, label);
 }
 
 function runCommand(command, parameters, cwd, label, extraEnvironment = {}) {
   const result = spawnSync(command, parameters, {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, CI: "true", ...extraEnvironment },
+    env: { ...isolatedProcessEnvironment(cwd), ...extraEnvironment },
   });
   if (result.status !== 0) {
     throw new Error(`${label} failed.\n${result.stdout ?? ""}${result.stderr ?? ""}`);

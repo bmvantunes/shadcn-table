@@ -1,4 +1,5 @@
 import { defineConfig, type UserConfig } from "vite-plus";
+import { configDefaults } from "vite-plus/test/config";
 
 import { shadcnSourceAliases } from "./config/shadcn-source-aliases.js";
 
@@ -25,7 +26,7 @@ const config: UserConfig = defineConfig({
             "packages/**/*.test.ts",
             "packages/**/*.test.tsx",
           ],
-          exclude: ["packages/**/*.browser.test.tsx"],
+          exclude: [...configDefaults.exclude, "packages/**/*.browser.test.tsx"],
         },
       },
       "./packages/shadcn/vitest.browser.config.ts",

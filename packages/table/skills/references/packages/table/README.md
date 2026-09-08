@@ -2,6 +2,11 @@
 
 The React data-grid package for BrunoTable.
 
+Start with the [integration guide](https://github.com/bmvantunes/shadcn-table/blob/main/packages/table/USAGE.md)
+for Client, Server, editing, grouping, and copy examples. See the
+[release and migration guide](https://github.com/bmvantunes/shadcn-table/blob/main/packages/table/RELEASE.md)
+for compatibility, exclusions, and the non-publishing release procedure. Both guides ship in the package.
+
 The public interface is intentionally small and BrunoTable-owned. TanStack Table, virtualization,
 stores, and server-query translation are private implementation details.
 
