@@ -6677,6 +6677,8 @@ describe("BrunoTableClient browser surface", () => {
           },
         ),
       );
+    // Finish the initial Active Cell reveal before testing a later user scroll.
+    await settleBrunoTableBrowserFrames(2);
     const initialRows = mountedRows();
     expect(initialRows.size).toBeGreaterThan(5);
 

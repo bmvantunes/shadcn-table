@@ -1120,31 +1120,36 @@ describe("BrunoTableClient grouping and aggregation", () => {
     });
   });
 
-  test("keeps Add Group open when a closing column menu finishes", async () => {
-    await render(
-      <BrunoTableClient
-        tableId="TABLE_ID_GROUPING_MENU_FOCUS_TRANSFER"
-        columns={columns}
-        initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
-        getRowId={(row) => row.id}
-        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
-      />,
-    );
-    await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
-    const menu = page.getByRole("menu").element();
-    menu.style.animationDuration = "400ms";
-    await userEvent.keyboard("{Escape}");
-    await userEvent.click(page.getByRole("combobox", { name: "Add Group" }));
-    await expect.element(page.getByRole("option", { name: "Desk", exact: true })).toBeVisible();
-    expect(menu.isConnected).toBe(true);
-    expect(menu.hasAttribute("data-closed")).toBe(true);
-    await vi.waitFor(() => expect(menu.isConnected).toBe(false));
-    await expect.element(page.getByRole("option", { name: "Desk", exact: true })).toBeVisible();
-    await userEvent.click(page.getByRole("option", { name: "Desk", exact: true }));
-    await expect
-      .element(page.getByRole("button", { name: "Remove Desk from Group By" }))
-      .toBeVisible();
-  });
+  test.each([1, 10, 50, 400])(
+    "keeps Add Group open when a closing column menu finishes (%i ms)",
+    async (closeDuration) => {
+      await render(
+        <BrunoTableClient
+          tableId="TABLE_ID_GROUPING_MENU_FOCUS_TRANSFER"
+          columns={columns}
+          initialOrderBy={[{ columnId: "COL_ID_DESK", direction: "asc" }]}
+          getRowId={(row) => row.id}
+          clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        />,
+      );
+      await userEvent.click(page.getByRole("button", { name: "Column menu for Desk" }));
+      const menu = page.getByRole("menu").element();
+      menu.style.animationDuration = `${closeDuration}ms`;
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(page.getByRole("combobox", { name: "Add Group" }));
+      await expect.element(page.getByRole("option", { name: "Desk", exact: true })).toBeVisible();
+      if (closeDuration === 400) {
+        expect(menu.isConnected).toBe(true);
+        expect(menu.hasAttribute("data-closed")).toBe(true);
+      }
+      await vi.waitFor(() => expect(menu.isConnected).toBe(false));
+      await expect.element(page.getByRole("option", { name: "Desk", exact: true })).toBeVisible();
+      await userEvent.click(page.getByRole("option", { name: "Desk", exact: true }));
+      await expect
+        .element(page.getByRole("button", { name: "Remove Desk from Group By" }))
+        .toBeVisible();
+    },
+  );
 
   test("admits disabled raw sort columns only while they participate in grouping", async () => {
     const disabledGroupedSortColumns = [
