@@ -22,6 +22,8 @@ export const BRUNO_TABLE_PACKAGED_SKILL_FILES = Object.freeze([
   "skills/references/docs/grid/research/strict-column-api-prototype.md",
   "skills/references/docs/grid/server-viewport-model.md",
   "skills/references/packages/table/README.md",
+  "skills/references/packages/table/RELEASE.md",
+  "skills/references/packages/table/USAGE.md",
   "skills/sync-state.json",
 ]);
 
