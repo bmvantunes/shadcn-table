@@ -1574,6 +1574,150 @@ describe("BrunoTable column management browser surface", () => {
     await screen.rerender(<></>);
   });
 
+  test.each([
+    ...[100_000, 120_000].flatMap((rowCount) =>
+      [1000, 1010].flatMap((scrollOffset) =>
+        ["cancel", "no-op"].map((ending) => ({ rowCount, scrollOffset, ending })),
+      ),
+    ),
+    { rowCount: 120_000, scrollOffset: 1000, ending: "scroll-cancel" },
+  ])(
+    "keeps $rowCount rows aligned during resize and $ending at offset $scrollOffset",
+    async ({ rowCount, scrollOffset, ending }) => {
+      const resizeColumns = [
+        { ...columns[0], width: 800 },
+        ...Array.from({ length: 12 }, (_, index) => ({
+          columnId: `COL_ID_EXTRA_${index}` as BrunoTableColumnId,
+          field: "score" as const,
+          headerName: `Extra ${index}`,
+          valueType: "number" as const,
+          width: 100,
+        })),
+      ] satisfies BrunoTableColumns<Row>;
+      const residentRows: readonly Row[] = Array.from({ length: rowCount }, (_, index) => ({
+        id: `row-${index}`,
+        name: `Row ${String(index).padStart(6, "0")}`,
+        score: index,
+        status: "Ready",
+      }));
+      const screen = await render(
+        <div style={{ width: 240, height: 480 }}>
+          <BrunoTableClient<Row, typeof resizeColumns>
+            {...tableProps}
+            columns={resizeColumns}
+            initialOrderBy={[{ columnId: "COL_ID_NAME", direction: "asc" }]}
+            tableId="TABLE_ID_RESIZE_PREVIEW_ROW_ALIGNMENT"
+            clientSource={{
+              rows: residentRows,
+              totalRows: residentRows.length,
+              version: 1,
+              status: "ready",
+            }}
+          />
+        </div>,
+      );
+      const grid = screen.getByRole("grid").element();
+      await vi.waitFor(() => expect(grid.scrollHeight).toBeGreaterThan(1010));
+      expect(grid.clientWidth).toBe(240);
+      if (rowCount === 120_000) expect(grid.scrollHeight).toBeGreaterThanOrEqual(4_000_000);
+      grid.scrollTop = scrollOffset;
+      grid.dispatchEvent(new Event("scroll"));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      const firstBodyRow = () =>
+        screen
+          .getByRole("row")
+          .all()
+          .find((row) => Number(row.element().getAttribute("aria-rowindex")) > 1)!
+          .element();
+      await vi.waitFor(() =>
+        expect(Number(firstBodyRow().getAttribute("aria-rowindex"))).toBeGreaterThan(2),
+      );
+      const firstIndex = firstBodyRow().getAttribute("aria-rowindex");
+      const firstTop = firstBodyRow().getBoundingClientRect().top;
+      let verticalDelta = 0;
+      const assertRowsAligned = () => {
+        for (const row of screen.getByRole("row").all()) {
+          const rowIndex = Number(row.element().getAttribute("aria-rowindex"));
+          if (rowIndex <= 1) continue;
+          expect(row.element().getBoundingClientRect().top, `row ${rowIndex} position`).toBeCloseTo(
+            firstTop + (rowIndex - Number(firstIndex)) * 36 - verticalDelta,
+            1,
+          );
+        }
+      };
+      const initialScrollTop = grid.scrollTop;
+      if (scrollOffset === 1010) {
+        expect(Math.floor(initialScrollTop / 36)).not.toBe(
+          Math.floor((Math.floor(initialScrollTop / 32) * 32) / 36),
+        );
+      }
+      const handle = screen.getByRole("separator", { name: "Resize Name" }).element();
+      handle.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 100, pointerId: 53 }),
+      );
+      expect(grid.scrollTop, "after pointer admission").toBe(initialScrollTop);
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, clientX: -600, pointerId: 53 }),
+      );
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      await vi.waitFor(() =>
+        expect(
+          screen.getByRole("columnheader", { name: /Name/u }).element().getBoundingClientRect()
+            .width,
+        ).toBe(100),
+      );
+      expect(grid.scrollTop, "during preview").toBe(initialScrollTop);
+      assertRowsAligned();
+      if (ending === "scroll-cancel") {
+        const mountedIndexes = () =>
+          screen
+            .getByRole("row")
+            .all()
+            .map((row) => row.element().getAttribute("aria-rowindex"));
+        const previewIndexes = mountedIndexes();
+        verticalDelta = 108;
+        grid.scrollTop = initialScrollTop + verticalDelta;
+        grid.dispatchEvent(new Event("scroll"));
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        expect(grid.scrollTop).toBe(initialScrollTop + verticalDelta);
+        expect(mountedIndexes()).toEqual(previewIndexes);
+        assertRowsAligned();
+      }
+      if (ending === "no-op") {
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, clientX: 100, pointerId: 53 }),
+        );
+        await vi.waitFor(() =>
+          expect(
+            screen.getByRole("columnheader", { name: /Name/u }).element().getBoundingClientRect()
+              .width,
+          ).toBe(800),
+        );
+        assertRowsAligned();
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, clientX: 100, pointerId: 53 }),
+        );
+      } else {
+        window.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 53 }));
+      }
+      await vi.waitFor(() => {
+        expect(grid.scrollTop).toBe(initialScrollTop + verticalDelta);
+        expect(
+          screen.getByRole("columnheader", { name: /Name/u }).element().getBoundingClientRect()
+            .width,
+        ).toBe(800);
+        assertRowsAligned();
+      });
+      expect(grid.scrollTop).toBe(initialScrollTop + verticalDelta);
+    },
+  );
+
   test("uses RTL direction for keyboard submenu navigation", async () => {
     const screen = await render(
       <div dir="rtl">
