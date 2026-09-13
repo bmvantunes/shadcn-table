@@ -589,8 +589,10 @@ export class BrunoTableViewportRuntime {
         logicalScrollLeft,
         horizontalScrollMaximum(this.layout, viewportWidth),
       );
+      const logicalScrollTop = this.readLogicalScrollTop(element, false);
+      const physicalScrollTop = element.scrollTop;
       const previewViewport = {
-        logicalScrollTop: this.readLogicalScrollTop(element, false),
+        logicalScrollTop: quantizeScroll(logicalScrollTop),
         scrollLeft: previewScrollLeft,
         width: viewportWidth,
         height: clientHeight,
@@ -612,7 +614,10 @@ export class BrunoTableViewportRuntime {
         this.previewPublishedSuspended === isSuspended &&
         mountedWindowCoversPreviewWindow(this.snapshot.virtualWindow, previewWindow);
       if (!reuseMountedWindow) {
-        this.publishSnapshot(createViewportSnapshot(this.layout, previewViewport));
+        const next = createViewportSnapshot(this.layout, previewViewport);
+        // Seed the matching offset before subscribers mount rows from this window.
+        this.writeRowWindowOffset(physicalScrollTop, logicalScrollTop, next.virtualWindow);
+        this.publishSnapshot(next);
         this.previewPublishedSuspended = isSuspended;
       }
       this.writeColumnPreviewStyles(
@@ -631,7 +636,7 @@ export class BrunoTableViewportRuntime {
         this.setLogicalScrollLeft(element, previewScrollLeft, viewportWidth, false);
       }
       this.writePinnedEditorGeometry(previewScrollLeft, clientWidth);
-      this.writeScrollbarOverlay(element, previewViewport.logicalScrollTop, previewScrollLeft, {
+      this.writeScrollbarOverlay(element, logicalScrollTop, previewScrollLeft, {
         clientHeight,
         clientWidth,
         offsetHeight,
@@ -673,14 +678,14 @@ export class BrunoTableViewportRuntime {
       this.writePinnedEditorGeometry(restoredLogicalScrollLeft);
       this.writeScrollbarOverlay(this.element, logicalScrollTop, restoredLogicalScrollLeft);
       if (publishSnapshot) {
-        this.publishSnapshot(
-          createViewportSnapshot(this.layout, {
-            logicalScrollTop,
-            scrollLeft: restoredLogicalScrollLeft,
-            width: this.effectiveViewportWidth(this.element),
-            height: this.element.clientHeight,
-          }),
-        );
+        const next = createViewportSnapshot(this.layout, {
+          logicalScrollTop: quantizeScroll(logicalScrollTop),
+          scrollLeft: restoredLogicalScrollLeft,
+          width: this.effectiveViewportWidth(this.element),
+          height: this.element.clientHeight,
+        });
+        this.writeRowWindowOffset(this.element.scrollTop, logicalScrollTop, next.virtualWindow);
+        this.publishSnapshot(next);
       }
     }
   };
@@ -1756,13 +1761,13 @@ export class BrunoTableViewportRuntime {
             rowOverscan,
             columnOverscan,
           );
-    const nextRowLayerOffset = `${
-      element.scrollTop +
-      (next.virtualWindow.segmentedRows ? next.virtualWindow.rowStart * ROW_HEIGHT : 0) -
-      logicalScrollTop
-    }px`;
     this.writeScrollbarOverlay(element, logicalScrollTop, logicalScrollLeft, dimensions);
-    this.writeBodyLayerOffset(nextRowLayerOffset);
+    // Preview frames retain the mounted window even when scrolling computes another one.
+    this.writeRowWindowOffset(
+      element.scrollTop,
+      logicalScrollTop,
+      this.previewLayout === undefined ? next.virtualWindow : this.snapshot.virtualWindow,
+    );
     if (this.previewLayout === undefined) {
       this.publishSnapshot(next, columnOverscan, allowBodyColumnPreparation);
     }
@@ -1786,6 +1791,20 @@ export class BrunoTableViewportRuntime {
     if (host === null) return;
     host.style.removeProperty(BRUNO_TABLE_VIEWPORT_LOGICAL_SCROLL_LEFT_CSS_VARIABLE);
     host.style.removeProperty(BRUNO_TABLE_VIEWPORT_INLINE_SIZE_CSS_VARIABLE);
+  }
+
+  private writeRowWindowOffset(
+    physicalScrollTop: number,
+    logicalScrollTop: number,
+    window: BrunoTableVirtualWindow,
+  ): void {
+    this.writeBodyLayerOffset(
+      `${
+        physicalScrollTop +
+        (window.segmentedRows ? window.rowStart * ROW_HEIGHT : 0) -
+        logicalScrollTop
+      }px`,
+    );
   }
 
   private writeBodyLayerOffset(nextOffset: string): void {
