@@ -53,6 +53,12 @@
 }
 
 :root {
+  /* Portalled overlays paint above ordinary page chrome (including z-index: 50
+     sticky headers). Override on :root to integrate with an application's
+     stacking scale; portal siblings share this layer and retain DOM ordering. */
+  --overlay-z-index: 100;
+  /* Notifications remain visible and dismissible above modal backdrops. */
+  --toast-z-index: calc(var(--overlay-z-index) + 1);
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
