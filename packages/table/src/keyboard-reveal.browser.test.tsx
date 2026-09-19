@@ -38,6 +38,38 @@ const pinnedColumns = [
 
 afterEach(cleanup);
 
+test("reveals pinned keyboard destinations in local coordinates under ancestor scaling", async () => {
+  const screen = await render(
+    <div style={{ width: 600, transform: "scale(0.8)", transformOrigin: "top left" }}>
+      <BrunoTableClient
+        tableId="TABLE_ID_SCALED_HEADER_REVEAL"
+        columns={pinnedColumns}
+        initialOrderBy={[{ columnId: "COL_ID_SEQUENCE", direction: "asc" }]}
+        getRowId={(row) => row.id}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+      />
+    </div>,
+  );
+  const grid = screen.getByRole("grid").element();
+  const header = screen.getByRole("columnheader").first().element();
+  await screen.getByRole("gridcell", { name: "0", exact: true }).click();
+  await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
+  grid.scrollTop = 180;
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  );
+  await userEvent.keyboard("{ArrowUp}{ArrowLeft}");
+  await vi.waitFor(() => {
+    const destination = screen.getByRole("gridcell", { name: "Start 4", exact: true }).element();
+    expect(grid.getAttribute("aria-activedescendant")).toBe(destination.id);
+    expect(destination.getBoundingClientRect().top).toBeCloseTo(
+      header.getBoundingClientRect().bottom,
+      1,
+    );
+    expect(grid.scrollTop).toBe(144);
+  });
+});
+
 test.each(
   [28, 36, 72].flatMap((headerHeight) => [false, true].map((pinned) => ({ headerHeight, pinned }))),
 )(
@@ -67,6 +99,19 @@ test.each(
       .element();
     await vi.waitFor(() => expect(header.getBoundingClientRect().height).toBe(headerHeight));
     await screen.getByRole("gridcell", { name: "0", exact: true }).click();
+    await userEvent.keyboard("{PageDown}");
+    await vi.waitFor(() =>
+      expect(grid.getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "5", exact: true }).element().id,
+      ),
+    );
+    await userEvent.keyboard("{PageUp}");
+    await vi.waitFor(() => {
+      expect(grid.getAttribute("aria-activedescendant")).toBe(
+        screen.getByRole("gridcell", { name: "0", exact: true }).element().id,
+      );
+      expect(grid.scrollTop).toBe(0);
+    });
     await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}");
     const destination = screen.getByRole("gridcell", { name: "5", exact: true });
     await vi.waitFor(() => {
@@ -124,12 +169,27 @@ test.each(
       await userEvent.keyboard("{ArrowRight}");
     }
     // Styles can change after mount without changing the scroll owner's dimensions.
+    // Canceling a concurrent width preview must not restore obsolete header geometry.
+    const resizeHandle = screen.getByRole("separator", { name: "Resize Sequence" }).element();
+    const originalWidth = resizeHandle.getAttribute("aria-valuenow");
+    resizeHandle.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 200, pointerId: 81 }),
+    );
+    window.dispatchEvent(
+      new PointerEvent("pointermove", { bubbles: true, clientX: 240, pointerId: 81 }),
+    );
+    await vi.waitFor(() =>
+      expect(resizeHandle.getAttribute("aria-valuenow")).not.toBe(originalWidth),
+    );
     const resizedHeight = headerHeight === 72 ? 28 : 72;
     grid.style.setProperty("--test-header-height", `${resizedHeight}px`);
     await vi.waitFor(() => expect(header.getBoundingClientRect().height).toBe(resizedHeight));
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
     );
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(resizeHandle.getAttribute("aria-valuenow")).toBe(originalWidth));
+    await screen.getByRole("gridcell", { name: "4", exact: true }).click();
     // Establish the same starting window after native scroll anchoring has settled.
     grid.scrollTop = 144;
     await new Promise<void>((resolve) =>

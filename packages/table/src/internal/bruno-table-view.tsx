@@ -2721,6 +2721,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       return;
     }
     const bounds = grid.getBoundingClientRect();
+    const headerBottom =
+      grid.querySelector("thead")?.getBoundingClientRect().bottom ?? bounds.top + ROW_HEIGHT;
     const direction = getComputedStyle(grid).direction === "rtl" ? "rtl" : "ltr";
     const input = dragFillLayoutInput.current;
     const pinnedStartWidth = totalColumnWidth(input.pinnedStart);
@@ -2738,7 +2740,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     dragFillLayout.current = Object.freeze({
       direction,
       interactionGeometry: Object.freeze({
-        bodyTop: Math.min(Math.max(bounds.top + ROW_HEIGHT, bounds.top), bounds.bottom),
+        bodyTop: Math.min(Math.max(headerBottom, bounds.top), bounds.bottom),
         bodyBottom: bounds.bottom,
         centreLeft,
         centreRight,
@@ -9367,5 +9369,6 @@ function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
 }
 
 function viewportPageSize(viewport: HTMLElement): number {
-  return Math.max(1, Math.floor(Math.max(0, viewport.clientHeight - ROW_HEIGHT) / ROW_HEIGHT));
+  const headerHeight = viewport.querySelector("thead")?.offsetHeight ?? ROW_HEIGHT;
+  return Math.max(1, Math.floor(Math.max(0, viewport.clientHeight - headerHeight) / ROW_HEIGHT));
 }

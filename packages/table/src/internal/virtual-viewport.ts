@@ -198,6 +198,7 @@ export class BrunoTableViewportRuntime {
   private resizeObserver: ResizeObserver | null = null;
   private rowLayerResizeObserver: ResizeObserver | null = null;
   private headerElement: HTMLElement | null = null;
+  private headerEnvironmentDirty = false;
   private directionObserver: MutationObserver | null = null;
   private stylesheetRoot: HTMLHeadElement | null = null;
   private frame: number | null = null;
@@ -1320,12 +1321,15 @@ export class BrunoTableViewportRuntime {
     this.resizeObserver?.observe(element, { box: "border-box" });
   };
 
-  private readonly measureHeader = (): void => {
-    const height = this.headerElement?.getBoundingClientRect().height;
+  private readonly measureHeader = (height = this.headerElement?.offsetHeight): void => {
     if (height === undefined || height <= 0 || height === this.headerHeight) return;
     this.headerHeight = height;
     this.layout = Object.freeze({ ...this.layout, headerHeight: height });
+    if (this.previewLayout !== undefined) {
+      this.previewLayout = Object.freeze({ ...this.previewLayout, headerHeight: height });
+    }
     this.rowLayer?.style.setProperty(BRUNO_TABLE_HEADER_HEIGHT_CSS_VARIABLE, `${height}px`);
+    this.headerEnvironmentDirty = true;
     this.schedulePublish();
   };
 
@@ -1465,7 +1469,8 @@ export class BrunoTableViewportRuntime {
     this.schedulePublish();
   };
   private readonly handleResize = (entries: readonly ResizeObserverEntry[]): void => {
-    if (entries.some((entry) => entry.target === this.headerElement)) this.measureHeader();
+    const headerEntry = entries.find((entry) => entry.target === this.headerElement);
+    if (headerEntry !== undefined) this.measureHeader(headerEntry.borderBoxSize[0]?.blockSize);
     const element = this.element;
     if (element !== null) {
       if (this.directionDirty) this.recordPendingNativeInput(element);
@@ -1696,10 +1701,12 @@ export class BrunoTableViewportRuntime {
       previousPinnedStartWidth !== this.horizontalPinnedStartWidth ||
       previousPinningKey !== this.horizontalPinningKey;
     const externalEnvironmentChanged =
+      this.headerEnvironmentDirty ||
       previousDirection !== this.horizontalDirection ||
       previousViewportWidth !== viewportWidth ||
       (this.previewLayout === undefined && environmentChanged);
     if (externalEnvironmentChanged) {
+      this.headerEnvironmentDirty = false;
       for (const listener of this.environmentListeners) listener();
     }
     const deferredLogicalScrollLeft =
