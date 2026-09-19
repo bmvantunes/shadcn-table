@@ -106,6 +106,7 @@ type BodyColumnPreparation = {
 };
 
 export const BRUNO_TABLE_ROW_HEIGHT = 36;
+export const BRUNO_TABLE_HEADER_HEIGHT_CSS_VARIABLE = "--bruno-table-header-height";
 export const BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT = 480;
 export const BRUNO_TABLE_MAX_PHYSICAL_ROW_HEIGHT = 4_000_000;
 export const BRUNO_TABLE_SCROLLBAR_TRACK_THICKNESS = 8;
@@ -196,6 +197,7 @@ export class BrunoTableViewportRuntime {
   private scrollbarOverlayStructuralKey: string | undefined;
   private resizeObserver: ResizeObserver | null = null;
   private rowLayerResizeObserver: ResizeObserver | null = null;
+  private headerElement: HTMLElement | null = null;
   private directionObserver: MutationObserver | null = null;
   private stylesheetRoot: HTMLHeadElement | null = null;
   private frame: number | null = null;
@@ -268,7 +270,7 @@ export class BrunoTableViewportRuntime {
   private leadingUtilityWidth: number;
 
   public constructor(
-    private readonly headerHeight: number = ROW_HEIGHT,
+    private headerHeight: number = ROW_HEIGHT,
     leadingUtilityWidth: number = 0,
   ) {
     this.leadingUtilityWidth = normalizedLeadingUtilityWidth(leadingUtilityWidth);
@@ -1147,8 +1149,9 @@ export class BrunoTableViewportRuntime {
       const visibleTop = logicalScrollTop + this.layout.headerHeight;
       const visibleBottom = logicalScrollTop + element.clientHeight;
       let nextLogicalScrollTop = logicalScrollTop;
-      if (rowTop < visibleTop) nextLogicalScrollTop = Math.max(rowTop - ROW_HEIGHT, 0);
-      else if (rowBottom > visibleBottom) {
+      if (rowTop < visibleTop) {
+        nextLogicalScrollTop = Math.max(rowTop - this.layout.headerHeight, 0);
+      } else if (rowBottom > visibleBottom) {
         nextLogicalScrollTop = Math.max(rowBottom - element.clientHeight, 0);
       }
       this.setLogicalScrollTop(element, nextLogicalScrollTop);
@@ -1279,6 +1282,9 @@ export class BrunoTableViewportRuntime {
     if (this.element !== null && typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(this.handleResize);
       this.resizeObserver.observe(this.element);
+      if (this.headerElement !== null) {
+        this.resizeObserver.observe(this.headerElement, { box: "border-box" });
+      }
     }
     if (this.element !== null && typeof MutationObserver !== "undefined") {
       this.directionObserver = new MutationObserver(this.handleDirectionMutation);
@@ -1305,12 +1311,32 @@ export class BrunoTableViewportRuntime {
     this.publishFromElement();
   };
 
+  public readonly attachHeader = (element: HTMLElement | null): void => {
+    if (this.headerElement === element) return;
+    if (this.headerElement !== null) this.resizeObserver?.unobserve(this.headerElement);
+    this.headerElement = element;
+    if (element === null) return;
+    this.measureHeader();
+    this.resizeObserver?.observe(element, { box: "border-box" });
+  };
+
+  private readonly measureHeader = (): void => {
+    const height = this.headerElement?.getBoundingClientRect().height;
+    if (height === undefined || height <= 0 || height === this.headerHeight) return;
+    this.headerHeight = height;
+    this.layout = Object.freeze({ ...this.layout, headerHeight: height });
+    this.rowLayer?.style.setProperty(BRUNO_TABLE_HEADER_HEIGHT_CSS_VARIABLE, `${height}px`);
+    this.schedulePublish();
+  };
+
   public readonly attachRowLayer = (element: HTMLElement | null): void => {
     if (this.rowLayer === element) return;
+    this.rowLayer?.style.removeProperty(BRUNO_TABLE_HEADER_HEIGHT_CSS_VARIABLE);
     this.rowLayerResizeObserver?.disconnect();
     this.rowLayerResizeObserver = null;
     this.rowLayer = element;
     if (element !== null) {
+      element.style.setProperty(BRUNO_TABLE_HEADER_HEIGHT_CSS_VARIABLE, `${this.headerHeight}px`);
       if (typeof ResizeObserver !== "undefined") {
         this.rowLayerResizeObserver = new ResizeObserver(this.handleRowLayerResize);
         this.rowLayerResizeObserver.observe(element);
@@ -1356,10 +1382,12 @@ export class BrunoTableViewportRuntime {
     this.resizeObserver = null;
     this.rowLayerResizeObserver?.disconnect();
     this.rowLayerResizeObserver = null;
+    this.headerElement = null;
     this.directionObserver?.disconnect();
     this.directionObserver = null;
     this.stylesheetRoot = null;
     this.element = null;
+    this.rowLayer?.style.removeProperty(BRUNO_TABLE_HEADER_HEIGHT_CSS_VARIABLE);
     this.rowLayer = null;
     for (const property of this.preparedBodyStyles.keys()) this.removePreparedBodyStyle(property);
     this.bodyLayers.clear();
@@ -1436,7 +1464,8 @@ export class BrunoTableViewportRuntime {
     }
     this.schedulePublish();
   };
-  private readonly handleResize = (): void => {
+  private readonly handleResize = (entries: readonly ResizeObserverEntry[]): void => {
+    if (entries.some((entry) => entry.target === this.headerElement)) this.measureHeader();
     const element = this.element;
     if (element !== null) {
       if (this.directionDirty) this.recordPendingNativeInput(element);
