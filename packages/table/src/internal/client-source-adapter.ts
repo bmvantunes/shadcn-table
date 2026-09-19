@@ -385,6 +385,7 @@ export class BrunoTableClientRowPipelineAdapter<TRow> {
       retainsPreviousRows(this.source) &&
       retainsPreviousRows(sourceSnapshot) &&
       ((this.source.invalidStatus === sourceSnapshot.invalidStatus &&
+        this.source.invalidLifecycle === sourceSnapshot.invalidLifecycle &&
         this.source.invalidRows === sourceSnapshot.invalidRows) ||
         retainedSourceInvalid !== undefined) &&
       this.source.rows === sourceSnapshot.rows &&
