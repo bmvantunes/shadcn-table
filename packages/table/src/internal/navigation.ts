@@ -551,6 +551,7 @@ export class BrunoTableNavigationRuntime {
 
   private readonly resolvePage = (rowDelta: number): boolean => {
     if (this.activeCell === undefined || this.rowSpace.totalRows === 0) return false;
+    if (this.activeCell.region === "header" && rowDelta < 0) return false;
     const target =
       this.activeCell.region === "header"
         ? Math.max(0, Math.min(this.rowSpace.totalRows - 1, rowDelta > 0 ? rowDelta - 1 : 0))
