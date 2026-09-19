@@ -752,6 +752,42 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     expect(runtime.getNotificationSnapshot()).toBe(rejection);
   });
 
+  test("queues continuing autoscroll before the viewport publication it triggers", async () => {
+    const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B", "COL_ID_C"]);
+    const order: string[] = [];
+    let publication: number | undefined;
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      apply: () => Object.freeze({ kind: "accepted" as const }),
+      scrollHorizontalByPhysical: () => {
+        order.push("scroll");
+        if (order.length > 1) return false;
+        publication = requestAnimationFrame(() => order.push("publish"));
+        return true;
+      },
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const bounds = grid.getBoundingClientRect();
+    const edge = { x: bounds.right - 1, y: bounds.top + bounds.height / 2 };
+    try {
+      handle.dispatchEvent(pointer("pointerdown", 168, centerOf(handle)));
+      window.dispatchEvent(pointer("pointermove", 168, edge));
+      await nextFrame();
+      await nextFrame();
+      expect(order).toEqual(["scroll", "scroll", "publish"]);
+      await nextFrame();
+      expect(order).toHaveLength(3);
+    } finally {
+      window.dispatchEvent(pointer("pointercancel", 168, edge));
+      if (publication !== undefined) cancelAnimationFrame(publication);
+    }
+  });
+
   test("keeps preview motion-free and autoscroll parallel-only", async () => {
     const columns = ["COL_ID_A", "COL_ID_B", "COL_ID_C"];
     const { grid, structure } = createGrid(columns);
@@ -1451,6 +1487,48 @@ describe("BrunoTable Drag Fill browser runtime", () => {
     expect(runtime.getNotificationSnapshot().message).toBe(
       "ROW_ID_1/COL_ID_1: Fill destinations may contain at most 16384 cells. (+16384 more) Nothing was applied.",
     );
+  });
+
+  test("reconciles unchanged preview cells without redundant DOM writes", async () => {
+    const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B", "COL_ID_C"]);
+    const second = grid.querySelector<HTMLElement>('[data-bruno-column-id="COL_ID_B"]')!;
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      apply: () => Object.freeze({ kind: "accepted" as const }),
+      scrollHorizontalByPhysical: () => false,
+    });
+    await nextFrame();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    handle.dispatchEvent(pointer("pointerdown", 167, centerOf(handle)));
+    second.dispatchEvent(pointer("pointermove", 167, centerOf(second)));
+    await nextFrame();
+    expect(second).toHaveAttribute("data-bruno-drag-fill-preview", "");
+    const observer = new MutationObserver(() => {});
+    observer.observe(grid, { attributes: true, subtree: true });
+    try {
+      runtime.reconcile();
+      runtime.reconcile();
+      expect(observer.takeRecords()).toHaveLength(0);
+    } finally {
+      observer.disconnect();
+    }
+    const replacement = document.createElement("div");
+    replacement.setAttribute("role", "gridcell");
+    replacement.dataset["brunoRowId"] = "ROW_ID_1";
+    replacement.dataset["brunoColumnId"] = "COL_ID_B";
+    replacement.dataset["brunoRowIndex"] = "0";
+    second.replaceWith(replacement);
+    runtime.reconcile();
+    expect(replacement).toHaveAttribute("data-bruno-drag-fill-preview", "");
+    expect(second).not.toHaveAttribute("data-bruno-drag-fill-preview");
+    expect(second.style.outline).toBe("");
+    window.dispatchEvent(pointer("pointercancel", 167, centerOf(replacement)));
+    expect(replacement).not.toHaveAttribute("data-bruno-drag-fill-preview");
+    expect(replacement.style.outline).toBe("");
   });
 
   test("extends a stationary in-bounds pointer preview as autoscroll reveals cells", async () => {

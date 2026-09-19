@@ -856,7 +856,7 @@ export class BrunoTableDragFillRuntime {
       pointer.frame = null;
       if (this.pointer !== pointer) return;
       const startedAt = shouldRecordFrame ? performance.now() : 0;
-      const autoscrolled = this.applyPointerFrame(pointer, true);
+      this.applyPointerFrame(pointer, true);
       if (shouldRecordFrame) {
         recordBrunoTableClientDragFillFrame(this.tableId!, {
           phase: "ran",
@@ -864,7 +864,6 @@ export class BrunoTableDragFillRuntime {
           durationMs: performance.now() - startedAt,
         });
       }
-      if (autoscrolled) this.schedulePointerFrame(pointer);
     });
     pointer.frame = frame;
     if (shouldRecordFrame) {
@@ -915,25 +914,36 @@ export class BrunoTableDragFillRuntime {
     }
     if (!allowAutoscroll) return false;
     if (geometry === undefined) return false;
-    if (axis === "horizontal") {
-      const delta = edgeDelta(
-        pointer.clientX,
-        geometry.centreLeft,
-        geometry.centreRight,
-        gridBounds.left,
-        gridBounds.right,
-      );
-      return delta !== 0 && pointer.registration.scrollHorizontalByPhysical(delta);
-    }
-    const delta = edgeDelta(
-      pointer.clientY,
-      geometry.bodyTop,
-      geometry.bodyBottom,
-      gridBounds.top,
-      gridBounds.bottom,
-    );
+    const delta =
+      axis === "horizontal"
+        ? edgeDelta(
+            pointer.clientX,
+            geometry.centreLeft,
+            geometry.centreRight,
+            gridBounds.left,
+            gridBounds.right,
+          )
+        : edgeDelta(
+            pointer.clientY,
+            geometry.bodyTop,
+            geometry.bodyBottom,
+            gridBounds.top,
+            gridBounds.bottom,
+          );
     if (delta === 0) return false;
-    return pointer.registration.scrollVerticalByLogical?.(delta) === true;
+    // Book the next native scroll before this scroll queues viewport DOM publication.
+    // Otherwise every continuing frame scrolls through freshly invalidated layout.
+    this.schedulePointerFrame(pointer);
+    let autoscrolled = false;
+    try {
+      autoscrolled =
+        axis === "horizontal"
+          ? pointer.registration.scrollHorizontalByPhysical(delta)
+          : pointer.registration.scrollVerticalByLogical?.(delta) === true;
+      return autoscrolled;
+    } finally {
+      if (!autoscrolled) this.cancelPointerFrame(pointer);
+    }
   };
 
   private readonly placeHandle = (source: BrunoTableDragFillSourceShape | undefined): void => {
@@ -983,12 +993,18 @@ export class BrunoTableDragFillRuntime {
   };
 
   private readonly decoratePreview = (preview: BrunoTableDragFillPreview | undefined): void => {
-    this.clearPreview();
     const pointer = this.pointer;
-    if (pointer === undefined || preview === undefined) return;
+    if (pointer === undefined || preview === undefined) {
+      this.clearPreview();
+      return;
+    }
     const perpendicularSource =
       preview.axis === "horizontal" ? pointer.source.rowIds[0] : pointer.source.columnIds[0];
-    if (perpendicularSource === undefined) return;
+    if (perpendicularSource === undefined) {
+      this.clearPreview();
+      return;
+    }
+    const nextCells = new Set<HTMLElement>();
     for (const cell of ownedMountedPreviewLaneCells(
       pointer.grid,
       preview.axis,
@@ -1008,11 +1024,21 @@ export class BrunoTableDragFillRuntime {
       ) {
         continue;
       }
-      cell.dataset["brunoDragFillPreview"] = "";
-      cell.style.outline = "2px dashed Highlight";
-      cell.style.outlineOffset = "-3px";
-      this.previewCells.add(cell);
+      nextCells.add(cell);
+      if (!this.previewCells.has(cell)) {
+        cell.dataset["brunoDragFillPreview"] = "";
+        cell.style.outline = "2px dashed Highlight";
+        cell.style.outlineOffset = "-3px";
+      }
     }
+    for (const cell of this.previewCells) {
+      if (nextCells.has(cell)) continue;
+      delete cell.dataset["brunoDragFillPreview"];
+      cell.style.removeProperty("outline");
+      cell.style.removeProperty("outline-offset");
+    }
+    this.previewCells.clear();
+    for (const cell of nextCells) this.previewCells.add(cell);
   };
 
   private readonly clearPreview = (): void => {
@@ -1103,7 +1129,7 @@ export class BrunoTableDragFillRuntime {
     return coherent;
   };
 
-  private readonly releasePointer = (pointer: PointerGesture): void => {
+  private readonly cancelPointerFrame = (pointer: PointerGesture): void => {
     if (pointer.frame !== null) {
       pointer.view.cancelAnimationFrame(pointer.frame);
       if (
@@ -1118,6 +1144,10 @@ export class BrunoTableDragFillRuntime {
       }
       pointer.frame = null;
     }
+  };
+
+  private readonly releasePointer = (pointer: PointerGesture): void => {
+    this.cancelPointerFrame(pointer);
     pointer.view.removeEventListener("pointermove", this.onPointerMove, true);
     pointer.view.removeEventListener("pointerup", this.onPointerUp, true);
     pointer.view.removeEventListener("pointercancel", this.onPointerCancel, true);
