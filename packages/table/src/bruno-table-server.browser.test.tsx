@@ -10,7 +10,7 @@ import { ViewServerId, defineViewServerConfig } from "effect-view-server/config"
 import { createViewServerReact } from "effect-view-server/react";
 import { createInMemoryViewServerReact } from "effect-view-server/react/testing";
 import { SourceAdapter } from "effect-view-server/source-adapter";
-import { detectPlatform, getHotkeyManager } from "@tanstack/react-hotkeys";
+import { detectPlatform, getHotkeyManager, resolveModifier } from "@tanstack/react-hotkeys";
 
 import {
   BrunoTableActiveFilterCount,
@@ -2946,6 +2946,11 @@ describe("BrunoTableServer", () => {
     await expect.element(screen.getByRole("gridcell", { name: "REPLACEMENT" })).toBeInTheDocument();
     await vi.waitFor(() => expect(grid.element().getAttribute("aria-activedescendant")).toBeNull());
 
+    transport.requests[0]?.sink.setRowData({ 2: { symbol: "THIRD", price: 4 } }, { 2: "third" });
+    await settleBrunoTableBrowserFrames();
+    expect(grid.element().getAttribute("aria-activedescendant")).toBeNull();
+    await expect.element(grid).toHaveFocus();
+
     grid.element().blur();
     grid.element().focus();
     await vi.waitFor(() =>
@@ -2966,6 +2971,79 @@ describe("BrunoTableServer", () => {
       ),
     );
   });
+
+  test.each(["conflicting identity", "authoritative total shrink"] as const)(
+    "keeps Server Copy inactive after %s until deliberate focus re-entry",
+    async (invalidation) => {
+      const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      try {
+        const transport = makeViewport(3);
+        const screen = await render(
+          <BrunoTableServer {...serverProps(transport.viewport, "ready")} />,
+        );
+        const sink = transport.requests[0]!.sink;
+        sink.setRowData(
+          { 0: { symbol: "FIRST", price: 1 }, 1: { symbol: "SECOND", price: 2 } },
+          { 0: "first", 1: "second" },
+        );
+        const grid = screen.getByRole("grid", { name: "Data for TABLE_ID_SERVER" });
+        grid.element().focus();
+        await userEvent.keyboard("{ArrowDown}");
+        await expect
+          .element(grid)
+          .toHaveAttribute(
+            "aria-activedescendant",
+            screen.getByRole("gridcell", { name: "SECOND" }).element().id,
+          );
+        const modifier = resolveModifier("Mod");
+        await userEvent.keyboard(`{${modifier}>}c{/${modifier}}`);
+        await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("SECOND"));
+        writeText.mockClear();
+
+        if (invalidation === "conflicting identity") {
+          sink.setRowData({ 1: { symbol: "REPLACEMENT", price: 3 } }, { 1: "replacement" });
+        } else {
+          sink.setRowCount(1, true);
+        }
+        await vi.waitFor(() =>
+          expect(grid.element().getAttribute("aria-activedescendant")).toBeNull(),
+        );
+
+        // Repeated value and structural publications must not choose another row for Copy.
+        for (const rowId of ["first", "first", "new-first", "new-first", "final-first"]) {
+          sink.setRowData({ 0: { symbol: "CURRENT", price: 4 } }, { 0: rowId });
+          await settleBrunoTableBrowserFrames();
+          expect(grid.element().getAttribute("aria-activedescendant")).toBeNull();
+          await expect.element(grid).toHaveFocus();
+          await userEvent.keyboard(`{${modifier}>}c{/${modifier}}`);
+          await settleBrunoTableBrowserFrames();
+          expect(writeText).not.toHaveBeenCalled();
+        }
+
+        grid.element().blur();
+        grid.element().focus();
+        await expect
+          .element(grid)
+          .toHaveAttribute(
+            "aria-activedescendant",
+            screen.getByRole("gridcell", { name: "CURRENT" }).element().id,
+          );
+        await userEvent.keyboard(`{${modifier}>}c{/${modifier}}`);
+        await vi.waitFor(() => expect(writeText).toHaveBeenCalledExactlyOnceWith("CURRENT"));
+      } finally {
+        if (clipboardDescriptor === undefined) {
+          delete (navigator as { clipboard?: Clipboard }).clipboard;
+        } else {
+          Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+        }
+      }
+    },
+  );
 
   test("retains an evicted Server identity through horizontal movement and later arrival", async () => {
     const transport = makeViewport(1_000);
