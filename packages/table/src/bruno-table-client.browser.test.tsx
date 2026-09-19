@@ -6775,29 +6775,51 @@ describe("BrunoTableClient browser surface", () => {
     await userEvent.keyboard("{Escape}");
   });
 
-  test.each(["ltr", "rtl"] as const)(
-    "keeps one logical row when an active %s centre column is horizontally unmounted",
-    async (direction) => {
+  test.each([
+    { direction: "ltr", pinned: false },
+    { direction: "rtl", pinned: false },
+    { direction: "ltr", pinned: true },
+    { direction: "rtl", pinned: true },
+  ] as const)(
+    "keeps one logical row when an active $direction centre column is unmounted (pinned=$pinned)",
+    async ({ direction, pinned }) => {
       const ownershipColumns = Array.from({ length: 20 }, (_, index) => ({
         ...columns[0],
         columnId: `COL_ID_ACTIVE_OWNER_${String(index).padStart(2, "0")}`,
         headerName: `Active owner ${String(index).padStart(2, "0")}`,
         width: 160,
+        ...(pinned && index === 0 ? { pinned: "start" as const } : {}),
+        ...(pinned && index === 19 ? { pinned: "end" as const } : {}),
       })) as BrunoTableColumns<Row>;
       const tableId = `TABLE_ID_ACTIVE_OWNER_${direction.toUpperCase()}`;
+      const activeColumnIndex = pinned ? "2" : "1";
+      const activeHeaderName = pinned ? "Active owner 01" : "Active owner 00";
+      const ownershipRows = Array.from({ length: 100 }, (_, index) => ({
+        id: `ownership-row-${index}`,
+        name: `Ownership ${String(index).padStart(3, "0")}`,
+        score: index,
+      }));
       const screen = await render(
-        <div dir={direction} style={{ height: 320, width: 320 }}>
+        <div dir={direction} style={{ height: 320, width: pinned ? 640 : 320 }}>
           <BrunoTableClient
             tableId={tableId}
             getRowId={(row: Row) => row.id}
             columns={ownershipColumns}
             initialOrderBy={[{ columnId: "COL_ID_ACTIVE_OWNER_00", direction: "asc" }]}
-            clientSource={readySource()}
+            clientSource={readySource(ownershipRows)}
           />
         </div>,
       );
       const grid = screen.getByRole("grid", { name: `Data for ${tableId}` });
       const gridElement = grid.element();
+      if (pinned) {
+        await vi.waitFor(() => {
+          expect(
+            gridElement.querySelector('[data-bruno-pinned-body-region="start"]'),
+          ).not.toBeNull();
+          expect(gridElement.querySelector('[data-bruno-pinned-body-region="end"]')).not.toBeNull();
+        });
+      }
       const rowsAt = (rowIndex: number) =>
         screen
           .getByRole("row")
@@ -6831,25 +6853,66 @@ describe("BrunoTableClient browser surface", () => {
           expect(owner.contains(owned)).toBe(true);
           expect(owner.getAttribute("aria-owns")?.split(" ") ?? []).not.toContain(ownedId);
         });
+      const expectAccessibleRowOwner = async (
+        rowIndex: number,
+        ownedId: string,
+        role: "gridcell" | "columnheader",
+      ) => {
+        const session: PlaywrightCDPSession = cdp();
+        await session.send("DOM.enable");
+        const { nodes } = await session.send("DOM.getFlattenedDocument", {
+          depth: -1,
+          pierce: true,
+        });
+        const domNode = nodes.find((node) =>
+          node.attributes?.some(
+            (attribute, index, attributes) =>
+              index % 2 === 0 && attribute === "id" && attributes[index + 1] === ownedId,
+          ),
+        );
+        expect(domNode).toBeDefined();
+        const tree = await session.send("Accessibility.getPartialAXTree", {
+          backendNodeId: domNode!.backendNodeId,
+          fetchRelatives: true,
+        });
+        const activeNodes = tree.nodes.filter(
+          (node) => !node.ignored && node.backendDOMNodeId === domNode!.backendNodeId,
+        );
+        expect(activeNodes).toHaveLength(1);
+        const activeNode = activeNodes[0]!;
+        expect(activeNode.role?.value).toBe(role);
+        const parent = tree.nodes.find((node) => node.nodeId === activeNode.parentId);
+        expect(parent?.ignored).toBe(false);
+        expect(parent?.role?.value).toBe("row");
+        const owner = await session.send("DOM.describeNode", {
+          backendNodeId: parent!.backendDOMNodeId!,
+        });
+        const rowIndexAttribute = owner.node.attributes?.indexOf("aria-rowindex") ?? -1;
+        expect(rowIndexAttribute).toBeGreaterThanOrEqual(0);
+        expect(owner.node.attributes?.[rowIndexAttribute + 1]).toBe(String(rowIndex));
+      };
       const scrollActiveColumnOut = async () => {
         gridElement.scrollLeft =
           direction === "rtl" ? -gridElement.scrollWidth : gridElement.scrollWidth;
         gridElement.dispatchEvent(new Event("scroll"));
         await expect
-          .element(screen.getByRole("columnheader", { name: "Active owner 00" }))
+          .element(screen.getByRole("columnheader", { name: activeHeaderName }))
           .not.toBeInTheDocument();
       };
       const restoreActiveColumn = async () => {
         gridElement.scrollLeft = 0;
         gridElement.dispatchEvent(new Event("scroll"));
         await expect
-          .element(screen.getByRole("columnheader", { name: "Active owner 00" }))
+          .element(screen.getByRole("columnheader", { name: activeHeaderName }))
           .toBeInTheDocument();
       };
 
       gridElement.focus();
+      if (pinned) await userEvent.keyboard("{ArrowRight}");
       await vi.waitFor(() =>
-        expect(activeOwnedElement("gridcell")?.element().getAttribute("aria-colindex")).toBe("1"),
+        expect(activeOwnedElement("gridcell")?.element().getAttribute("aria-colindex")).toBe(
+          activeColumnIndex,
+        ),
       );
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -6860,11 +6923,12 @@ describe("BrunoTableClient browser surface", () => {
       expect(bodyProxy).toBeDefined();
       await expectOwnedByOnlyRow(2, bodyProxy!.element().id);
       expect(gridElement.querySelectorAll(`[id="${bodyProxy!.element().id}"]`)).toHaveLength(1);
+      await expectAccessibleRowOwner(2, bodyProxy!.element().id, "gridcell");
 
       gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowUp" }));
       await vi.waitFor(() =>
         expect(activeOwnedElement("columnheader")?.element().getAttribute("aria-colindex")).toBe(
-          "1",
+          activeColumnIndex,
         ),
       );
 
@@ -6872,6 +6936,7 @@ describe("BrunoTableClient browser surface", () => {
       expect(headerProxy).toBeDefined();
       await expectOwnedByOnlyRow(1, headerProxy!.element().id);
       expect(gridElement.querySelectorAll(`[id="${headerProxy!.element().id}"]`)).toHaveLength(1);
+      await expectAccessibleRowOwner(1, headerProxy!.element().id, "columnheader");
 
       await restoreActiveColumn();
       await vi.waitFor(() =>
@@ -6881,6 +6946,7 @@ describe("BrunoTableClient browser surface", () => {
       );
       await expectContainedCellIsNotAriaOwned(1, headerProxy!.element().id);
       expect(rowsAt(1)).toHaveLength(1);
+      await expectAccessibleRowOwner(1, headerProxy!.element().id, "columnheader");
 
       gridElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
       await vi.waitFor(() =>
@@ -6889,6 +6955,29 @@ describe("BrunoTableClient browser surface", () => {
         ),
       );
       expect(rowsAt(2)).toHaveLength(1);
+      await expectAccessibleRowOwner(2, bodyProxy!.element().id, "gridcell");
+      gridElement.scrollTop = 1_800;
+      gridElement.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() =>
+        expect(activeOwnedElement("gridcell")?.element()).toHaveAttribute(
+          "data-bruno-active-proxy",
+        ),
+      );
+      await expectOwnedByOnlyRow(2, bodyProxy!.element().id);
+      await expectAccessibleRowOwner(2, bodyProxy!.element().id, "gridcell");
+      gridElement.scrollTop = 0;
+      gridElement.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() => {
+        const active = activeOwnedElement("gridcell")?.element();
+        expect(active).not.toHaveAttribute("data-bruno-active-proxy");
+        expect(rowsAt(2)).toHaveLength(1);
+        expect(
+          rowsAt(2)[0]!
+            .element()
+            .contains(active ?? null),
+        ).toBe(true);
+      });
+      await expectAccessibleRowOwner(2, bodyProxy!.element().id, "gridcell");
     },
   );
 
