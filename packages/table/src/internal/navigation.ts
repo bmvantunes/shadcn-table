@@ -400,6 +400,7 @@ export class BrunoTableNavigationRuntime {
     ) {
       this.pendingQueryFallbackRowIndex = undefined;
       this.pendingQueryRowId = undefined;
+      this.bodyInitializationBlocked = true;
       this.setActive(undefined);
       return;
     }
