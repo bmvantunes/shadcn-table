@@ -170,6 +170,7 @@ import {
 } from "./react-compiler-adapters";
 import {
   BRUNO_TABLE_DEFAULT_VIEWPORT_HEIGHT,
+  BRUNO_TABLE_HEADER_HEIGHT_CSS_VARIABLE,
   BRUNO_TABLE_PREPARED_ENTERING_DISPLAY_CSS_VARIABLE,
   BRUNO_TABLE_PREPARED_LEFT_PADDING_CSS_VARIABLE,
   BRUNO_TABLE_PREPARED_RETIRING_DISPLAY_CSS_VARIABLE,
@@ -1753,6 +1754,7 @@ export const BrunoTableViewportAdapter: NamedExoticComponent<BrunoTableViewportA
             attachBodyLayer={adapter.attachBodyLayer}
             attachPinnedEditorHost={adapter.attachPinnedEditorHost}
             attachRowLayer={adapter.attachRowLayer}
+            attachHeader={adapter.attachHeader}
             attachScrollbarOverlay={adapter.attachScrollbarOverlay}
             subscribeViewportEnvironment={adapter.subscribeViewportEnvironment}
             subscribeColumnWindow={adapter.subscribeColumnWindow}
@@ -1810,6 +1812,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   attachBodyLayer,
   attachPinnedEditorHost,
   attachRowLayer,
+  attachHeader,
   attachScrollbarOverlay,
   subscribeViewportEnvironment,
   subscribeColumnWindow,
@@ -1861,6 +1864,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   readonly attachBodyLayer: RefCallback<HTMLElement>;
   readonly attachPinnedEditorHost: RefCallback<HTMLElement>;
   readonly attachRowLayer: (element: HTMLElement | null) => void;
+  readonly attachHeader: (element: HTMLElement | null) => void;
   readonly attachScrollbarOverlay: (element: HTMLElement | null) => void;
   readonly subscribeViewportEnvironment: (listener: () => void) => () => void;
   readonly subscribeColumnWindow: (listener: () => void) => () => void;
@@ -2717,6 +2721,8 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       return;
     }
     const bounds = grid.getBoundingClientRect();
+    const headerBottom =
+      grid.querySelector("thead")?.getBoundingClientRect().bottom ?? bounds.top + ROW_HEIGHT;
     const direction = getComputedStyle(grid).direction === "rtl" ? "rtl" : "ltr";
     const input = dragFillLayoutInput.current;
     const pinnedStartWidth = totalColumnWidth(input.pinnedStart);
@@ -2734,7 +2740,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     dragFillLayout.current = Object.freeze({
       direction,
       interactionGeometry: Object.freeze({
-        bodyTop: Math.min(Math.max(bounds.top + ROW_HEIGHT, bounds.top), bounds.bottom),
+        bodyTop: Math.min(Math.max(headerBottom, bounds.top), bounds.bottom),
         bodyBottom: bounds.bottom,
         centreLeft,
         centreRight,
@@ -4096,6 +4102,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
             }}
           >
             <BrunoTableHeaderRow
+              attachHeader={attachHeader}
               activateHeaderCommand={activateHeaderCommand}
               announce={setAnnouncement}
               openHeaderFilter={openHeaderFilter}
@@ -4907,6 +4914,7 @@ const BrunoTableHeaderPaddingCell = memo(function BrunoTableHeaderPaddingCell({
 });
 
 const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow(props: {
+  readonly attachHeader: (element: HTMLElement | null) => void;
   readonly activateHeaderCommand: (columnId: string) => void;
   readonly announce: (message: string) => void;
   readonly navigation: BrunoTableNavigationRuntime;
@@ -4937,6 +4945,11 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow(props: {
   readonly subscribeHeaderColumnWindow: (listener: () => void) => () => void;
   readonly columnIndexOffset: number;
 }) {
+  const attachHeader = props.attachHeader;
+  const attachHeaderElement = useCallback(
+    (element: HTMLElement | null) => attachHeader(element),
+    [attachHeader],
+  );
   const {
     activateHeaderCommand,
     announce,
@@ -5023,6 +5036,7 @@ const BrunoTableHeaderRow = memo(function BrunoTableHeaderRow(props: {
   );
   return (
     <thead
+      ref={attachHeaderElement}
       role="rowgroup"
       style={{
         background: "Canvas",
@@ -7264,7 +7278,7 @@ const BrunoTablePinnedBodyRegion = memo(function BrunoTablePinnedBodyRegion({
     <BrunoTablePinnedOverlayShell
       layerWidth={layerWidth}
       side={side}
-      top={ROW_HEIGHT}
+      top={`var(${BRUNO_TABLE_HEADER_HEIGHT_CSS_VARIABLE}, ${String(ROW_HEIGHT)}px)`}
       totalHeight={rowRange.totalHeight}
       width={width}
       leadingUtilityWidth={leadingUtilityWidth}
@@ -7456,7 +7470,7 @@ const BrunoTablePinnedOverlayShell = memo(function BrunoTablePinnedOverlayShell(
   readonly children: ReactNode;
   readonly layerWidth: number;
   readonly side: "start" | "end";
-  readonly top: number;
+  readonly top: CSSProperties["top"];
   readonly totalHeight: number;
   readonly width: number | string;
   readonly leadingUtilityWidth: number;
@@ -9355,5 +9369,6 @@ function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
 }
 
 function viewportPageSize(viewport: HTMLElement): number {
-  return Math.max(1, Math.floor(Math.max(0, viewport.clientHeight - ROW_HEIGHT) / ROW_HEIGHT));
+  const headerHeight = viewport.querySelector("thead")?.offsetHeight ?? ROW_HEIGHT;
+  return Math.max(1, Math.floor(Math.max(0, viewport.clientHeight - headerHeight) / ROW_HEIGHT));
 }

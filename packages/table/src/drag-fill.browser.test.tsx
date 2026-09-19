@@ -136,6 +136,67 @@ test("repeats an editable Client linear range through one Batch Drag Fill gestur
   expect(onSaveEdits).not.toHaveBeenCalled();
 });
 
+test.each([false, true])(
+  "fills beneath a tall header, canceling if it resizes during the gesture (%s)",
+  async (resizeDuringGesture) => {
+    const sourceRows = Array.from({ length: 10 }, (_, index) => ({
+      ...rows[0]!,
+      id: `row-${index}`,
+      first: String(index).padStart(3, "0"),
+    }));
+    const onSaveEdits = vi.fn<BrunoTableSaveEditsHandler<Row, typeof columns, bigint>>(() =>
+      Promise.resolve(),
+    );
+    const screen = await render(
+      <div className="tall-fill-header">
+        <style>{`.tall-fill-header [role="grid"] { height: 300px !important; max-height: 300px !important; }
+        .tall-fill-header thead tr, .tall-fill-header thead th { height: var(--test-fill-header-height, 72px) !important; }`}</style>
+        <BrunoTableClient<Row, typeof columns, (row: Row) => bigint>
+          tableId="TABLE_ID_TALL_FILL_HEADER"
+          columns={columns}
+          initialOrderBy={[{ columnId: "COL_ID_FIRST", direction: "asc" }]}
+          clientSource={{
+            rows: sourceRows,
+            totalRows: sourceRows.length,
+            version: 1,
+            status: "ready",
+          }}
+          getRowId={(row) => row.id}
+          editable
+          getRowVersion={(row) => row.revision}
+          onSaveEdits={onSaveEdits}
+        />
+      </div>,
+    );
+    const grid = screen.getByRole("grid").element();
+    await screen.getByRole("gridcell", { name: "000", exact: true }).click();
+    await settleBrunoTableBrowserFrames();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]");
+    expect(handle).not.toBeNull();
+    const destination = centerOf(
+      screen.getByRole("gridcell", { name: "001", exact: true }).element(),
+    );
+    handle!.dispatchEvent(pointer("pointerdown", 95, centerOf(handle!)));
+    if (resizeDuringGesture) {
+      grid.style.setProperty("--test-fill-header-height", "108px");
+      await vi.waitFor(() =>
+        expect(
+          screen.getByRole("columnheader").first().element().getBoundingClientRect().height,
+        ).toBe(108),
+      );
+      await settleBrunoTableBrowserFrames();
+    }
+    grid.dispatchEvent(pointer("pointerup", 95, destination));
+    if (resizeDuringGesture) {
+      await settleBrunoTableBrowserFrames();
+      expect(onSaveEdits).not.toHaveBeenCalled();
+      return;
+    }
+    await vi.waitFor(() => expect(onSaveEdits).toHaveBeenCalledTimes(1));
+    expect(onSaveEdits.mock.calls[0]![0].map((change) => change.rowId)).toEqual(["row-1"]);
+  },
+);
+
 test("releases Drag Fill against native scroll before the next viewport publication", async () => {
   const sourceRows = Array.from({ length: 100 }, (_, index) => ({
     ...rows[0]!,
