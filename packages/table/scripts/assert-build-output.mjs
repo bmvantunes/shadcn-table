@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { transformSync } from "oxc-transform-react";
-import { parseAstAsync } from "vite";
+import { parseAstAsync, transformWithOxc } from "vite";
 
 import { assertReactCompilerStrictness } from "../../../config/react-compiler-options.mjs";
 import { BRUNO_TABLE_PACKAGED_SKILL_FILES } from "./agent-skills-contract.mjs";
@@ -133,6 +133,43 @@ async function collectDeclarationModuleSpecifiers(sources) {
   return [...specifiers];
 }
 
+async function readRuntimeClosure(entryUrl) {
+  const modules = new Map();
+  async function visit(url) {
+    if (modules.has(url.href)) return;
+    const source = await readFile(url, "utf8");
+    const ast = await parseAstAsync(source);
+    const specifiers = new Set();
+    walkSyntaxTree(ast, (node) => {
+      if (
+        node.type === "ImportDeclaration" ||
+        node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration" ||
+        node.type === "ImportExpression"
+      ) {
+        const specifier = staticStringValue(node.source);
+        if (specifier !== undefined) specifiers.add(specifier);
+      }
+    });
+    // Record before recursion so shared chunks and cycles are visited once.
+    modules.set(url.href, { url, source, ast, specifiers: [...specifiers] });
+    for (const specifier of specifiers) {
+      if (specifier.startsWith(".")) await visit(new URL(specifier, url));
+    }
+  }
+  await visit(entryUrl);
+  return [...modules.values()];
+}
+
+function publicRuntimeTargets(exports) {
+  if (typeof exports === "string") return /\.[cm]?js$/u.test(exports) ? [exports] : [];
+  if (Array.isArray(exports)) return exports.flatMap(publicRuntimeTargets);
+  if (exports === null || typeof exports !== "object") return [];
+  return Object.entries(exports).flatMap(([condition, target]) =>
+    condition === "types" ? [] : publicRuntimeTargets(target),
+  );
+}
+
 async function collectAmbientDeclarationKinds(sources) {
   const kinds = new Set();
   for (const source of sources) {
@@ -221,6 +258,36 @@ const [
   readFile(new URL("../package.json", import.meta.url), "utf8"),
   readProductionModules(new URL("../src/", import.meta.url)),
 ]);
+
+const runtimeClosures = await Promise.all(
+  [...new Set(publicRuntimeTargets(JSON.parse(packageJsonSource).exports))].map((target) =>
+    readRuntimeClosure(new URL(target, new URL("../", import.meta.url))),
+  ),
+);
+const runtimeModules = [
+  ...new Map(runtimeClosures.flat().map((module) => [module.url.href, module])).values(),
+];
+const completeRuntime = runtimeModules.map((module) => module.source).join("\n");
+for (const module of runtimeModules) {
+  if (!/__BRUNO_TABLE_(?:DEVELOPMENT|TEST_DIAGNOSTICS)__/u.test(module.source)) continue;
+  // Oxc resolves global references for us. Comparing identical transforms with
+  // and without definitions avoids treating property names, strings, comments,
+  // or locally bound identifiers as unresolved build globals.
+  const [original, substituted] = await Promise.all([
+    transformWithOxc(module.source, fileURLToPath(module.url)),
+    transformWithOxc(module.source, fileURLToPath(module.url), {
+      define: {
+        __BRUNO_TABLE_DEVELOPMENT__: "false",
+        __BRUNO_TABLE_TEST_DIAGNOSTICS__: "false",
+      },
+    }),
+  ]);
+  if (original.code !== substituted.code) {
+    throw new Error(
+      `The production package contains an unresolved build flag in ${module.url.href}.`,
+    );
+  }
+}
 
 const declarations = rootDeclarationSet.declarations;
 const effectDeclarations = effectDeclarationSet.declarations;
@@ -467,14 +534,11 @@ const layoutEffectCallbacks =
     : collectEffectCallbacks(rootRuntimeAst, layoutEffectBinding);
 
 if (
-  testDiagnosticSentinels.some(
-    (sentinel) => rootRuntime.includes(sentinel) || effectRuntime.includes(sentinel),
-  ) ||
-  /__BRUNO_TABLE_TEST_DIAGNOSTICS__/u.test(rootRuntime) ||
+  testDiagnosticSentinels.some((sentinel) => completeRuntime.includes(sentinel)) ||
   /\b(?:has|install|record)BrunoTable(?:Client(?:ColumnGesture|RowOrderPlanning|CellRender|RowRender|ViewRender|GridSurfaceRender|ColumnResizeFrame|ColumnReorderFrame|ColumnPreviewStyleWrite|HeaderRender|EditFooterRender|QuickFilterRender|ColumnFilterTriggerRender|ColumnFilterRender|QueryTransition)|GridCommand|ColumnCommandSubscription|ColumnFilterSubscription|ReviewCellSubscription|Toolbar(?:Subscription|Lifetime))/u.test(
-    `${rootRuntime}\n${effectRuntime}`,
+    completeRuntime,
   ) ||
-  /installTableScopedListener/u.test(rootRuntime)
+  /installTableScopedListener/u.test(completeRuntime)
 ) {
   throw new Error(
     "The production package contains test-only commit probes, listeners, or gesture timing diagnostics.",
@@ -590,7 +654,10 @@ if (findImportedBinding(rootRuntimeAst, "@tanstack/react-hotkeys", "useHotkeys")
   throw new Error("The emitted package lost the shared React Hotkeys boundary.");
 }
 
-assertKeyboardBoundary(rootRuntimeAst, "emitted @bruno/table root", "emitted");
+for (const module of runtimeModules) {
+  assertKeyboardBoundary(module.ast, `emitted ${module.url.href}`, "emitted");
+  assertEmittedProducedTextEvidence(module.ast, false);
+}
 assertEmittedProducedTextEvidence(rootRuntimeAst);
 for (const { ast, expected } of emittedProducedTextEvidenceRejectedSmokes) {
   assertEmittedProducedTextEvidenceViolationDetected(ast, expected);
@@ -618,8 +685,7 @@ if (
   !/simultaneous use of tableId/u.test(rootRuntime) ||
   !/NODE_ENV/u.test(rootRuntime) ||
   !/globalThis\.process\?\.env\?\.NODE_ENV/u.test(rootRuntime) ||
-  /(?<!\.)\bprocess\.env/u.test(rootRuntime) ||
-  /__BRUNO_TABLE_DEVELOPMENT__/u.test(rootRuntime)
+  /(?<!\.)\bprocess\.env/u.test(rootRuntime)
 ) {
   throw new Error(
     "The package does not preserve browser-safe consumer-time development diagnostics.",
@@ -1050,13 +1116,13 @@ function assertKeyboardBoundary(ast, label, mode) {
   }
 }
 
-function assertEmittedProducedTextEvidence(ast) {
+function assertEmittedProducedTextEvidence(ast, requireInstaller = true) {
   const installer = ast.body.find(
     (statement) =>
       statement.type === "FunctionDeclaration" &&
       statement.id?.name === "installBrunoTableProducedTextEvidence",
   );
-  if (installer === undefined) {
+  if (installer === undefined && requireInstaller) {
     throw new Error("The emitted package lost the produced-text evidence installer.");
   }
   const lifecycleTypes = new Set([
@@ -1087,6 +1153,7 @@ function assertEmittedProducedTextEvidence(ast) {
     lifecycleCounts.set(key, (lifecycleCounts.get(key) ?? 0) + 1);
   });
   if (violation.length > 0) throw new Error(`Emitted produced-text evidence: ${violation}.`);
+  if (installer === undefined) return;
   for (const listenerMethod of ["addEventListener", "removeEventListener"]) {
     for (const eventType of allowedTypes) {
       const key = `${listenerMethod}:${eventType}`;
@@ -1671,6 +1738,26 @@ void toolbar;
     }
     runTypeScriptConsumer(consumerRoot, "Effect-free @bruno/table root consumer");
     runCommand(process.execPath, ["runtime.mjs"], consumerRoot, "Effect-free root runtime");
+    await cp(
+      new URL("./fixtures/packed-consumer/diagnostics.mjs", import.meta.url),
+      join(consumerRoot, "diagnostics.mjs"),
+    );
+    await cp(
+      new URL("./fixtures/packed-consumer/diagnostics.config.mjs", import.meta.url),
+      join(consumerRoot, "diagnostics.config.mjs"),
+    );
+    runCommand(
+      "pnpm",
+      ["exec", "vp", "build", "--config", "diagnostics.config.mjs"],
+      consumerRoot,
+      "Installed diagnostic environment build",
+    );
+    runCommand(
+      process.execPath,
+      ["diagnostics-dist/diagnostics.js"],
+      consumerRoot,
+      "Installed diagnostic environments",
+    );
     runCommand("pnpm", ["exec", "vp", "build"], consumerRoot, "Styled packed Vite consumer");
     const assetRoot = join(consumerRoot, "dist", "assets");
     await assertBundledIdentityDiagnostics(assetRoot, false);
