@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedProcessEnvironment } from "../config/isolated-process-environment.mjs";
+import { captureReleaseSource } from "./release-source.mjs";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = await mkdtemp(join(tmpdir(), "bruno-release-dry-run-"));
@@ -32,27 +33,12 @@ function run(command, args, cwd, label) {
   });
 }
 
-const listed = await run(
-  "git",
-  ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-  repository,
-  "source-files",
-);
-const files = [...new Set(listed.split("\0").filter(Boolean))].sort();
-const sourceHashes = [];
-for (const file of files) {
-  const path = join(repository, file);
-  const info = await lstat(path).catch((error) => {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (info === undefined || info.isDirectory()) continue;
-  assert.ok(info.isFile(), `Release input must be an ordinary file: ${file}`);
-  const content = await readFile(path);
-  sourceHashes.push({ file, sha256: createHash("sha256").update(content).digest("hex") });
-}
+const {
+  baseRevision,
+  sourceSnapshot,
+  files: sourceHashes,
+} = await captureReleaseSource(repository);
 await writeFile(join(output, "source-files.json"), `${JSON.stringify(sourceHashes, null, 2)}\n`);
-const head = (await run("git", ["rev-parse", "HEAD"], repository, "source-head")).trim();
 const origin = (
   await run("git", ["remote", "get-url", "origin"], repository, "source-origin")
 ).trim();
@@ -65,7 +51,7 @@ async function snapshot(name) {
     repository,
     `${name}-clone`,
   );
-  await run("git", ["reset", "--mixed", head], directory, `${name}-index`);
+  await run("git", ["reset", "--mixed", baseRevision], directory, `${name}-index`);
   await run("git", ["remote", "set-url", "origin", origin], directory, `${name}-origin`);
   for (const { file, sha256 } of sourceHashes) {
     const destination = join(directory, file);
@@ -145,9 +131,9 @@ try {
     "Independent clean builds must produce byte-identical tarballs and file lists",
   );
   const manifest = {
-    schemaVersion: 1,
-    sourceHead: head,
-    sourceFilesSha256: createHash("sha256").update(JSON.stringify(sourceHashes)).digest("hex"),
+    schemaVersion: 2,
+    baseRevision,
+    sourceSnapshot,
     packages: firstPackages,
   };
   await writeFile(join(output, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -155,6 +141,7 @@ try {
     "Independent clean-build tarballs are byte-identical. Validation is pending.\n",
   );
   await run("vp", ["check"], first, "format-lint-types");
+  await run("node", ["--test", "scripts/release-source.test.mjs"], first, "release-source-tests");
   await run("vp", ["test", "--project", "node", "--run"], first, "all-node-tests");
   await run("vp", ["run", "@bruno/shadcn#check:build"], first, "shadcn-package");
   await run("vp", ["run", "test:browser"], first, "all-browser-tests");

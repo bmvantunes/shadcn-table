@@ -5606,12 +5606,26 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
   const isFirst = index < 0 || index <= groupStart;
   const isLast = index < 0 || index >= groupEnd;
   const filterTransfer = useRef(false);
+  const menuPopup = useRef<HTMLDivElement>(null);
   const finalFocus = preventMenuFinalFocus
     ? false
     : () => {
-        if (!filterTransfer.current) return finalFocusTarget?.current ?? null;
-        filterTransfer.current = false;
-        return false;
+        if (filterTransfer.current) {
+          filterTransfer.current = false;
+          return false;
+        }
+        const target = finalFocusTarget?.current ?? null;
+        const ownerDocument = target?.ownerDocument ?? menuPopup.current?.ownerDocument;
+        const activeElement = ownerDocument?.activeElement;
+        if (
+          activeElement?.isConnected &&
+          activeElement !== ownerDocument?.body &&
+          activeElement !== target &&
+          menuPopup.current?.contains(activeElement) !== true
+        ) {
+          return false;
+        }
+        return target;
       };
   const closeMenuPreservingActiveFocus = (): void => {
     const focusTarget =
@@ -5668,6 +5682,7 @@ const ColumnManagementMenu = memo(function ColumnManagementMenu({
     : allColumns;
   return (
     <DropdownMenuContent
+      ref={menuPopup}
       align="start"
       anchor={menuAnchor}
       finalFocus={finalFocus}

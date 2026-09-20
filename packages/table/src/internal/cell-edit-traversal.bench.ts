@@ -725,7 +725,7 @@ describe("BrunoTable editable traversal index benchmark (8.33 ms/120 Hz referenc
 
   bench(
     "rebuilds a 100,000-row dirty remap immediately after paced identity discovery",
-    () => {
+    async () => {
       const remapRows = new Map<string, Row>(
         Array.from({ length: staticRowCount }, (_unused, rowIndex) => {
           const row = { id: `dirty-remap-${String(rowIndex)}`, editable: true };

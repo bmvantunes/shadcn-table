@@ -107,6 +107,20 @@ void test("every direct export resolves inside a tarball containing only release
       assert.ok(files.includes("USAGE.md"));
       assert.ok(files.includes("RELEASE.md"));
       assert.ok(files.includes("skills/choose-row-model/SKILL.md"));
+      const tarball = join(scratch, JSON.parse(result.stdout)[0].filename);
+      const packedText = (path) => {
+        const extracted = spawnSync("tar", ["-xOf", tarball, `package/${path}`], {
+          encoding: "utf8",
+        });
+        assert.equal(extracted.status, 0, extracted.stderr);
+        return extracted.stdout;
+      };
+      const readme = packedText("README.md");
+      assert.equal(packedText("skills/references/packages/table/README.md"), readme);
+      for (const guide of ["USAGE.md", "RELEASE.md"]) {
+        assert.ok(readme.includes(`](./${guide})`), `${guide} must link to the installed guide`);
+        assert.equal(packedText(`skills/references/packages/table/${guide}`), packedText(guide));
+      }
     } else {
       assert.ok(files.includes("THIRD_PARTY_NOTICES.md"));
     }
