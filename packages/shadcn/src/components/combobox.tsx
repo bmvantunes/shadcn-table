@@ -255,6 +255,8 @@ function ComboboxChip({
   value?: string | number;
 }) {
   const accessibleRemoveLabel = getComboboxChipRemoveLabel(removeLabel, value, children);
+  const labelId = React.useId();
+  const removeId = `${labelId}-remove`;
 
   return (
     <ComboboxPrimitive.Chip
@@ -265,10 +267,26 @@ function ComboboxChip({
       )}
       {...props}
     >
-      {children}
+      {accessibleRemoveLabel === undefined ? (
+        <span id={labelId} className="contents">
+          {children}
+        </span>
+      ) : (
+        children
+      )}
       {showRemove && (
         <ComboboxPrimitive.ChipRemove
-          render={<Button aria-label={accessibleRemoveLabel} variant="ghost" size="icon-xs" />}
+          render={
+            <Button
+              id={removeId}
+              aria-label={accessibleRemoveLabel ?? "Remove item"}
+              aria-labelledby={
+                accessibleRemoveLabel === undefined ? `${removeId} ${labelId}` : undefined
+              }
+              variant="ghost"
+              size="icon-xs"
+            />
+          }
           className="-ml-1 opacity-50 hover:opacity-100"
           data-slot="combobox-chip-remove"
         >
@@ -300,7 +318,7 @@ function getComboboxChipRemoveLabel(
   removeLabel: string | undefined,
   value: string | number | undefined,
   children: React.ReactNode,
-): string {
+): string | undefined {
   const explicitLabel = removeLabel?.trim();
 
   if (explicitLabel) {
@@ -308,7 +326,7 @@ function getComboboxChipRemoveLabel(
   }
 
   const itemLabel = value === undefined ? getComboboxChipText(children) : String(value).trim();
-  return itemLabel ? `Remove ${itemLabel}` : "Remove item";
+  return itemLabel ? `Remove ${itemLabel}` : undefined;
 }
 
 function getComboboxChipText(node: React.ReactNode): string {
