@@ -20,6 +20,28 @@ function NamedDeskBadge({ name }: { name: string }) {
   return <span>{name} desk</span>;
 }
 
+function DeskIcon() {
+  return <span role="img" aria-label="London desk" />;
+}
+
+test("preserves consumer child styling for non-removable opaque chips", async () => {
+  const screen = await render(
+    <>
+      <style>{`.non-removable-desk > [role="img"] { width: 37px; display: block; }`}</style>
+      <Combobox items={["London"]} defaultValue={["London"]} multiple>
+        <ComboboxChips>
+          <ComboboxChip className="non-removable-desk" showRemove={false}>
+            <DeskIcon />
+          </ComboboxChip>
+        </ComboboxChips>
+      </Combobox>
+    </>,
+  );
+  const icon = screen.getByRole("img", { name: "London desk" });
+  await expect.element(icon).toHaveStyle({ width: "37px" });
+  await expect.element(screen.getByRole("button")).not.toBeInTheDocument();
+});
+
 test("distinguishes removal controls for multiple opaque chips", async () => {
   const screen = await render(
     <Combobox items={["London", "Paris"]} defaultValue={["London", "Paris"]} multiple>

@@ -267,7 +267,7 @@ function ComboboxChip({
       )}
       {...props}
     >
-      {accessibleRemoveLabel === undefined ? (
+      {showRemove && accessibleRemoveLabel === undefined ? (
         <span id={labelId} className="contents">
           {children}
         </span>
