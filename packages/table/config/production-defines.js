@@ -1,26 +1,19 @@
-const developmentExpression = 'globalThis.process?.env?.NODE_ENV !== "production"';
+const developmentExpression = 'globalThis.process?.env?.NODE_ENV === "development"';
 
 export function BrunoTableProductionDefines() {
   return {
     name: "bruno-table-production-defines",
-    enforce: "pre",
-    transform(code, id) {
-      if (!id.includes("/src/")) return;
-      const replaceDevelopment = code.includes("__BRUNO_TABLE_DEVELOPMENT__");
-      if (
-        !code.includes("__BRUNO_TABLE_TEST_DIAGNOSTICS__") &&
-        !(replaceDevelopment && code.includes("__BRUNO_TABLE_DEVELOPMENT__"))
-      ) {
-        return;
-      }
+    options(options) {
       return {
-        code: code
-          .replaceAll("__BRUNO_TABLE_TEST_DIAGNOSTICS__", "false")
-          .replaceAll(
-            "__BRUNO_TABLE_DEVELOPMENT__",
-            replaceDevelopment ? developmentExpression : "false",
-          ),
-        map: null,
+        ...options,
+        transform: {
+          ...options.transform,
+          define: {
+            ...options.transform?.define,
+            __BRUNO_TABLE_TEST_DIAGNOSTICS__: "false",
+            __BRUNO_TABLE_DEVELOPMENT__: developmentExpression,
+          },
+        },
       };
     },
   };
