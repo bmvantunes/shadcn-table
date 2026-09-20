@@ -256,12 +256,6 @@ function ComboboxChip({
 }) {
   const accessibleRemoveLabel = getComboboxChipRemoveLabel(removeLabel, value, children);
 
-  if (showRemove && !accessibleRemoveLabel) {
-    throw new Error(
-      "ComboboxChip with non-text children requires a value or removeLabel when showRemove is enabled",
-    );
-  }
-
   return (
     <ComboboxPrimitive.Chip
       data-slot="combobox-chip"
@@ -306,7 +300,7 @@ function getComboboxChipRemoveLabel(
   removeLabel: string | undefined,
   value: string | number | undefined,
   children: React.ReactNode,
-): string | undefined {
+): string {
   const explicitLabel = removeLabel?.trim();
 
   if (explicitLabel) {
@@ -314,7 +308,7 @@ function getComboboxChipRemoveLabel(
   }
 
   const itemLabel = value === undefined ? getComboboxChipText(children) : String(value).trim();
-  return itemLabel ? `Remove ${itemLabel}` : undefined;
+  return itemLabel ? `Remove ${itemLabel}` : "Remove item";
 }
 
 function getComboboxChipText(node: React.ReactNode): string {

@@ -110,17 +110,16 @@ describe("Combobox", () => {
     expect(markup).not.toContain('aria-label="Remove item"');
   });
 
-  test("requires a removal name for opaque JSX chip content", () => {
-    expect(() =>
-      renderToStaticMarkup(
-        <Combobox items={["Alpha"]} defaultValue={["Alpha"]} multiple>
-          <ComboboxChips>
-            <ComboboxChip>
-              <span aria-label="Alpha" />
-            </ComboboxChip>
-          </ComboboxChips>
-        </Combobox>,
-      ),
-    ).toThrow(/requires a value or removeLabel/u);
+  test("provides a safe removal name for opaque JSX chip content", () => {
+    const markup = renderToStaticMarkup(
+      <Combobox items={["Alpha"]} defaultValue={["Alpha"]} multiple>
+        <ComboboxChips>
+          <ComboboxChip>
+            <span aria-label="Alpha" />
+          </ComboboxChip>
+        </ComboboxChips>
+      </Combobox>,
+    );
+    expect(markup).toContain('aria-label="Remove item"');
   });
 });
