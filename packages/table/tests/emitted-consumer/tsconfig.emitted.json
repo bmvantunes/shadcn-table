@@ -13,5 +13,5 @@
       "@bruno/table/effect": ["../../dist/effect.d.mts"]
     }
   },
-  "include": ["browser-root.ts"]
+  "include": ["browser-root.ts", "select-aggregation.ts"]
 }
