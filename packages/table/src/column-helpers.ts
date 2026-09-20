@@ -34,8 +34,10 @@ export type BrunoTableSelectValue = string | number | bigint | boolean;
 
 export { getBrunoTableSelectValueTypeFingerprint };
 
+// Select's configured option order is not an aggregate result contract.
+// Keep its capability empty unless the descriptor implements explicit result semantics.
 type InternalSelectValueType<TValue> = Omit<
-  BrunoTableValueType<TValue, "select", "text">,
+  BrunoTableValueType<TValue, "select", "text", {}>,
   "editorFamily"
 > & {
   readonly editorFamily: "select";
@@ -438,11 +440,13 @@ function validateRuntimeFieldCapabilities(options: RuntimeColumnOptions): void {
     throw new TypeError("BrunoTable Column received an unsupported aggFunc.");
   }
   const valueType = options["valueType"];
-  const supported =
-    valueType === "bigint"
-      ? new Set(["countDistinct", "sum", "min", "max"])
-      : new Set(["countDistinct", "min", "max"]);
-  if (!supported.has(aggFunc)) {
+  const supported = isRecord(valueType)
+    ? isRecord(valueType["aggregateResults"]) &&
+      Object.hasOwn(valueType["aggregateResults"], aggFunc)
+    : valueType === "bigint"
+      ? new Set(["countDistinct", "sum", "min", "max"]).has(aggFunc)
+      : new Set(["countDistinct", "min", "max"]).has(aggFunc);
+  if (!supported) {
     throw new TypeError(`BrunoTable ${String(valueType)} Column received an unsupported aggFunc.`);
   }
 }
@@ -773,7 +777,7 @@ type SelectFieldInput<
   TField extends BrunoTableFieldKey<TRow>,
   TOptions extends NonEmptySelectOptions,
   TColumnId extends BrunoTableColumnId = BrunoTableColumnId,
-> = Omit<
+> = DistributiveOmit<
   FieldInput<TRow, TField, SelectValueType<BrunoTableNonNullish<TRow[TField]>>, TColumnId>,
   "options"
 > & {
@@ -794,18 +798,6 @@ type SelectPresetDefaults<TOptions extends NonEmptySelectOptions> = PresetDefaul
   readonly options: TOptions;
 };
 
-type EffectiveSelectPresetCapability<
-  TRow,
-  TField extends BrunoTableFieldKey<TRow>,
-  TDefaultOptions extends NonEmptySelectOptions,
-  TColumnId extends BrunoTableColumnId,
-  TDefaults,
-  TOptions,
-> = EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions> &
-  (Merge<TDefaults, TOptions> extends SelectFieldInput<TRow, TField, TDefaultOptions, TColumnId>
-    ? unknown
-    : never);
-
 type SelectColumnPreset<
   TDefaultOptions extends NonEmptySelectOptions,
   TDefaults extends SelectPresetDefaults<TDefaultOptions>,
@@ -821,14 +813,7 @@ type SelectColumnPreset<
   >(
     options: TOptions &
       FieldIdentity<TField, TColumnId> &
-      EffectiveSelectPresetCapability<
-        TRow,
-        TField,
-        TDefaultOptions,
-        TColumnId,
-        TDefaults,
-        TOptions
-      > &
+      EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions> &
       ExactSelectDomain<TDefaultOptions[number], BrunoTableNonNullish<TRow[TField]>> &
       OnlyKnownKeys<
         TOptions,
@@ -1004,14 +989,7 @@ function BrunoTableSelectColumnWithDefaults<
     > & { readonly options?: never },
   >(
     options: TOptions &
-      EffectiveSelectPresetCapability<
-        TRow,
-        TField,
-        TDefaultOptions,
-        BrunoTableColumnId,
-        TDefaults,
-        TOptions
-      > &
+      EffectiveFieldPresetCapability<TRow, TField, TDefaults, TOptions> &
       ExactSelectDomain<TDefaultOptions[number], BrunoTableNonNullish<TRow[TField]>>,
   ): PresetResult<
     SelectBuiltIn<BrunoTableNonNullish<TRow[TField]>>,
