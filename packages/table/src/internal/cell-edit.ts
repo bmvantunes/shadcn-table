@@ -3,6 +3,8 @@ import { Debouncer } from "@tanstack/react-pacer";
 import { assign, createActor, createMachine } from "xstate";
 
 import type { CompiledColumn, CompiledFieldColumn } from "./compile-columns";
+import { registerBrunoTableCellEditDraftReviewSource } from "./cell-edit-evidence";
+import type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit-evidence";
 import {
   BrunoTableCellEditTraversalIndex,
   type BrunoTableCellEditTraversalDestination,
@@ -11,7 +13,8 @@ import {
 } from "./cell-edit-traversal";
 
 type Listener = () => void;
-const brunoTableCellEditDraftReviewSources = new WeakSet<object>();
+export type { BrunoTableCellEditDraftReviewSourceRow } from "./cell-edit-evidence";
+export { isBrunoTableCellEditDraftReviewSourceRow } from "./cell-edit-evidence";
 
 export type BrunoTableCellEditRowPatch = Readonly<Record<string, unknown>>;
 /**
@@ -164,21 +167,6 @@ export type BrunoTableCellEditDraftReviewRow = BrunoTableCellEditDraftSnapshot &
     readonly candidateInvalid?: boolean;
   }>;
 
-export type BrunoTableCellEditDraftReviewSourceRow = Readonly<{
-  readonly kind: "bruno-table-cell-edit-draft-review-source";
-  readonly id: string;
-  readonly rowId: string;
-  readonly columnLabel: string;
-  readonly baseText: "";
-  readonly selectionText: "";
-  readonly serverText: "";
-  readonly mineText: "";
-  readonly resolutionText: "";
-  readonly statusText: "";
-  readonly getSnapshot: () => BrunoTableCellEditDraftReviewRow;
-  readonly subscribe: (listener: Listener) => () => void;
-}>;
-
 export type BrunoTableCellEditDraftReviewClassificationSnapshot = Readonly<{
   readonly conflictIds: ReadonlySet<string>;
   readonly blockedIds: ReadonlySet<string>;
@@ -190,14 +178,6 @@ export type BrunoTableCellEditConflictResolution = Readonly<{
   readonly reviewedServer: unknown;
   readonly reviewedServerVersion: unknown;
 }>;
-
-export function isBrunoTableCellEditDraftReviewSourceRow(
-  value: unknown,
-): value is BrunoTableCellEditDraftReviewSourceRow {
-  return (
-    typeof value === "object" && value !== null && brunoTableCellEditDraftReviewSources.has(value)
-  );
-}
 
 type DraftEntry = BrunoTableCellEditDraftSnapshot &
   Readonly<{
@@ -5137,7 +5117,7 @@ export class BrunoTableCellEditRuntime {
             return () => subscription.unsubscribe();
           },
         });
-        brunoTableCellEditDraftReviewSources.add(source);
+        registerBrunoTableCellEditDraftReviewSource(source);
         this.draftReviewRowsById.set(id, source);
         this.draftReviewRowStoresById.set(id, store);
         membershipChanged = true;

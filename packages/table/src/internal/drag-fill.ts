@@ -446,6 +446,7 @@ type PointerGesture = Readonly<{
   readonly view: Window;
   readonly sourceShapeIdentity: object;
   readonly source: BrunoTableDragFillSource;
+  readonly contentEditableBeforeGesture: Readonly<{ readonly value: string | null }> | undefined;
   readonly gridBounds: DOMRectReadOnly;
   readonly gridDirection: string;
   readonly interactionGeometry: BrunoTableDragFillInteractionGeometry;
@@ -651,6 +652,9 @@ export class BrunoTableDragFillRuntime {
       view,
       sourceShapeIdentity: source.shapeIdentity,
       source: capturedSource,
+      contentEditableBeforeGesture: registration.grid.isContentEditable
+        ? Object.freeze({ value: registration.grid.getAttribute("contenteditable") })
+        : undefined,
       gridBounds,
       gridDirection: view.getComputedStyle(registration.grid).direction,
       interactionGeometry,
@@ -672,6 +676,9 @@ export class BrunoTableDragFillRuntime {
       resources: {
         acquire: () => {
           this.pointer = pointer;
+          if (pointer.contentEditableBeforeGesture !== undefined) {
+            registration.grid.setAttribute("contenteditable", "false");
+          }
           try {
             registration.grid.setPointerCapture(pointer.pointerId);
           } catch {
@@ -890,6 +897,42 @@ export class BrunoTableDragFillRuntime {
     if (lockedAxis === undefined) this.actor.send({ type: "LOCK_AXIS", axis });
     const gridBounds = pointer.gridBounds;
     const geometry = allowAutoscroll ? pointer.interactionGeometry : undefined;
+    let autoscrolled = false;
+    if (geometry !== undefined) {
+      const delta =
+        axis === "horizontal"
+          ? edgeDelta(
+              pointer.clientX,
+              geometry.centreLeft,
+              geometry.centreRight,
+              gridBounds.left,
+              gridBounds.right,
+            )
+          : edgeDelta(
+              pointer.clientY,
+              geometry.bodyTop,
+              geometry.bodyBottom,
+              gridBounds.top,
+              gridBounds.bottom,
+            );
+      if (delta !== 0) {
+        // Queue the next pointer frame before native scrolling queues viewport publication.
+        // This keeps the continuation ahead of DOM work for the newly visible window.
+        this.schedulePointerFrame(pointer);
+        try {
+          autoscrolled =
+            axis === "horizontal"
+              ? pointer.registration.scrollHorizontalByPhysical(delta)
+              : pointer.registration.scrollVerticalByLogical?.(delta) === true;
+        } finally {
+          if (!autoscrolled) this.cancelPointerFrame(pointer);
+        }
+      }
+    }
+    // A synchronous scroll publication may invalidate or dispose this gesture.
+    if (this.pointer !== pointer) return autoscrolled;
+    // Native scroll writes can flush pending styles. Hit-test and decorate only after
+    // scrolling so preview work does not add layout cost to the synchronous scroll lane.
     const hit = hitAtPointer(
       pointer,
       gridBounds,
@@ -912,38 +955,7 @@ export class BrunoTableDragFillRuntime {
       pointer.projectedTargetIdentity = undefined;
       this.clearPreview();
     }
-    if (!allowAutoscroll) return false;
-    if (geometry === undefined) return false;
-    const delta =
-      axis === "horizontal"
-        ? edgeDelta(
-            pointer.clientX,
-            geometry.centreLeft,
-            geometry.centreRight,
-            gridBounds.left,
-            gridBounds.right,
-          )
-        : edgeDelta(
-            pointer.clientY,
-            geometry.bodyTop,
-            geometry.bodyBottom,
-            gridBounds.top,
-            gridBounds.bottom,
-          );
-    if (delta === 0) return false;
-    // Book the next native scroll before this scroll queues viewport DOM publication.
-    // Otherwise every continuing frame scrolls through freshly invalidated layout.
-    this.schedulePointerFrame(pointer);
-    let autoscrolled = false;
-    try {
-      autoscrolled =
-        axis === "horizontal"
-          ? pointer.registration.scrollHorizontalByPhysical(delta)
-          : pointer.registration.scrollVerticalByLogical?.(delta) === true;
-      return autoscrolled;
-    } finally {
-      if (!autoscrolled) this.cancelPointerFrame(pointer);
-    }
+    return autoscrolled;
   };
 
   private readonly placeHandle = (source: BrunoTableDragFillSourceShape | undefined): void => {
@@ -1147,20 +1159,28 @@ export class BrunoTableDragFillRuntime {
   };
 
   private readonly releasePointer = (pointer: PointerGesture): void => {
-    this.cancelPointerFrame(pointer);
-    pointer.view.removeEventListener("pointermove", this.onPointerMove, true);
-    pointer.view.removeEventListener("pointerup", this.onPointerUp, true);
-    pointer.view.removeEventListener("pointercancel", this.onPointerCancel, true);
-    pointer.view.removeEventListener("scroll", this.onAncestorScroll, true);
-    pointer.view.removeEventListener("resize", this.onEnvironmentResize);
     try {
-      if (pointer.grid.hasPointerCapture(pointer.pointerId)) {
-        pointer.grid.releasePointerCapture(pointer.pointerId);
+      this.cancelPointerFrame(pointer);
+      pointer.view.removeEventListener("pointermove", this.onPointerMove, true);
+      pointer.view.removeEventListener("pointerup", this.onPointerUp, true);
+      pointer.view.removeEventListener("pointercancel", this.onPointerCancel, true);
+      pointer.view.removeEventListener("scroll", this.onAncestorScroll, true);
+      pointer.view.removeEventListener("resize", this.onEnvironmentResize);
+      try {
+        if (pointer.grid.hasPointerCapture(pointer.pointerId)) {
+          pointer.grid.releasePointerCapture(pointer.pointerId);
+        }
+      } catch {
+        // Synthetic pointer input may not own native pointer capture.
       }
-    } catch {
-      // Synthetic pointer input may not own native pointer capture.
+    } finally {
+      if (pointer.contentEditableBeforeGesture !== undefined) {
+        const prior = pointer.contentEditableBeforeGesture.value;
+        if (prior === null) pointer.grid.removeAttribute("contenteditable");
+        else pointer.grid.setAttribute("contenteditable", prior);
+      }
+      if (this.pointer === pointer) this.pointer = undefined;
     }
-    if (this.pointer === pointer) this.pointer = undefined;
   };
 
   private readonly removeHandle = (): void => {

@@ -10,8 +10,9 @@
     "types": ["node"],
     "paths": {
       "@bruno/table": ["../../dist/index.d.mts"],
+      "@bruno/table/server": ["../../dist/server.d.mts"],
       "@bruno/table/effect": ["../../dist/effect.d.mts"]
     }
   },
-  "include": ["index.ts", "jsx.tsx"]
+  "include": ["index.ts", "jsx.tsx", "server.ts"]
 }
