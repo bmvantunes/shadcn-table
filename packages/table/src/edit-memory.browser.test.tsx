@@ -15,6 +15,7 @@ import { useBrunoTableClientFilterContext } from "./internal/client-filter-conte
 import { BrunoTableClientRowPipeline } from "./internal/client-row-pipeline";
 import { BrunoTableClientRowPipelineAdapter } from "./internal/client-source-adapter";
 import { BrunoTableCellEditRuntime } from "./internal/cell-edit";
+import { createBrunoTableClientEditCapability } from "./internal/client-edit-capability";
 import { BrunoTableToolbarStore, BrunoTableView } from "./internal/bruno-table-view";
 import { compileColumns } from "./internal/compile-columns";
 import { installBrunoTableGridCommandListener } from "./internal/grid-command-instrumentation";
@@ -179,6 +180,11 @@ test("keeps legacy edit safety chrome without exposing unavailable review comman
     "TABLE_ID_LEGACY_EDIT_SAFETY",
   );
   const legacyMemory = new BrunoTableEditMemoryRuntime();
+  const legacyCellEdit = new BrunoTableCellEditRuntime({
+    columns: compiledColumns,
+    getRow: () => row,
+    getRowVersion: (candidate) => (candidate as Row).revision,
+  });
   legacyMemory.activate();
   try {
     const viewScreen = await render(
@@ -189,8 +195,11 @@ test("keeps legacy edit safety chrome without exposing unavailable review comman
         toolbar={new BrunoTableToolbarStore(undefined)}
         rowPipeline={BrunoTableClientRowPipeline}
         rowPipelineAdapter={adapter}
-        editMemory={legacyMemory}
-        renderResetReview={() => null}
+        editCapability={createBrunoTableClientEditCapability({
+          cellEdit: legacyCellEdit,
+          editMemory: legacyMemory,
+          renderResetReview: () => null,
+        })}
       />,
     );
     await expect.element(viewScreen.getByRole("region", { name: "Edit safety" })).toBeVisible();
@@ -198,6 +207,7 @@ test("keeps legacy edit safety chrome without exposing unavailable review comman
     await expect.element(viewScreen.getByRole("button", { name: "Save" })).toBeVisible();
     await viewScreen.unmount();
   } finally {
+    legacyCellEdit.dispose();
     legacyMemory.dispose();
   }
 });

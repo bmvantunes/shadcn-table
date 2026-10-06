@@ -4,6 +4,7 @@ import { cleanup, render } from "vitest-browser-react";
 
 import { BrunoTableClient } from "./index";
 import { settleBrunoTableBrowserFrames } from "./internal/browser-test-helpers";
+import { installBrunoTableClientDragFillFrameListener } from "./internal/render-instrumentation";
 import type { BrunoTableColumns, BrunoTableSaveEditsHandler } from "./public-types";
 
 type Row = Readonly<{
@@ -78,7 +79,7 @@ function centerOf(element: Element): Readonly<{ x: number; y: number }> {
 }
 
 function pointer(
-  type: "pointerdown" | "pointermove" | "pointerup",
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
   pointerId: number,
   point: Readonly<{ x: number; y: number }>,
 ): PointerEvent {
@@ -91,6 +92,41 @@ function pointer(
     pointerId,
   });
 }
+
+test.each(["pointerup", "pointercancel", "unmount"] as const)(
+  "suspends editable content only during Drag Fill and restores it after %s",
+  async (ending) => {
+    const screen = await render(
+      <BrunoTableClient
+        tableId={`TABLE_ID_DRAG_FILL_EDITABLE_${ending.toUpperCase()}`}
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_FIRST", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+      />,
+    );
+    const grid = screen.getByRole("grid").element() as HTMLElement;
+    grid.focus();
+    await settleBrunoTableBrowserFrames();
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]");
+    expect(handle).not.toBeNull();
+    expect(grid.getAttribute("contenteditable")).toBe("plaintext-only");
+
+    handle!.dispatchEvent(pointer("pointerdown", 810, centerOf(handle!)));
+    expect(grid.getAttribute("contenteditable")).toBe("false");
+
+    if (ending === "unmount") {
+      await screen.unmount();
+    } else {
+      grid.dispatchEvent(pointer(ending, 810, centerOf(handle!)));
+    }
+    expect(grid.getAttribute("contenteditable")).toBe("plaintext-only");
+    expect(grid.isContentEditable).toBe(true);
+  },
+);
 
 afterEach(async () => {
   await cleanup();
@@ -235,6 +271,88 @@ test("releases Drag Fill against native scroll before the next viewport publicat
     "row-1",
     "row-2",
   ]);
+});
+
+test("queues the next Drag Fill frame before native edge scrolling schedules viewport publication", async () => {
+  const tableId = "TABLE_ID_DRAG_FILL_FRAME_ORDER";
+  const screen = await render(
+    <div style={{ width: 240 }}>
+      <BrunoTableClient
+        tableId={tableId}
+        columns={columns}
+        initialOrderBy={[{ columnId: "COL_ID_FIRST", direction: "asc" }]}
+        clientSource={{ rows, totalRows: rows.length, version: 1, status: "ready" }}
+        getRowId={(row) => row.id}
+        editable
+        getRowVersion={(row) => row.revision}
+        onSaveEdits={() => Promise.resolve()}
+      />
+    </div>,
+  );
+  const grid = screen.getByRole("grid").element() as HTMLElement;
+  grid.focus();
+  await settleBrunoTableBrowserFrames();
+  const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]");
+  if (handle === null)
+    throw new Error("Expected the selected source to expose a Drag Fill handle.");
+  const rowId = handle.closest<HTMLElement>("[data-bruno-row-id]")?.dataset["brunoRowId"];
+  if (rowId === undefined) throw new Error("Expected the handle to have an owning source row.");
+  const sourceCell = grid.querySelector<HTMLElement>(
+    `[role="gridcell"][data-bruno-row-id="${rowId}"]`,
+  );
+  if (sourceCell === null) throw new Error("Expected the Drag Fill source cell to be mounted.");
+
+  const timeline: string[] = [];
+  const dragFillFrameIds: number[] = [];
+  const viewportFrameIds: number[] = [];
+  const removeFrames = installBrunoTableClientDragFillFrameListener(tableId, (event) => {
+    if (event.phase !== "scheduled") return;
+    dragFillFrameIds.push(event.frameId);
+    timeline.push(`drag-fill:${String(event.frameId)}`);
+  });
+  const requestFrame = window.requestAnimationFrame.bind(window);
+  const requestFrameSpy = vi
+    .spyOn(window, "requestAnimationFrame")
+    .mockImplementation((callback) => {
+      const frameId = requestFrame(callback);
+      timeline.push(`raf:${String(frameId)}`);
+      const schedulingStack = new Error().stack ?? "";
+      if (
+        schedulingStack.includes("virtual-viewport.ts") &&
+        schedulingStack.includes("schedulePublish")
+      ) {
+        viewportFrameIds.push(frameId);
+        timeline.push(`viewport:${String(frameId)}`);
+      }
+      return frameId;
+    });
+
+  try {
+    const initialScrollLeft = grid.scrollLeft;
+    const bounds = grid.getBoundingClientRect();
+    const rowBounds = sourceCell.getBoundingClientRect();
+    handle.dispatchEvent(pointer("pointerdown", 811, centerOf(handle)));
+    grid.dispatchEvent(
+      pointer("pointermove", 811, { x: bounds.right - 2, y: rowBounds.top + rowBounds.height / 2 }),
+    );
+    await vi.waitFor(() => expect(grid.scrollLeft).toBeGreaterThan(initialScrollLeft));
+    await settleBrunoTableBrowserFrames(4);
+
+    expect(dragFillFrameIds.length).toBeGreaterThanOrEqual(2);
+    const continuation = `drag-fill:${String(dragFillFrameIds[1])}`;
+    const continuationIndex = timeline.indexOf(continuation);
+    const firstViewportFrameId = viewportFrameIds[0];
+    const firstViewportRequestIndex =
+      firstViewportFrameId === undefined
+        ? -1
+        : timeline.indexOf(`viewport:${String(firstViewportFrameId)}`);
+    expect(continuationIndex).toBeGreaterThanOrEqual(0);
+    expect(firstViewportRequestIndex).toBeGreaterThan(continuationIndex);
+  } finally {
+    grid.dispatchEvent(pointer("pointercancel", 811, centerOf(handle)));
+    removeFrames();
+    requestFrameSpy.mockRestore();
+  }
 });
 
 test("releases horizontal Drag Fill at the native boundary with Row Selection", async () => {

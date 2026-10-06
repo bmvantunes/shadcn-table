@@ -8,6 +8,29 @@ import {
 } from "./navigation";
 
 describe("BrunoTableNavigationRuntime", () => {
+  it("admits only safe row positions and permits an unloaded slot without an identity", () => {
+    const columns = compileColumns([
+      {
+        columnId: "COL_ID_NAME",
+        field: "name",
+        headerName: "Name",
+        valueType: "text",
+      },
+    ]);
+    const navigation = new BrunoTableNavigationRuntime();
+    navigation.setShape(["loaded", undefined], columns);
+
+    expect(navigation.activateBody(Number.NaN, undefined, "COL_ID_NAME")).toBe(false);
+    expect(navigation.activateBody(1.5, undefined, "COL_ID_NAME")).toBe(false);
+    expect(navigation.activateBody(1, "other", "COL_ID_NAME")).toBe(false);
+    expect(navigation.activateBody(1, undefined, "COL_ID_NAME")).toBe(true);
+    expect(navigation.getSnapshot()).toEqual({
+      region: "body",
+      rowIndex: 1,
+      columnId: "COL_ID_NAME",
+    });
+  });
+
   it("publishes frozen active-cell snapshots and supports projection reset", () => {
     const columns = compileColumns([
       {

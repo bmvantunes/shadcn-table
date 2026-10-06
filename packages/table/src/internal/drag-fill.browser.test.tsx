@@ -167,6 +167,53 @@ function pointer(
 }
 
 describe("BrunoTable Drag Fill browser runtime", () => {
+  test("stops post-scroll hit testing when a synchronous scroll callback cancels the gesture", async () => {
+    const { grid, structure } = createGrid(["COL_ID_A", "COL_ID_B", "COL_ID_C"]);
+    const editableOwner = document.createElement("div");
+    editableOwner.dataset["dragFillRuntimeFixture"] = "";
+    editableOwner.setAttribute("contenteditable", "plaintext-only");
+    editableOwner.append(grid);
+    document.body.append(editableOwner);
+    grid.removeAttribute("contenteditable");
+    expect(grid.isContentEditable).toBe(true);
+    const runtime = new BrunoTableDragFillRuntime();
+    ownedRuntimes.add(runtime);
+    const resolvePointerHit = vi.fn(() => ({ rowId: "ROW_ID_1", columnId: "COL_ID_C" }));
+    const scrollHorizontalByPhysical = vi.fn(() => {
+      runtime.cancel();
+      return true;
+    });
+    const gridBounds = grid.getBoundingClientRect();
+    runtime.register({
+      grid,
+      getSourceShape: () => source(["COL_ID_A"], ["stable"]),
+      getStructure: () => structure,
+      resolvePointerHit,
+      interactionGeometry: () => ({
+        bodyTop: gridBounds.top,
+        bodyBottom: gridBounds.bottom,
+        centreLeft: gridBounds.left,
+        centreRight: gridBounds.right,
+      }),
+      scrollHorizontalByPhysical,
+      apply: () => Object.freeze({ kind: "accepted" as const }),
+    });
+    await nextFrame();
+
+    const handle = grid.querySelector<HTMLElement>("[data-bruno-drag-fill-handle]")!;
+    const y = centerOf(handle).y;
+    handle.dispatchEvent(pointer("pointerdown", 191, centerOf(handle)));
+    expect(grid.getAttribute("contenteditable")).toBe("false");
+    grid.dispatchEvent(pointer("pointermove", 191, { x: gridBounds.right - 1, y }));
+    await nextFrame();
+
+    expect(scrollHorizontalByPhysical).toHaveBeenCalledOnce();
+    expect(resolvePointerHit).not.toHaveBeenCalled();
+    expect(grid.querySelectorAll("[data-bruno-drag-fill-preview]")).toHaveLength(0);
+    expect(grid.getAttribute("contenteditable")).toBeNull();
+    expect(grid.isContentEditable).toBe(true);
+  });
+
   test("cancels an iframe fill when an owner-realm ancestor scrolls", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);

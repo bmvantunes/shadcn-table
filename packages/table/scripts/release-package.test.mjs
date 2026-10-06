@@ -20,6 +20,7 @@ void test("published table content excludes development-only compiler fixtures",
   assert.equal(result.status, 0, result.stderr);
   const packed = JSON.parse(result.stdout)[0];
   assert.ok(packed.files.some(({ path }) => path === "dist/index.mjs"));
+  assert.ok(packed.files.some(({ path }) => path === "dist/server.mjs"));
   assert.deepEqual(
     packed.files.filter(({ path }) => path.includes("compiler-smoke")),
     [],
@@ -87,12 +88,15 @@ void test("every direct export resolves inside a tarball containing only release
     for (const path of files) {
       assert.match(
         path,
-        /^(?:package\.json|README\.md|LICENSE(?:\.md)?|THIRD_PARTY_NOTICES\.md|USAGE\.md|RELEASE\.md|dist\/[^/]+\.(?:mjs|d\.mts)|skills\/.+|src\/styles\/globals\.css)$/u,
+        /^(?:package\.json|README\.md|LICENSE(?:\.md)?|THIRD_PARTY_NOTICES\.md|USAGE\.md|RELEASE\.md|dist\/.+\.(?:mjs|d\.mts)|skills\/.+|src\/styles\/globals\.css)$/u,
       );
-      assert.doesNotMatch(
-        path,
-        /(?:compiler-smoke|node_modules|\.repos|\.cache|\.test\.|\.bench\.)/u,
-      );
+      assert.doesNotMatch(path, /(?:compiler-smoke|\.repos|\.cache|\.test\.|\.bench\.)/u);
+      if (path.includes("node_modules")) {
+        assert.match(
+          path,
+          /^dist\/node_modules\/\.pnpm\/effect-view-server@4\.2\.8_[^/]+\/node_modules\/effect-view-server\/dist\/[^/]+\.(?:mjs|d\.mts)$/u,
+        );
+      }
     }
     assert.ok(files.includes("README.md"));
     assert.ok(

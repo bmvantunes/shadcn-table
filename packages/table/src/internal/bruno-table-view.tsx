@@ -1,22 +1,6 @@
 import { Alert, AlertDescription, AlertTitle } from "@bruno/shadcn/alert";
-import { Button, buttonVariants } from "@bruno/shadcn/button";
+import { buttonVariants } from "@bruno/shadcn/button";
 import { DirectionProvider } from "@bruno/shadcn/direction";
-import { NativeSelect, NativeSelectOption } from "@bruno/shadcn/native-select";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@bruno/shadcn/popover";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@bruno/shadcn/empty";
 import { Skeleton } from "@bruno/shadcn/skeleton";
 import { Spinner } from "@bruno/shadcn/spinner";
 import { Checkbox } from "@bruno/shadcn/checkbox";
@@ -45,10 +29,7 @@ import {
   WarningDiamondIcon,
 } from "@phosphor-icons/react";
 import {
-  Children,
-  Fragment,
   createContext,
-  isValidElement,
   useCallback,
   useContext,
   forwardRef,
@@ -63,6 +44,14 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { BrunoTableMountedRowSlots } from "./mounted-row-slots";
+import { BrunoTableSortPanel } from "./renderer-sort-panel";
+import { EmptySourceBody, invalidSourceDetails, SourceLifecycle } from "./renderer-source-chrome";
+import {
+  BrunoTableToolbar,
+  BrunoTableToolbarStore,
+  GridOwnedToolRail,
+  ToolbarOutlet,
+} from "./renderer-toolbar";
 
 import type {
   ComponentType,
@@ -75,7 +64,7 @@ import type {
   RefCallback,
   RefObject,
 } from "react";
-import { useBatcher, useQueuer } from "@tanstack/react-pacer";
+import { useBatcher } from "@tanstack/react-pacer";
 
 import type { BrunoTableColumnId } from "../public-types";
 
@@ -95,7 +84,6 @@ import {
   armBrunoTableProducedTextCapture,
   installBrunoTableProducedTextEvidence,
 } from "./produced-text-evidence";
-import { sameBrunoTableToolbarNode } from "./toolbar-node";
 import {
   type BrunoTableHotkeyGesture,
   isBrunoTableHotkeyWorkflowOwner,
@@ -110,7 +98,6 @@ import {
   BrunoTableHeaderCommitDiagnosticProbe,
   BrunoTableRowCommitDiagnosticProbe,
   BrunoTableRowSelectionCommitDiagnosticProbe,
-  BrunoTableSortPanelCommitDiagnosticProbe,
   BrunoTableViewCommitDiagnosticProbe,
   createBrunoTableCellCommitDiagnosticRef,
 } from "./commit-diagnostic-probes";
@@ -200,46 +187,29 @@ import {
   type BrunoTableCellRange,
   type BrunoTableCellRangeRuntime,
 } from "./cell-range-clipboard";
-import {
+import type {
   BrunoTableCellEditRuntime,
-  isBrunoTableCellEditDraftReviewSourceRow,
-  type BrunoTableCellEditDraftReviewSourceRow,
-  type BrunoTableCellEditMovement,
-  type BrunoTableCellEditMovementOrigin,
-  type BrunoTableCellEditProjection,
-  type BrunoTableCellEditSessionSnapshot,
+  BrunoTableCellEditDraftReviewSourceRow,
+  BrunoTableCellEditMovement,
+  BrunoTableCellEditMovementOrigin,
+  BrunoTableCellEditProjection,
+  BrunoTableCellEditSessionSnapshot,
 } from "./cell-edit";
-import { BrunoTableCellEditBoundary } from "./cell-edit-boundary";
-import { BrunoTableCellEditGeometryController } from "./cell-edit-geometry";
-import {
+import { isBrunoTableCellEditDraftReviewSourceRow } from "./cell-edit-evidence";
+import type {
   BrunoTablePasteRuntime,
-  brunoTablePasteDiagnosticFromCellEdit,
-  createBrunoTablePasteDiagnostic,
-  createBrunoTablePasteCoordinateEvidence,
-  createBrunoTablePasteGesture,
-  isBrunoTablePasteTargetCurrent,
-  planBrunoTablePaste,
-  projectBrunoTablePasteTarget,
-  sameBrunoTablePasteTarget,
-  type BrunoTablePasteConfirmation,
-  type BrunoTablePasteDiagnostic,
+  BrunoTablePasteConfirmation,
+  BrunoTablePasteDiagnostic,
 } from "./cell-paste";
-import { BrunoTablePasteChrome } from "./cell-paste-chrome";
-import {
+import type {
   BrunoTableDragFillRuntime,
-  addBrunoTableDragFillRejectionEvidence,
-  type BrunoTableDragFillInteractionGeometry,
-  type BrunoTableDragFillSource,
-  type BrunoTableDragFillSourceShape,
+  BrunoTableDragFillInteractionGeometry,
+  BrunoTableDragFillSource,
+  BrunoTableDragFillSourceShape,
 } from "./drag-fill";
-import { BrunoTableDragFillChrome } from "./drag-fill-chrome";
-import {
-  BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY,
-  BrunoTableEditSafetyFooter,
-  type BrunoTableBlockedReviewRenderer,
-  type BrunoTableConflictReviewRenderer,
-} from "./edit-chrome";
 import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
+import type { BrunoTableEditCapability } from "./client-edit-capability";
+import { BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY } from "./review-viewport";
 
 const ROW_HEIGHT = BRUNO_TABLE_ROW_HEIGHT;
 const ROW_SELECTION_COLUMN_WIDTH = 40;
@@ -397,6 +367,13 @@ const EMPTY_ROW_RANGE: BrunoTableRowRangeSnapshot = Object.freeze({
   totalHeight: 0,
 });
 const getInactiveRowRange = (): BrunoTableRowRangeSnapshot => EMPTY_ROW_RANGE;
+const BrunoTableEditCapabilityContext = createContext<BrunoTableEditCapability | undefined>(
+  undefined,
+);
+const EMPTY_TRAVERSAL_QUEUE = Object.freeze({
+  addItem: (_item: number): boolean => false,
+  clear: (): void => undefined,
+});
 const BrunoTableBodyColumnWindowContext = createContext<BrunoTableBodyColumnWindowSnapshot>(
   EMPTY_ACTIVE_BODY_COLUMN_WINDOW,
 );
@@ -585,18 +562,7 @@ function activeDomIdForRowIdentity(
   return activeDomId(instanceId, tableId, activeCell);
 }
 
-export function BrunoTableToolbar({ children }: { readonly children?: ReactNode }): ReactNode {
-  if (!hasRenderableChildren(children)) return null;
-  return (
-    <div
-      aria-label="Table controls"
-      className="flex min-w-0 items-center gap-2 overflow-x-auto px-3.5 py-2"
-      role="toolbar"
-    >
-      {children}
-    </div>
-  );
-}
+export { BrunoTableToolbar, BrunoTableToolbarStore };
 
 export type BrunoTableViewProps<
   TRuntime extends BrunoTableRuntimeView = BrunoTableRuntimeView,
@@ -619,18 +585,8 @@ export type BrunoTableViewProps<
   readonly rowSelection?: BrunoTableRowSelectionRuntime | undefined;
   /** Private Client-only one-axis Cell Range Selection and Copy capability. */
   readonly cellRange?: BrunoTableCellRangeRuntime | undefined;
-  /** Private Editable Client-only Cell Edit Session capability. */
-  readonly cellEdit?: BrunoTableCellEditRuntime | undefined;
-  /** Private Editable Client-only edit memory and safety chrome capability. */
-  readonly editMemory?: BrunoTableEditMemoryRuntime | undefined;
-  /** Private Editable Client-only Reset Review renderer. */
-  readonly renderResetReview?:
-    | ((rows: readonly BrunoTableCellEditDraftReviewSourceRow[]) => ReactNode)
-    | undefined;
-  /** Private Editable Client-only Conflict Review renderer. */
-  readonly renderConflictReview?: BrunoTableConflictReviewRenderer | undefined;
-  /** Private Editable Client-only Blocked Changes Review renderer. */
-  readonly renderBlockedReview?: BrunoTableBlockedReviewRenderer | undefined;
+  /** Private Client-only edit workflow and rendering capability. */
+  readonly editCapability?: BrunoTableEditCapability | undefined;
 };
 
 function getBrunoTableGridAriaKeyShortcuts({
@@ -747,11 +703,9 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
   gridOwnedControls,
   rowSelection,
   cellRange,
-  editMemory,
-  renderResetReview,
-  renderConflictReview,
-  renderBlockedReview,
+  editCapability,
 }: BrunoTableViewProps<TRuntime, TAdapter>): ReactElement {
+  const editMemory = editCapability?.editMemory;
   const resolvedGridAriaLabel = gridAriaLabel ?? `Data for ${tableId}`;
   const tableElement = useRef<HTMLElement | null>(null);
   const focusFallback = useMemo(
@@ -813,13 +767,13 @@ function BrunoTableViewImplementation<TRuntime extends BrunoTableRuntimeView, TA
           rowSelection={rowSelection}
           cellRange={cellRange}
         />
-        {editMemory === undefined || renderResetReview === undefined ? null : (
-          <BrunoTableEditSafetyFooter
+        {editMemory === undefined || editCapability === undefined ? null : (
+          <editCapability.EditSafetyFooter
             dispatchGridCommand={runtime.dispatchGridCommand}
             runtime={editMemory}
-            renderReview={renderResetReview}
-            renderConflictReview={renderConflictReview}
-            renderBlockedReview={renderBlockedReview}
+            renderReview={editCapability.renderResetReview}
+            renderConflictReview={editCapability.renderConflictReview}
+            renderBlockedReview={editCapability.renderBlockedReview}
             tableId={tableId}
           />
         )}
@@ -836,441 +790,13 @@ export function BrunoTableView<TRuntime extends BrunoTableRuntimeView, TAdapter>
   props: BrunoTableViewProps<TRuntime, TAdapter>,
 ): ReactElement {
   return (
-    <BrunoTableCellEditContext value={props.cellEdit}>
-      <BrunoTableEditMemoryContext value={props.editMemory}>
-        <MemoizedBrunoTableView {...props} />
-      </BrunoTableEditMemoryContext>
-    </BrunoTableCellEditContext>
-  );
-}
-
-const ToolbarOutlet = memo(function ToolbarOutlet({
-  reserveEndSpace,
-  toolbar,
-}: {
-  readonly reserveEndSpace: boolean;
-  readonly toolbar: BrunoTableToolbarStore;
-}) {
-  const snapshot = useSyncExternalStore(
-    toolbar.subscribe,
-    toolbar.getSnapshot,
-    toolbar.getSnapshot,
-  );
-  return snapshot.hasToolbar ? (
-    <div aria-label="Table toolbar" className={reserveEndSpace ? "pe-28" : undefined} role="region">
-      {snapshot.children}
-    </div>
-  ) : null;
-});
-
-const GridOwnedToolRail = memo(function GridOwnedToolRail({
-  controls,
-}: {
-  readonly controls: ReactNode;
-}): ReactElement | null {
-  if (controls === undefined || controls === null) return null;
-  return (
-    <aside
-      aria-label="Grid tools"
-      className="pointer-events-none absolute end-0 top-0 z-20 flex w-28 flex-col items-stretch gap-1 border-s bg-background/95 px-2 py-1"
-    >
-      <div className="pointer-events-auto">{controls}</div>
-    </aside>
-  );
-});
-
-const BrunoTableSortPanel = memo(function BrunoTableSortPanel({
-  columns,
-  reserveEndSpace,
-  runtime,
-  tableId,
-}: {
-  readonly columns: readonly CompiledColumn[];
-  readonly reserveEndSpace: boolean;
-  readonly runtime: BrunoTableRuntimeView;
-  readonly tableId: string;
-}) {
-  const orderBy = useSyncExternalStore(
-    runtime.subscribeSorting,
-    runtime.getSortingSnapshot,
-    runtime.getSortingSnapshot,
-  );
-  const groupBy = useSyncExternalStore(
-    runtime.subscribeGroupBy,
-    runtime.getGroupBySnapshot,
-    runtime.getGroupBySnapshot,
-  );
-  const columnLayout = useSyncExternalStore(
-    runtime.subscribeColumnStructure,
-    runtime.getColumnStructureSnapshot,
-    runtime.getColumnStructureSnapshot,
-  );
-  const rowsHeaderName = useSyncExternalStore(
-    runtime.subscribeInstalledRowsPresentation,
-    runtime.getInstalledRowsHeaderNameSnapshot,
-    runtime.getInstalledRowsHeaderNameSnapshot,
-  );
-  const [open, setOpen] = useState(false);
-  const sortPanelRootRef = useRef<HTMLDivElement>(null);
-  const sortPanelControlRefs = useRef(new Map<string, HTMLButtonElement>());
-  const pendingSortPanelFocus = useRef<
-    | Readonly<{
-        readonly focusKey: string;
-        readonly initiator: HTMLButtonElement;
-      }>
-    | undefined
-  >(undefined);
-  useLayoutEffect(() => {
-    const focusRequest = pendingSortPanelFocus.current;
-    if (focusRequest === undefined) return;
-    let followupFrameId: number | undefined;
-    const frameId = requestAnimationFrame(() => {
-      followupFrameId = requestAnimationFrame(() => {
-        if (pendingSortPanelFocus.current !== focusRequest) return;
-        const activeElement = document.activeElement;
-        const shouldRecoverFocus =
-          !focusRequest.initiator.isConnected &&
-          (activeElement === null ||
-            activeElement === document.body ||
-            activeElement === sortPanelRootRef.current);
-        pendingSortPanelFocus.current = undefined;
-        if (activeElement === focusRequest.initiator || !shouldRecoverFocus) return;
-        const control = sortPanelControlRefs.current.get(focusRequest.focusKey);
-        if (control === undefined) return;
-        control.focus({ preventScroll: true });
-      });
-    });
-    return () => {
-      cancelAnimationFrame(frameId);
-      if (followupFrameId !== undefined) cancelAnimationFrame(followupFrameId);
-    };
-  });
-  const visible = new Set(columnLayout.visibleColumnIds);
-  const activeGroups = new Set(groupBy);
-  const sortableColumns = columns.filter(
-    (column) =>
-      (groupBy.length === 0 && column.enableSorting !== false) ||
-      (groupBy.length > 0 &&
-        (activeGroups.has(column.columnId) ||
-          (column.kind === "field" &&
-            column.aggFunc !== undefined &&
-            visible.has(column.columnId)))),
-  );
-  if (sortableColumns.length === 0) return null;
-  const activeIds = new Set(orderBy.map((sort) => sort.columnId));
-  const eligibleColumns = [
-    ...sortableColumns.filter((column) => !activeIds.has(column.columnId)),
-    ...(groupBy.length > 0 && !activeIds.has("COL_ID_BRUNO_TABLE_ROWS")
-      ? [{ columnId: "COL_ID_BRUNO_TABLE_ROWS", headerName: rowsHeaderName }]
-      : []),
-  ];
-  const headerName = (columnId: string): string =>
-    columnId === "COL_ID_BRUNO_TABLE_ROWS"
-      ? rowsHeaderName
-      : (sortableColumns.find((column) => column.columnId === columnId)?.headerName ?? columnId);
-  const directionLabel = (direction: "asc" | "desc"): "ascending" | "descending" =>
-    direction === "asc" ? "ascending" : "descending";
-
-  return (
-    <div
-      aria-label="Sorting controls"
-      className={reserveEndSpace ? "flex items-center py-1 pe-28" : "flex items-center py-1"}
-      role="region"
-    >
-      {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
-        <BrunoTableSortPanelCommitDiagnosticProbe commitEvidence={orderBy} tableId={tableId} />
-      ) : null}
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          render={
-            <Button
-              aria-label={`Sort rows, ${String(orderBy.length)} active`}
-              size="sm"
-              type="button"
-              variant="outline"
-            />
-          }
-        >
-          Sort
-          <span aria-hidden="true">{String(orderBy.length)}</span>
-        </PopoverTrigger>
-        {open ? (
-          <PopoverContent ref={sortPanelRootRef} align="start" aria-label="Sort rows" role="dialog">
-            <PopoverHeader>
-              <PopoverTitle>Sort rows</PopoverTitle>
-              <PopoverDescription>
-                Change direction and priority. At least one sort always remains active.
-              </PopoverDescription>
-            </PopoverHeader>
-            <ol aria-label="Active sorts" className="flex flex-col gap-2" role="list">
-              {orderBy.map((sort, index) => {
-                const name = headerName(sort.columnId);
-                const direction = directionLabel(sort.direction);
-                return (
-                  <li
-                    key={sort.columnId}
-                    aria-label={`Priority ${String(index + 1)}, ${name}, ${direction}`}
-                    className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] items-center gap-1 rounded-md border border-border p-1.5"
-                  >
-                    <span className="min-w-0 truncate">
-                      <span aria-hidden="true">{String(index + 1)}. </span>
-                      {name}
-                    </span>
-                    <Button
-                      ref={(control) => {
-                        const focusKey = `direction:${sort.columnId}`;
-                        if (control === null) sortPanelControlRefs.current.delete(focusKey);
-                        else sortPanelControlRefs.current.set(focusKey, control);
-                      }}
-                      aria-label={`Toggle ${name} direction, currently ${direction}`}
-                      size="xs"
-                      type="button"
-                      variant="outline"
-                      onClick={() =>
-                        runtime.dispatchGridCommand({
-                          type: "column.sort.toggle",
-                          columnId: sort.columnId,
-                          multi: true,
-                        })
-                      }
-                    >
-                      {sort.direction === "asc" ? "Ascending" : "Descending"}
-                    </Button>
-                    <Button
-                      ref={(control) => {
-                        const focusKey = `earlier:${sort.columnId}`;
-                        if (control === null) sortPanelControlRefs.current.delete(focusKey);
-                        else sortPanelControlRefs.current.set(focusKey, control);
-                      }}
-                      aria-label={`Move ${name} earlier`}
-                      aria-disabled={index === 0}
-                      size="icon-xs"
-                      type="button"
-                      variant="ghost"
-                      onClick={(event) => {
-                        if (index === 0) return;
-                        pendingSortPanelFocus.current = Object.freeze({
-                          focusKey: `earlier:${sort.columnId}`,
-                          initiator: event.currentTarget,
-                        });
-                        runtime.dispatchGridCommand({
-                          type: "sorting.move",
-                          columnId: sort.columnId,
-                          targetIndex: index - 1,
-                        });
-                      }}
-                    >
-                      <span aria-hidden="true">↑</span>
-                    </Button>
-                    <Button
-                      ref={(control) => {
-                        const focusKey = `later:${sort.columnId}`;
-                        if (control === null) sortPanelControlRefs.current.delete(focusKey);
-                        else sortPanelControlRefs.current.set(focusKey, control);
-                      }}
-                      aria-label={`Move ${name} later`}
-                      aria-disabled={index === orderBy.length - 1}
-                      size="icon-xs"
-                      type="button"
-                      variant="ghost"
-                      onClick={(event) => {
-                        if (index === orderBy.length - 1) return;
-                        pendingSortPanelFocus.current = Object.freeze({
-                          focusKey: `later:${sort.columnId}`,
-                          initiator: event.currentTarget,
-                        });
-                        runtime.dispatchGridCommand({
-                          type: "sorting.move",
-                          columnId: sort.columnId,
-                          targetIndex: index + 1,
-                        });
-                      }}
-                    >
-                      <span aria-hidden="true">↓</span>
-                    </Button>
-                    <Button
-                      aria-label={`Remove ${name}`}
-                      disabled={orderBy.length === 1}
-                      size="xs"
-                      type="button"
-                      variant="ghost"
-                      onClick={(event) => {
-                        const survivor = orderBy[index + 1] ?? orderBy[index - 1];
-                        if (survivor !== undefined) {
-                          pendingSortPanelFocus.current = Object.freeze({
-                            focusKey: `direction:${survivor.columnId}`,
-                            initiator: event.currentTarget,
-                          });
-                        }
-                        runtime.dispatchGridCommand({
-                          type: "sorting.remove",
-                          columnId: sort.columnId,
-                        });
-                      }}
-                    >
-                      Remove
-                    </Button>
-                  </li>
-                );
-              })}
-            </ol>
-            <div className="flex items-center justify-between gap-2">
-              <NativeSelect
-                aria-label="Add sort column"
-                disabled={eligibleColumns.length === 0}
-                size="sm"
-                value=""
-                onChange={(event) => {
-                  const columnId = event.currentTarget.value;
-                  if (columnId.length === 0) return;
-                  runtime.dispatchGridCommand({ type: "sorting.add", columnId });
-                }}
-              >
-                <NativeSelectOption value="">Add sort</NativeSelectOption>
-                {eligibleColumns.map((column) => (
-                  <NativeSelectOption key={column.columnId} value={column.columnId}>
-                    {column.headerName}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <Button
-                aria-label="Reset sorting"
-                size="sm"
-                type="button"
-                variant="outline"
-                onClick={() => runtime.dispatchGridCommand({ type: "sorting.reset" })}
-              >
-                Reset
-              </Button>
-            </div>
-          </PopoverContent>
-        ) : null}
-      </Popover>
-    </div>
-  );
-});
-
-type RuntimeProps = {
-  readonly runtime: BrunoTableRuntimeView;
-  readonly focusFallback: () => void;
-};
-
-function SourceLifecycle({ runtime, focusFallback }: RuntimeProps) {
-  const chrome = useSyncExternalStore(
-    runtime.subscribeChrome,
-    runtime.getChromeSnapshot,
-    runtime.getChromeSnapshot,
-  );
-
-  if (chrome.invalid?.kind === "row-count-mismatch" && chrome.status !== "stale") {
-    return (
-      <Alert variant="destructive">
-        <AlertTitle>Incomplete source</AlertTitle>
-        <AlertDescription>
-          Expected {String(chrome.invalid.expectedRows)} rows but received{" "}
-          {String(chrome.invalid.receivedRows)}.
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (chrome.status === "stale") {
-    return (
-      <LifecycleAlert
-        title="Live data delayed"
-        {...lifecycleDetails(chrome.message, chrome.statusCode, chrome.invalid)}
-        focusFallback={focusFallback}
-      />
-    );
-  }
-  if (chrome.status === "closed" && chrome.hasCoherentRows) {
-    return (
-      <LifecycleAlert
-        title="Live updates stopped"
-        {...lifecycleDetails(chrome.message, chrome.statusCode, chrome.invalid)}
-        {...(chrome.retry === undefined ? {} : { retry: chrome.retry })}
-        onRetry={runtime.retry}
-        focusFallback={focusFallback}
-      />
-    );
-  }
-  if (chrome.status === "error" && chrome.hasCoherentRows) {
-    return (
-      <LifecycleAlert
-        title="Live data error"
-        destructive
-        {...lifecycleDetails(chrome.message, chrome.statusCode, chrome.invalid)}
-        {...(chrome.retry === undefined ? {} : { retry: chrome.retry })}
-        onRetry={runtime.retry}
-        focusFallback={focusFallback}
-      />
-    );
-  }
-  if (
-    (chrome.invalid?.kind === "invalid-value" || chrome.invalid?.kind === "invalid-group") &&
-    chrome.status !== "closed" &&
-    chrome.status !== "error"
-  ) {
-    return (
-      <Alert variant="destructive">
-        <AlertTitle>
-          {chrome.invalid.kind === "invalid-group"
-            ? "Invalid grouped result"
-            : "Invalid source value"}
-        </AlertTitle>
-        <AlertDescription>{invalidSourceDetails(chrome.invalid)}</AlertDescription>
-      </Alert>
-    );
-  }
-  return null;
-}
-
-function lifecycleDetails(
-  message: string | undefined,
-  statusCode: string | undefined,
-  invalid: BrunoTableChromeSnapshot["invalid"],
-) {
-  const details = [message, statusCode, invalidSourceDetails(invalid)].filter(
-    (detail): detail is string => detail !== undefined && detail.length > 0,
-  );
-  return details.length === 0 ? {} : { message: details.join(" · ") };
-}
-
-function LifecycleAlert({
-  title,
-  message,
-  destructive = false,
-  retry,
-  onRetry,
-  focusFallback,
-}: {
-  readonly title: string;
-  readonly message?: string;
-  readonly destructive?: boolean;
-  readonly retry?: { readonly pending: boolean };
-  readonly onRetry?: () => void;
-  readonly focusFallback: () => void;
-}) {
-  return (
-    <Alert variant={destructive ? "destructive" : "default"}>
-      <AlertTitle>{title}</AlertTitle>
-      {message !== undefined ? <AlertDescription>{message}</AlertDescription> : null}
-      {retry !== undefined && onRetry !== undefined ? (
-        <FocusFallbackOnUnmount focusFallback={focusFallback}>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={retry.pending}
-            focusableWhenDisabled
-            onClick={onRetry}
-          >
-            {retry.pending ? <Spinner data-icon="inline-start" /> : null}
-            Retry
-          </Button>
-        </FocusFallbackOnUnmount>
-      ) : null}
-    </Alert>
+    <BrunoTableEditCapabilityContext value={props.editCapability}>
+      <BrunoTableCellEditContext value={props.editCapability?.cellEdit}>
+        <BrunoTableEditMemoryContext value={props.editCapability?.editMemory}>
+          <MemoizedBrunoTableView {...props} />
+        </BrunoTableEditMemoryContext>
+      </BrunoTableCellEditContext>
+    </BrunoTableEditCapabilityContext>
   );
 }
 
@@ -1302,16 +828,19 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
   cellRange,
 }: BrunoTableGridBodyProps<TRuntime, TAdapter>) {
   const cellEdit = useContext(BrunoTableCellEditContext);
+  const editCapability = useContext(BrunoTableEditCapabilityContext);
   const [navigation] = useState(() => new BrunoTableNavigationRuntime());
   const [focusHandoff] = useState(() => new BrunoTableBodyFocusHandoff());
   const [interactionAnnouncer] = useState(() => new BrunoTableInteractionAnnouncer());
   const [pasteRuntime] = useState(() =>
-    cellEdit === undefined ? undefined : new BrunoTablePasteRuntime(focusFallback),
+    cellEdit === undefined || editCapability === undefined
+      ? undefined
+      : editCapability.createPasteRuntime(focusFallback),
   );
   const [dragFillRuntime] = useState(() =>
-    cellEdit === undefined || cellRange === undefined
+    cellEdit === undefined || cellRange === undefined || editCapability === undefined
       ? undefined
-      : new BrunoTableDragFillRuntime(tableId),
+      : editCapability.createDragFillRuntime(tableId),
   );
   useEffect(() => () => pasteRuntime?.dispose(), [pasteRuntime]);
   useEffect(() => () => dragFillRuntime?.dispose(), [dragFillRuntime]);
@@ -1359,9 +888,11 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
           tableId={tableId}
           rowSelection={loadingRowSelection}
         />
-        {pasteRuntime === undefined ? null : <BrunoTablePasteChrome runtime={pasteRuntime} />}
-        {dragFillRuntime === undefined ? null : (
-          <BrunoTableDragFillChrome runtime={dragFillRuntime} />
+        {pasteRuntime === undefined || editCapability === undefined ? null : (
+          <editCapability.PasteChrome runtime={pasteRuntime} />
+        )}
+        {dragFillRuntime === undefined || editCapability === undefined ? null : (
+          <editCapability.DragFillChrome runtime={dragFillRuntime} />
         )}
       </>
     );
@@ -1422,9 +953,11 @@ function BrunoTableGridBody<TRuntime extends BrunoTableRuntimeView, TAdapter>({
         <EmptySourceBody key="empty-source" runtime={runtime} focusFallback={focusFallback} />
       ) : null}
       {rowPipeline}
-      {pasteRuntime === undefined ? null : <BrunoTablePasteChrome runtime={pasteRuntime} />}
-      {dragFillRuntime === undefined ? null : (
-        <BrunoTableDragFillChrome runtime={dragFillRuntime} />
+      {pasteRuntime === undefined || editCapability === undefined ? null : (
+        <editCapability.PasteChrome runtime={pasteRuntime} />
+      )}
+      {dragFillRuntime === undefined || editCapability === undefined ? null : (
+        <editCapability.DragFillChrome runtime={dragFillRuntime} />
       )}
     </>
   );
@@ -1520,108 +1053,6 @@ class BrunoTableInteractionAnnouncer {
   };
 
   public readonly getMessage = (): string => this.message;
-}
-
-const EmptySourceBody = memo(function EmptySourceBody({ runtime, focusFallback }: RuntimeProps) {
-  const chrome = useSyncExternalStore(
-    runtime.subscribeChrome,
-    runtime.getChromeSnapshot,
-    runtime.getChromeSnapshot,
-  );
-  const title = emptyTitle(chrome.status);
-  const announcement =
-    chrome.status === "closed" ? "status" : chrome.status === "error" ? "alert" : "region";
-  const retry = chrome.status === "closed" || chrome.status === "error" ? chrome.retry : undefined;
-  return (
-    <Empty
-      aria-label={announcement === "region" ? title : undefined}
-      className={announcement === "alert" ? "border-destructive text-destructive" : undefined}
-      role={announcement}
-    >
-      <EmptyHeader>
-        <EmptyTitle>{title}</EmptyTitle>
-        <EmptyDescription>
-          {emptyDescription(chrome) ?? "No rows are available for this table."}
-        </EmptyDescription>
-      </EmptyHeader>
-      {retry !== undefined ? (
-        <EmptyContent>
-          <FocusFallbackOnUnmount focusFallback={focusFallback}>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={retry.pending}
-              focusableWhenDisabled
-              onClick={runtime.retry}
-            >
-              {retry.pending ? <Spinner data-icon="inline-start" /> : null}
-              Retry
-            </Button>
-          </FocusFallbackOnUnmount>
-        </EmptyContent>
-      ) : null}
-    </Empty>
-  );
-});
-
-function emptyTitle(status: BrunoTableChromeSnapshot["status"]): string {
-  if (status === "closed") return "Live updates stopped";
-  if (status === "error") return "Live data error";
-  return "No rows";
-}
-
-function emptyDescription(chrome: BrunoTableChromeSnapshot): string | undefined {
-  const details = [chrome.message, chrome.statusCode, invalidSourceDetails(chrome.invalid)].filter(
-    (detail): detail is string => detail !== undefined && detail.length > 0,
-  );
-  return details.length === 0 ? undefined : details.join(" · ");
-}
-
-function invalidSourceDetails(invalid: BrunoTableChromeSnapshot["invalid"]): string | undefined {
-  if (invalid?.kind === "invalid-value") {
-    return `Source row ${String(invalid.rowIndex + 1)}, column ${invalid.columnId}: ${invalid.message}`;
-  }
-  if (invalid?.kind === "invalid-group") {
-    return `Grouped result, column ${invalid.columnId}: ${invalid.message}`;
-  }
-  return invalid?.kind === "invalid-status"
-    ? `Unsupported source status: ${invalid.receivedStatus}.`
-    : invalid?.kind === "invalid-lifecycle"
-      ? `Unreadable Client Source lifecycle field: ${invalid.field}.`
-      : invalid?.kind === "invalid-rows"
-        ? `Invalid Client Source rows: ${invalid.receivedRows}.`
-        : invalid?.kind === "row-count-mismatch"
-          ? `Expected ${String(invalid.expectedRows)} rows but received ${String(invalid.receivedRows)}.`
-          : undefined;
-}
-
-function FocusFallbackOnUnmount({
-  children,
-  focusFallback,
-}: {
-  readonly children: ReactNode;
-  readonly focusFallback: () => void;
-}) {
-  const ref = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => {
-    const root = ref.current;
-    return () => {
-      const activeElement = root?.ownerDocument.activeElement;
-      if (
-        root !== null &&
-        activeElement !== undefined &&
-        activeElement !== null &&
-        root.contains(activeElement)
-      ) {
-        focusFallback();
-      }
-    };
-  }, [focusFallback]);
-  return (
-    <span ref={ref} style={{ display: "contents" }}>
-      {children}
-    </span>
-  );
 }
 
 type BrunoTableViewportAdapterProps = {
@@ -1909,6 +1340,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
 }) {
   const cellEdit = useContext(BrunoTableCellEditContext);
   const editMemory = useContext(BrunoTableEditMemoryContext);
+  const editCapability = useContext(BrunoTableEditCapabilityContext);
+  const pasteCapability = editCapability?.paste;
+  const addDragFillRejectionEvidence = editCapability?.addDragFillRejectionEvidence;
   const columnGesture = useRef<BrunoTableColumnGesture | undefined>(undefined);
   const isPointerInteractionActive = useCallback(
     (except?: "cell-range" | "drag-fill"): boolean =>
@@ -1931,19 +1365,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     readonly clear: () => void;
   } | null>(null);
   const traversalBuildVersionRef = useRef(0);
-  const traversalQueue = useQueuer<number>(
-    (version) => {
+  const enqueueTraversalBuild = useCallback(
+    (version: number) => {
       if (version !== traversalBuildVersionRef.current) return;
       if (cellEdit?.buildTraversalSlice()) traversalQueueRef.current?.addItem(version);
     },
-    { key: "bruno-table-editable-traversal", maxSize: 1, started: true, wait: 1 },
+    [cellEdit],
   );
-  useLayoutEffect(() => {
-    traversalQueueRef.current = traversalQueue;
-    return () => {
-      if (traversalQueueRef.current === traversalQueue) traversalQueueRef.current = null;
-    };
-  }, [traversalQueue]);
+  const installTraversalQueue = useCallback((queue: typeof EMPTY_TRAVERSAL_QUEUE) => {
+    traversalQueueRef.current = queue;
+  }, []);
   const yieldGridTabStop = useBrunoTableGridTabStopHandoff();
   const virtualWindow = viewportSnapshot.virtualWindow;
   const columnWindow = useMemo<BrunoTableColumnWindow>(
@@ -3125,12 +2556,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   const describePasteCoordinate = useCallback(
     (coordinate: { readonly rowId: string; readonly columnId: string }) => {
       const currentRow = latestPasteStructure.current?.rowIndexById.get(coordinate.rowId);
-      return createBrunoTablePasteCoordinateEvidence(
+      return pasteCapability!.coordinateEvidence(
         latestPasteColumnLabels.current?.get(coordinate.columnId) ?? coordinate.columnId,
         currentRow === undefined ? coordinate.rowId : String(currentRow + 1),
       );
     },
-    [],
+    [pasteCapability],
   );
   const rejectDirectPaste = useCallback(
     (diagnostic: BrunoTablePasteDiagnostic): void => {
@@ -3159,6 +2590,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       cellRange === undefined ||
       cellRangeStructure === undefined ||
       pasteRuntime === undefined ||
+      pasteCapability === undefined ||
       !ownsGridSurface(event)
     ) {
       return;
@@ -3166,12 +2598,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     event.preventDefault();
     if (isPointerInteractionActive()) return;
     if (pasteRuntime.isClipboardReadPending()) {
-      rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-pending"));
+      rejectDirectPaste(pasteCapability.diagnostic("clipboard-read-pending"));
       return;
     }
     const clipboard = navigator.clipboard;
     if (clipboard?.readText === undefined) {
-      rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-unavailable"));
+      rejectDirectPaste(pasteCapability.diagnostic("clipboard-unavailable"));
       return;
     }
     const active = navigation.getSnapshot();
@@ -3181,18 +2613,18 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         : undefined;
     cellRange.reconcile(cellRangeStructure);
     if (cellRange.consumeStructuralInvalidation()) {
-      rejectDirectPaste(createBrunoTablePasteDiagnostic("structure-changed"));
+      rejectDirectPaste(pasteCapability.diagnostic("structure-changed"));
       return;
     }
     const selection = cellRange.getSnapshot();
     const target = clipboardTargetFromSelection(selection, activeCoordinate);
     if (target === undefined) {
-      rejectDirectPaste(createBrunoTablePasteDiagnostic("no-target"));
+      rejectDirectPaste(pasteCapability.diagnostic("no-target"));
       return;
     }
     const readSequence = pasteRuntime.beginClipboardRead();
     if (readSequence === undefined) {
-      rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-pending"));
+      rejectDirectPaste(pasteCapability.diagnostic("clipboard-read-pending"));
       return;
     }
     let read: Promise<string>;
@@ -3200,7 +2632,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       read = clipboard.readText();
     } catch {
       pasteRuntime.finishClipboardRead(readSequence);
-      rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-rejected"));
+      rejectDirectPaste(pasteCapability.diagnostic("clipboard-read-rejected"));
       return;
     }
     void read.then(
@@ -3209,12 +2641,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         const currentStructure = latestPasteStructure.current;
         if (
           currentStructure === undefined ||
-          !isBrunoTablePasteTargetCurrent(target, currentStructure)
+          !pasteCapability.isTargetCurrent(target, currentStructure)
         ) {
-          rejectDirectPaste(createBrunoTablePasteDiagnostic("structure-changed"));
+          rejectDirectPaste(pasteCapability.diagnostic("structure-changed"));
           return;
         }
-        const plan = planBrunoTablePaste(text, target, currentStructure);
+        const plan = pasteCapability.plan(text, target, currentStructure);
         if (plan.kind === "rejected") {
           rejectDirectPaste(plan.diagnostic);
           return;
@@ -3222,7 +2654,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         if (plan.kind === "direct") {
           const result = cellEdit.applyCanonicalTextGesture(plan.gesture);
           if (result.kind === "rejected") {
-            rejectDirectPaste(brunoTablePasteDiagnosticFromCellEdit(result));
+            rejectDirectPaste(pasteCapability.fromCellEdit(result));
           } else {
             pasteRuntime.clearNotification();
             setAnnouncement(
@@ -3241,11 +2673,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         const proposedEndCoordinate =
           plan.proposed === undefined
             ? plan.paste.axis === "horizontal"
-              ? createBrunoTablePasteCoordinateEvidence(
+              ? pasteCapability.coordinateEvidence(
                   `column ${String(columnIndex + copiedLength)}`,
                   String(rowIndex + 1),
                 )
-              : createBrunoTablePasteCoordinateEvidence(
+              : pasteCapability.coordinateEvidence(
                   logicalColumns.find((column) => column.columnId === plan.start.columnId)
                     ?.headerName ?? plan.start.columnId,
                   String(rowIndex + copiedLength),
@@ -3270,22 +2702,23 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       },
       () => {
         if (!pasteRuntime.finishClipboardRead(readSequence)) return;
-        rejectDirectPaste(createBrunoTablePasteDiagnostic("clipboard-read-rejected"));
+        rejectDirectPaste(pasteCapability.diagnostic("clipboard-read-rejected"));
       },
     );
   };
   useEffect(() => {
-    if (pasteRuntime === undefined || cellEdit === undefined) return;
+    if (pasteRuntime === undefined || cellEdit === undefined || pasteCapability === undefined)
+      return;
     return pasteRuntime.register(
       (confirmation: BrunoTablePasteConfirmation) => {
         const currentStructure = latestPasteStructure.current;
         if (currentStructure === undefined) {
           return Object.freeze({
             kind: "rejected" as const,
-            diagnostic: createBrunoTablePasteDiagnostic("destination-unavailable"),
+            diagnostic: pasteCapability.diagnostic("destination-unavailable"),
           });
         }
-        const target = projectBrunoTablePasteTarget(
+        const target = pasteCapability.projectTarget(
           confirmation.paste,
           confirmation.start,
           currentStructure,
@@ -3293,16 +2726,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         if (confirmation.proposed === undefined) {
           return Object.freeze({
             kind: "rejected" as const,
-            diagnostic: createBrunoTablePasteDiagnostic("out-of-bounds"),
+            diagnostic: pasteCapability.diagnostic("out-of-bounds"),
           });
         }
-        if (target === undefined || !sameBrunoTablePasteTarget(target, confirmation.proposed)) {
+        if (target === undefined || !pasteCapability.sameTarget(target, confirmation.proposed)) {
           return Object.freeze({
             kind: "rejected" as const,
-            diagnostic: createBrunoTablePasteDiagnostic("confirmation-changed"),
+            diagnostic: pasteCapability.diagnostic("confirmation-changed"),
           });
         }
-        const gesture = createBrunoTablePasteGesture(
+        const gesture = pasteCapability.gesture(
           confirmation.paste,
           confirmation.proposed,
           currentStructure,
@@ -3310,7 +2743,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         if (gesture === undefined) {
           return Object.freeze({
             kind: "rejected" as const,
-            diagnostic: createBrunoTablePasteDiagnostic("destination-unavailable"),
+            diagnostic: pasteCapability.diagnostic("destination-unavailable"),
           });
         }
         const result = cellEdit.applyCanonicalTextGesture(gesture);
@@ -3318,13 +2751,13 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           ? result
           : Object.freeze({
               kind: "rejected" as const,
-              diagnostic: brunoTablePasteDiagnosticFromCellEdit(result),
+              diagnostic: pasteCapability.fromCellEdit(result),
             });
       },
       () => gridElement.current?.focus({ preventScroll: true }),
       describePasteCoordinate,
     );
-  }, [cellEdit, describePasteCoordinate, pasteRuntime]);
+  }, [cellEdit, describePasteCoordinate, pasteCapability, pasteRuntime]);
 
   const dragFillShape = useRef<
     | Readonly<{
@@ -3469,7 +2902,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           return Object.freeze({ kind: "unchanged" as const });
         }
         const reason = result.reason;
-        return addBrunoTableDragFillRejectionEvidence(cells, Object.freeze({ ...result, reason }));
+        return addDragFillRejectionEvidence!(cells, Object.freeze({ ...result, reason }));
       },
       interactionGeometry: () =>
         dragFillLayout.current?.interactionGeometry ?? EMPTY_DRAG_FILL_INTERACTION_GEOMETRY,
@@ -3514,6 +2947,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     captureDragFillSource,
     cellEdit,
     cellRange,
+    addDragFillRejectionEvidence,
     describePasteCoordinate,
     dragFillRuntime,
     editMemory,
@@ -3856,9 +3290,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     const reconcileAndScheduleTraversal = () => {
       const buildVersion = traversalBuildVersionRef.current + 1;
       traversalBuildVersionRef.current = buildVersion;
-      traversalQueue.clear();
+      (traversalQueueRef.current ?? EMPTY_TRAVERSAL_QUEUE).clear();
       if (cellEdit.reconcileTraversal(logicalColumns, rowSpace)) {
-        traversalQueue.addItem(buildVersion);
+        (traversalQueueRef.current ?? EMPTY_TRAVERSAL_QUEUE).addItem(buildVersion);
       }
     };
     reconcileAndScheduleTraversal();
@@ -3872,9 +3306,9 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       unsubscribe();
       unsubscribeTraversalInvalidation();
       traversalBuildVersionRef.current += 1;
-      traversalQueue.clear();
+      (traversalQueueRef.current ?? EMPTY_TRAVERSAL_QUEUE).clear();
     };
-  }, [cellEdit, logicalColumns, rowSpace, runtime, traversalQueue]);
+  }, [cellEdit, logicalColumns, rowSpace, runtime]);
   useLayoutEffect(() => {
     if (cellEdit === undefined || cellRange === undefined) {
       cellEdit?.reconcileTraversalRange(undefined);
@@ -4007,6 +3441,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
   });
   return (
     <div style={{ position: "relative" }}>
+      {editCapability === undefined ? null : (
+        <editCapability.TraversalQueueProvider
+          callback={enqueueTraversalBuild}
+          onQueue={installTraversalQueue}
+        />
+      )}
       {__BRUNO_TABLE_TEST_DIAGNOSTICS__ ? (
         <BrunoTableGridSurfaceCommitDiagnosticProbe
           commitEvidence={[columns, columnLayout, queryGeneration, rowSpace, viewportSnapshot]}
@@ -7890,6 +7330,7 @@ const BrunoTableReadOnlyValueCell = memo(function BrunoTableReadOnlyValueCell(
 const BrunoTableEditableCell = memo(function BrunoTableEditableCell(
   props: BrunoTableCellProps & { readonly cellEdit?: BrunoTableCellEditRuntime | undefined },
 ) {
+  const editCapability = useContext(BrunoTableEditCapabilityContext);
   const {
     runtime,
     rowId,
@@ -8155,8 +7596,8 @@ const BrunoTableEditableCell = memo(function BrunoTableEditableCell(
     zIndex: edit.active ? 10 : undefined,
   };
   const cellContent =
-    edit.active && cellEdit !== undefined && renderActiveEditor ? (
-      <BrunoTableCellEditBoundary
+    edit.active && cellEdit !== undefined && renderActiveEditor && editCapability !== undefined ? (
+      <editCapability.CellEditBoundary
         column={column}
         describedById={editStateDescriptionId}
         onCommittedOutsideCellPointer={onCommittedOutsideCellPointer}
@@ -8301,6 +7742,7 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
   readonly width: number;
   readonly yieldGridTabStop: (grid: HTMLElement) => void;
 }) {
+  const editCapability = useContext(BrunoTableEditCapabilityContext);
   const session = useSyncExternalStore(
     editRuntime.subscribeSession,
     editRuntime.getSessionSnapshot,
@@ -8320,7 +7762,12 @@ const BrunoTableEditOwnedRow = memo(function BrunoTableEditOwnedRow({
   const { center, centerStartIndex, leftPadding, rightPadding } = liveColumnWindow;
   const { rowEnd, rowStart } = liveRowRange;
   const layer = useRef<HTMLDivElement>(null);
-  const [geometry] = useState(() => new BrunoTableCellEditGeometryController());
+  const [geometry] = useState(() => {
+    if (editCapability === undefined) {
+      throw new TypeError("BrunoTable cell edit geometry requires the Client edit capability.");
+    }
+    return editCapability.createEditGeometry();
+  });
   const rowIndex = session.kind === "editing" ? rowSpace.findRowIndex(session.rowId) : undefined;
   useLayoutEffect(() => {
     if (session.kind !== "editing") {
@@ -8930,16 +8377,6 @@ function pinnedCellStyle(
   };
 }
 
-function hasRenderableChildren(children: ReactNode): boolean {
-  return Children.toArray(children).some((child) => {
-    if (!isValidElement(child)) return true;
-    if (child.type !== Fragment && child.type !== BrunoTableToolbar) return true;
-    return hasRenderableChildren(
-      (child as ReactElement<{ readonly children?: ReactNode }>).props.children,
-    );
-  });
-}
-
 const DEFAULT_LOADING_ROW_COUNT = 5;
 
 const LoadingRows = memo(function LoadingRows({
@@ -9335,37 +8772,6 @@ function loadingSkeletonStyle(column: CompiledColumn): CSSProperties {
         ? { marginInlineStart: "auto" }
         : { marginInlineEnd: "auto" }),
   };
-}
-
-type BrunoTableToolbarSnapshot = Readonly<{
-  readonly children: ReactNode;
-  readonly hasToolbar: boolean;
-}>;
-
-export class BrunoTableToolbarStore {
-  private readonly listeners = new Set<() => void>();
-  private snapshot: BrunoTableToolbarSnapshot;
-
-  public constructor(children: ReactNode) {
-    this.snapshot = createToolbarSnapshot(children);
-  }
-
-  public readonly getSnapshot = (): BrunoTableToolbarSnapshot => this.snapshot;
-
-  public readonly subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
-
-  public readonly publish = (children: ReactNode): void => {
-    if (sameBrunoTableToolbarNode(this.snapshot.children, children)) return;
-    this.snapshot = createToolbarSnapshot(children);
-    for (const listener of this.listeners) listener();
-  };
-}
-
-function createToolbarSnapshot(children: ReactNode): BrunoTableToolbarSnapshot {
-  return Object.freeze({ children, hasToolbar: hasRenderableChildren(children) });
 }
 
 function viewportPageSize(viewport: HTMLElement): number {

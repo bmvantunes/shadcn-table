@@ -11,6 +11,11 @@ The React package entry preserves its `"use client"` boundary. Server rendering 
 same source snapshot and initial preferences; storage is application-owned and must not introduce a
 different first client render.
 
+Import `BrunoTableServer` and its server-compatible types from `@bruno/table/server` when an
+application uses only the Server variant. The root `@bruno/table` export remains available and keeps
+its existing `BrunoTableServer` export for compatibility. The dedicated entry excludes the Client
+edit runtime from Server-only consumer bundles.
+
 ## Read-only Client, helpers, and presets
 
 ```tsx

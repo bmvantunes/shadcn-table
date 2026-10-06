@@ -71,6 +71,7 @@ import {
 import { compileBrunoTableGroupRowsColumn } from "./internal/client-grouping-presentation";
 import { BrunoTableClientGroupBy } from "./internal/client-grouping-controls";
 import { reconcileBrunoTableClientEditSourcePublication } from "./internal/client-edit-source";
+import { createBrunoTableClientEditCapability } from "./internal/client-edit-capability";
 
 function adaptBrunoTableRowVersionExtractor<TRow>(
   extractor: ((row: TRow) => unknown) | undefined,
@@ -331,6 +332,19 @@ function BrunoTableClientInstance<
       selection: BrunoTableRowSelectionRuntime,
     ) => <BrunoTableBlockedReviewTable rows={reviewRows} selection={selection} />;
   }, [editMemory]);
+  const editCapability = useMemo(
+    () =>
+      cellEdit === undefined || editMemory === undefined
+        ? undefined
+        : createBrunoTableClientEditCapability({
+            cellEdit,
+            editMemory,
+            renderResetReview,
+            ...(renderConflictReview === undefined ? {} : { renderConflictReview }),
+            ...(renderBlockedReview === undefined ? {} : { renderBlockedReview }),
+          }),
+    [cellEdit, editMemory, renderBlockedReview, renderConflictReview, renderResetReview],
+  );
   const [toolbar] = useState(() => new BrunoTableToolbarStore(props.children));
   const runtimeView = runtime.getView();
   const [projectionStore] = useState(
@@ -510,11 +524,7 @@ function BrunoTableClientInstance<
           rowPipelineAdapter={rowPipelineAdapter}
           rowSelection={rowSelection}
           cellRange={reviewRowSelection === undefined ? cellRange : undefined}
-          cellEdit={cellEdit}
-          editMemory={editMemory}
-          renderResetReview={renderResetReview}
-          {...(renderConflictReview === undefined ? {} : { renderConflictReview })}
-          {...(renderBlockedReview === undefined ? {} : { renderBlockedReview })}
+          editCapability={editCapability}
           renderColumnFilter={renderBrunoTableClientColumnFilter}
           gridOwnedControls={gridOwnedControls}
         />

@@ -34,6 +34,7 @@ import type { BrunoTableEditMemoryRuntime } from "./edit-memory";
 import { recordBrunoTableReviewCellSubscription } from "./grid-subscription-instrumentation";
 import { recordBrunoTableClientEditFooterRender } from "./render-instrumentation";
 import { BrunoTableRowSelectionRuntime } from "./row-selection";
+import { BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY } from "./review-viewport";
 
 type SaveFailureToasterOwner = object;
 type SaveFailureToasterEntry = Readonly<{
@@ -46,8 +47,6 @@ type SaveFailureToasterEntry = Readonly<{
 
 const saveFailureToastersByDocument = new WeakMap<Document, SaveFailureToasterEntry>();
 const pendingSaveFailureToasterDisposals = new Map<Document, SaveFailureToasterEntry>();
-export const BRUNO_TABLE_REVIEW_VIEWPORT_MAX_HEIGHT_PROPERTY =
-  "--bruno-table-review-viewport-max-height";
 const saveFailureToasterDisposalQueue = new Debouncer(
   () => {
     const pending = [...pendingSaveFailureToasterDisposals];

@@ -314,8 +314,13 @@ export class BrunoTableNavigationRuntime {
     this.setActive({ region: "header", rowIndex: 0, columnId });
   };
 
-  public readonly activateBody = (rowIndex: number, rowId: string, columnId: string): boolean => {
+  public readonly activateBody = (
+    rowIndex: number,
+    rowId: string | undefined,
+    columnId: string,
+  ): boolean => {
     if (
+      !Number.isSafeInteger(rowIndex) ||
       rowIndex < 0 ||
       rowIndex >= this.rowSpace.totalRows ||
       !this.columns.some((column) => column.columnId === columnId) ||
@@ -324,7 +329,12 @@ export class BrunoTableNavigationRuntime {
       return false;
     }
     this.bodyInitializationBlocked = false;
-    return this.setActive({ region: "body", rowIndex, rowId, columnId });
+    return this.setActive({
+      region: "body",
+      rowIndex,
+      ...(rowId === undefined ? {} : { rowId }),
+      columnId,
+    });
   };
 
   public readonly restoreActiveCell = (activeCell: BrunoTableActiveCell | undefined): void => {

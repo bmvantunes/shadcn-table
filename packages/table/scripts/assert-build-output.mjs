@@ -243,14 +243,16 @@ for (const [nodeModulesEntries, virtualStoreEntries, expected] of [
 
 const [
   rootDeclarationSet,
+  serverDeclarationSet,
   effectDeclarationSet,
-  rootRuntime,
+  rootRuntimeSource,
   effectRuntime,
   compilerOutput,
   packageJsonSource,
   productionModules,
 ] = await Promise.all([
   readDeclarationClosure(new URL("../dist/index.d.mts", import.meta.url)),
+  readDeclarationClosure(new URL("../dist/server.d.mts", import.meta.url)),
   readDeclarationClosure(new URL("../dist/effect.d.mts", import.meta.url)),
   readFile(new URL("../dist/index.mjs", import.meta.url), "utf8"),
   readFile(new URL("../dist/effect.mjs", import.meta.url), "utf8"),
@@ -264,10 +266,17 @@ const runtimeClosures = await Promise.all(
     readRuntimeClosure(new URL(target, new URL("../", import.meta.url))),
   ),
 );
+const rootRuntimeModules = await readRuntimeClosure(new URL("../dist/index.mjs", import.meta.url));
 const runtimeModules = [
   ...new Map(runtimeClosures.flat().map((module) => [module.url.href, module])).values(),
 ];
 const completeRuntime = runtimeModules.map((module) => module.source).join("\n");
+const rootRuntime = `${rootRuntimeSource}\n${rootRuntimeModules.map((module) => module.source).join("\n")}`;
+const emittedModule = (suffix) => {
+  const module = rootRuntimeModules.find(({ url }) => url.pathname.endsWith(suffix));
+  if (module === undefined) throw new Error(`The emitted package omitted ${suffix}.`);
+  return module;
+};
 for (const module of runtimeModules) {
   if (!/__BRUNO_TABLE_(?:DEVELOPMENT|TEST_DIAGNOSTICS)__/u.test(module.source)) continue;
   // Oxc resolves global references for us. Comparing identical transforms with
@@ -308,7 +317,10 @@ if (!compilerOutput.includes("react/compiler-runtime")) {
   throw new Error("React Compiler did not transform the @bruno/table smoke fixture.");
 }
 
-const rootRuntimeAst = await parseAstAsync(rootRuntime);
+const clientRowPipelineAst = emittedModule("/internal/client-row-pipeline.mjs").ast;
+const viewRuntimeAst = emittedModule("/internal/bruno-table-view.mjs").ast;
+const producedTextEvidenceAst = emittedModule("/internal/produced-text-evidence.mjs").ast;
+const hotkeyAdapterAst = emittedModule("/internal/hotkey-adapter.mjs").ast;
 const productionModuleAsts = await Promise.all(
   productionModules.map(async ({ sourcePath, source }) => ({
     sourcePath,
@@ -527,11 +539,11 @@ const emittedProducedTextEvidenceRejectedSmokes = await Promise.all(
     expected,
   })),
 );
-const layoutEffectBinding = findImportedBinding(rootRuntimeAst, "react", "useLayoutEffect");
+const layoutEffectBinding = findImportedBinding(clientRowPipelineAst, "react", "useLayoutEffect");
 const layoutEffectCallbacks =
   layoutEffectBinding === undefined
     ? []
-    : collectEffectCallbacks(rootRuntimeAst, layoutEffectBinding);
+    : collectEffectCallbacks(clientRowPipelineAst, layoutEffectBinding);
 
 if (
   testDiagnosticSentinels.some((sentinel) => completeRuntime.includes(sentinel)) ||
@@ -548,7 +560,7 @@ if (
 if (!layoutEffectCallbacks.some((callback) => syntaxTreeContains(callback, isRowAcceptanceCall))) {
   throw new Error("The production package lost required commit-phase row reconciliation effects.");
 }
-assertNonTabbableDomOwnership(rootRuntimeAst);
+assertNonTabbableDomOwnership(viewRuntimeAst);
 
 const domOwnershipSmoke = `
 import { useEffect } from "react";
@@ -650,7 +662,7 @@ if (/tanstack/iu.test(declarations)) {
   throw new Error("A TanStack implementation type leaked into the @bruno/table declarations.");
 }
 
-if (findImportedBinding(rootRuntimeAst, "@tanstack/react-hotkeys", "useHotkeys") === undefined) {
+if (findImportedBinding(hotkeyAdapterAst, "@tanstack/react-hotkeys", "useHotkeys") === undefined) {
   throw new Error("The emitted package lost the shared React Hotkeys boundary.");
 }
 
@@ -658,7 +670,7 @@ for (const module of runtimeModules) {
   assertKeyboardBoundary(module.ast, `emitted ${module.url.href}`, "emitted");
   assertEmittedProducedTextEvidence(module.ast, false);
 }
-assertEmittedProducedTextEvidence(rootRuntimeAst);
+assertEmittedProducedTextEvidence(producedTextEvidenceAst);
 for (const { ast, expected } of emittedProducedTextEvidenceRejectedSmokes) {
   assertEmittedProducedTextEvidenceViolationDetected(ast, expected);
 }
@@ -787,6 +799,11 @@ const expectedEffectExport = {
   import: "./dist/effect.mjs",
   default: "./dist/effect.mjs",
 };
+const expectedServerExport = {
+  types: "./dist/server.d.mts",
+  import: "./dist/server.mjs",
+  default: "./dist/server.mjs",
+};
 
 if (!hasExactStringRecord(packageJson.exports["."], expectedRootExport)) {
   throw new Error("The @bruno/table root export is invalid.");
@@ -794,6 +811,10 @@ if (!hasExactStringRecord(packageJson.exports["."], expectedRootExport)) {
 
 if (!hasExactStringRecord(packageJson.exports["./effect"], expectedEffectExport)) {
   throw new Error("The @bruno/table/effect export is invalid.");
+}
+
+if (!hasExactStringRecord(packageJson.exports["./server"], expectedServerExport)) {
+  throw new Error("The @bruno/table/server export is invalid.");
 }
 
 if (
@@ -835,8 +856,10 @@ if (
 if (
   JSON.stringify(packageJson.files) !==
   JSON.stringify([
-    "dist/*.mjs",
-    "dist/*.d.mts",
+    "dist/**/*.mjs",
+    "dist/**/*.d.mts",
+    "!dist/internal/compiler-smoke.mjs",
+    "!dist/internal/compiler-smoke.d.mts",
     "skills",
     "USAGE.md",
     "RELEASE.md",
@@ -938,6 +961,56 @@ const expectedEffectRuntimeExports = [
 
 if (JSON.stringify(actualEffectRuntimeExports) !== JSON.stringify(expectedEffectRuntimeExports)) {
   throw new Error("The @bruno/table/effect runtime exports do not match the optional surface.");
+}
+
+const serverModule = await import("@bruno/table/server");
+const actualServerRuntimeExports = Object.keys(serverModule).toSorted((left, right) =>
+  left.localeCompare(right),
+);
+const expectedServerRuntimeExports = [
+  "BrunoTableActiveFilterCount",
+  "BrunoTableActiveSortCount",
+  "BrunoTableAggregateAlgebra",
+  "BrunoTableBigIntColumn",
+  "BrunoTableBooleanColumn",
+  "BrunoTableComputedColumn",
+  "BrunoTableFilterControl",
+  "BrunoTableLoadedRowCount",
+  "BrunoTableNumberColumn",
+  "BrunoTableQuickFilter",
+  "BrunoTableResultRowCount",
+  "BrunoTableSelectColumn",
+  "BrunoTableServer",
+  "BrunoTableTextColumn",
+  "BrunoTableToolbar",
+  "BrunoTableToolbarSpacer",
+].toSorted((left, right) => left.localeCompare(right));
+
+if (JSON.stringify(actualServerRuntimeExports) !== JSON.stringify(expectedServerRuntimeExports)) {
+  throw new Error(
+    "The @bruno/table/server runtime exports do not match the strict Server surface.",
+  );
+}
+
+const serverExportedNames = collectDeclarationExportNames(serverDeclarationSet.entry);
+for (const exportedName of [
+  ...expectedServerRuntimeExports,
+  "BrunoTableColumns",
+  "BrunoTableServerProps",
+  "BrunoTableServerSource",
+]) {
+  if (!serverExportedNames.includes(exportedName)) {
+    throw new Error(`The @bruno/table/server declarations are missing ${exportedName}.`);
+  }
+}
+for (const clientOnlyName of [
+  "BrunoTableClient",
+  "BrunoTableClientProps",
+  "BrunoTableEditableCapability",
+]) {
+  if (serverExportedNames.includes(clientOnlyName)) {
+    throw new Error(`The @bruno/table/server declarations must not expose ${clientOnlyName}.`);
+  }
 }
 
 const effectExportedNames = collectDeclarationExportNames(effectDeclarationSet.entry);
