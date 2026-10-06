@@ -26,6 +26,23 @@ const editableRuntimeMarkers = [
   "Confirm paste",
   "bruno-table-editable-traversal",
 ];
+const clientOnlyEditModuleNames = new Set([
+  "cell-edit",
+  "cell-edit-boundary",
+  "cell-edit-geometry",
+  "cell-edit-traversal",
+  "cell-paste",
+  "cell-paste-chrome",
+  "client-edit-capability",
+  "client-edit-source",
+  "drag-fill",
+  "drag-fill-chrome",
+  "drag-fill-planner",
+  "edit-chrome",
+  "edit-memory",
+  "save-operations",
+]);
+// cell-edit-evidence is intentionally allowed: it only brands edit-review source rows in a WeakSet.
 const consumerRoot = await mkdtemp(join(tmpdir(), "bruno-table-emitted-consumers-"));
 const packageRoot = new URL("../", import.meta.url);
 
@@ -39,12 +56,33 @@ function sourceFor({ name, specifier }) {
 async function buildConsumer({ name, entry }) {
   const outputDirectory = join(consumerRoot, `dist-${name}`);
   const entryPath = join(consumerRoot, entry);
+  const renderedModules = new Map();
   await writeFile(entryPath, sourceFor(consumerCases.find((item) => item.entry === entry)));
   await build({
     root: consumerRoot,
     configFile: false,
     mode: "production",
-    plugins: [react({ compiler: reactCompilerOptions })],
+    plugins: [
+      react({ compiler: reactCompilerOptions }),
+      {
+        name: "bruno-emitted-consumer-module-report",
+        generateBundle(_options, bundle) {
+          for (const output of Object.values(bundle)) {
+            if (output.type !== "chunk") continue;
+            for (const [id, module] of Object.entries(output.modules)) {
+              assert.ok(
+                Number.isFinite(module.renderedLength) && module.renderedLength >= 0,
+                `The production bundler must report a renderedLength for ${id}.`,
+              );
+              renderedModules.set(
+                id,
+                Math.max(renderedModules.get(id) ?? 0, module.renderedLength),
+              );
+            }
+          }
+        },
+      },
+    ],
     resolve: {
       alias: [
         {
@@ -76,7 +114,30 @@ async function buildConsumer({ name, entry }) {
     await Promise.all(jsFiles.map((file) => readFile(join(assetDirectory, file), "utf8")))
   ).join("\n");
   const rawBytes = Buffer.byteLength(code);
-  return Object.freeze({ name, code, rawBytes, gzipBytes: gzipSync(code).byteLength });
+  return Object.freeze({
+    name,
+    code,
+    rawBytes,
+    gzipBytes: gzipSync(code).byteLength,
+    renderedModuleIds: Object.freeze(
+      [...renderedModules].filter(([, renderedLength]) => renderedLength > 0).map(([id]) => id),
+    ),
+  });
+}
+
+function findClientOnlyEditModules(bundle) {
+  return bundle.renderedModuleIds.filter((id) => {
+    const normalizedId = id.replaceAll("\\", "/");
+    const moduleName = normalizedId.match(/\/dist\/internal\/([^/]+)\.mjs(?:[?#].*)?$/u)?.[1];
+    return moduleName !== undefined && clientOnlyEditModuleNames.has(moduleName);
+  });
+}
+
+function renderedClientOnlyEditModuleNames(bundle) {
+  return findClientOnlyEditModules(bundle)
+    .map((id) => id.replaceAll("\\", "/"))
+    .map((id) => id.match(/\/dist\/internal\/([^/]+)\.mjs(?:[?#].*)?$/u)?.[1])
+    .filter((moduleName) => moduleName !== undefined);
 }
 
 try {
@@ -90,6 +151,25 @@ try {
     const readOnlyClient = byName.get("read-only-client");
     const editableClient = byName.get("editable-client");
     assert.ok(serverRoot && serverSubpath && readOnlyClient && editableClient);
+
+    for (const server of [serverRoot, serverSubpath]) {
+      assert.deepEqual(
+        findClientOnlyEditModules(server),
+        [],
+        `${server.name} must not render Client-only edit, paste, fill, or review modules.`,
+      );
+    }
+
+    const clientEditModules = ["cell-edit", "cell-paste", "drag-fill", "edit-chrome"];
+    for (const client of [readOnlyClient, editableClient]) {
+      const renderedModuleNames = renderedClientOnlyEditModuleNames(client);
+      for (const moduleName of clientEditModules) {
+        assert.ok(
+          renderedModuleNames.includes(moduleName),
+          `${client.name} must render Client edit module ${moduleName}; reported modules: ${renderedModuleNames.join(", ")}`,
+        );
+      }
+    }
 
     for (const marker of editableRuntimeMarkers) {
       for (const server of [serverRoot, serverSubpath]) {

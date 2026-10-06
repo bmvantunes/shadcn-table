@@ -2590,6 +2590,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       cellRange === undefined ||
       cellRangeStructure === undefined ||
       pasteRuntime === undefined ||
+      pasteCapability === undefined ||
       !ownsGridSurface(event)
     ) {
       return;
@@ -2597,12 +2598,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
     event.preventDefault();
     if (isPointerInteractionActive()) return;
     if (pasteRuntime.isClipboardReadPending()) {
-      rejectDirectPaste(pasteCapability!.diagnostic("clipboard-read-pending"));
+      rejectDirectPaste(pasteCapability.diagnostic("clipboard-read-pending"));
       return;
     }
     const clipboard = navigator.clipboard;
     if (clipboard?.readText === undefined) {
-      rejectDirectPaste(pasteCapability!.diagnostic("clipboard-unavailable"));
+      rejectDirectPaste(pasteCapability.diagnostic("clipboard-unavailable"));
       return;
     }
     const active = navigation.getSnapshot();
@@ -2612,18 +2613,18 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         : undefined;
     cellRange.reconcile(cellRangeStructure);
     if (cellRange.consumeStructuralInvalidation()) {
-      rejectDirectPaste(pasteCapability!.diagnostic("structure-changed"));
+      rejectDirectPaste(pasteCapability.diagnostic("structure-changed"));
       return;
     }
     const selection = cellRange.getSnapshot();
     const target = clipboardTargetFromSelection(selection, activeCoordinate);
     if (target === undefined) {
-      rejectDirectPaste(pasteCapability!.diagnostic("no-target"));
+      rejectDirectPaste(pasteCapability.diagnostic("no-target"));
       return;
     }
     const readSequence = pasteRuntime.beginClipboardRead();
     if (readSequence === undefined) {
-      rejectDirectPaste(pasteCapability!.diagnostic("clipboard-read-pending"));
+      rejectDirectPaste(pasteCapability.diagnostic("clipboard-read-pending"));
       return;
     }
     let read: Promise<string>;
@@ -2631,7 +2632,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       read = clipboard.readText();
     } catch {
       pasteRuntime.finishClipboardRead(readSequence);
-      rejectDirectPaste(pasteCapability!.diagnostic("clipboard-read-rejected"));
+      rejectDirectPaste(pasteCapability.diagnostic("clipboard-read-rejected"));
       return;
     }
     void read.then(
@@ -2640,12 +2641,12 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         const currentStructure = latestPasteStructure.current;
         if (
           currentStructure === undefined ||
-          !pasteCapability!.isTargetCurrent(target, currentStructure)
+          !pasteCapability.isTargetCurrent(target, currentStructure)
         ) {
-          rejectDirectPaste(pasteCapability!.diagnostic("structure-changed"));
+          rejectDirectPaste(pasteCapability.diagnostic("structure-changed"));
           return;
         }
-        const plan = pasteCapability!.plan(text, target, currentStructure);
+        const plan = pasteCapability.plan(text, target, currentStructure);
         if (plan.kind === "rejected") {
           rejectDirectPaste(plan.diagnostic);
           return;
@@ -2653,7 +2654,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         if (plan.kind === "direct") {
           const result = cellEdit.applyCanonicalTextGesture(plan.gesture);
           if (result.kind === "rejected") {
-            rejectDirectPaste(pasteCapability!.fromCellEdit(result));
+            rejectDirectPaste(pasteCapability.fromCellEdit(result));
           } else {
             pasteRuntime.clearNotification();
             setAnnouncement(
@@ -2672,11 +2673,11 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         const proposedEndCoordinate =
           plan.proposed === undefined
             ? plan.paste.axis === "horizontal"
-              ? pasteCapability!.coordinateEvidence(
+              ? pasteCapability.coordinateEvidence(
                   `column ${String(columnIndex + copiedLength)}`,
                   String(rowIndex + 1),
                 )
-              : pasteCapability!.coordinateEvidence(
+              : pasteCapability.coordinateEvidence(
                   logicalColumns.find((column) => column.columnId === plan.start.columnId)
                     ?.headerName ?? plan.start.columnId,
                   String(rowIndex + copiedLength),
@@ -2701,22 +2702,23 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
       },
       () => {
         if (!pasteRuntime.finishClipboardRead(readSequence)) return;
-        rejectDirectPaste(pasteCapability!.diagnostic("clipboard-read-rejected"));
+        rejectDirectPaste(pasteCapability.diagnostic("clipboard-read-rejected"));
       },
     );
   };
   useEffect(() => {
-    if (pasteRuntime === undefined || cellEdit === undefined) return;
+    if (pasteRuntime === undefined || cellEdit === undefined || pasteCapability === undefined)
+      return;
     return pasteRuntime.register(
       (confirmation: BrunoTablePasteConfirmation) => {
         const currentStructure = latestPasteStructure.current;
         if (currentStructure === undefined) {
           return Object.freeze({
             kind: "rejected" as const,
-            diagnostic: pasteCapability!.diagnostic("destination-unavailable"),
+            diagnostic: pasteCapability.diagnostic("destination-unavailable"),
           });
         }
-        const target = pasteCapability!.projectTarget(
+        const target = pasteCapability.projectTarget(
           confirmation.paste,
           confirmation.start,
           currentStructure,
@@ -2724,16 +2726,16 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         if (confirmation.proposed === undefined) {
           return Object.freeze({
             kind: "rejected" as const,
-            diagnostic: pasteCapability!.diagnostic("out-of-bounds"),
+            diagnostic: pasteCapability.diagnostic("out-of-bounds"),
           });
         }
-        if (target === undefined || !pasteCapability!.sameTarget(target, confirmation.proposed)) {
+        if (target === undefined || !pasteCapability.sameTarget(target, confirmation.proposed)) {
           return Object.freeze({
             kind: "rejected" as const,
-            diagnostic: pasteCapability!.diagnostic("confirmation-changed"),
+            diagnostic: pasteCapability.diagnostic("confirmation-changed"),
           });
         }
-        const gesture = pasteCapability!.gesture(
+        const gesture = pasteCapability.gesture(
           confirmation.paste,
           confirmation.proposed,
           currentStructure,
@@ -2741,7 +2743,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
         if (gesture === undefined) {
           return Object.freeze({
             kind: "rejected" as const,
-            diagnostic: pasteCapability!.diagnostic("destination-unavailable"),
+            diagnostic: pasteCapability.diagnostic("destination-unavailable"),
           });
         }
         const result = cellEdit.applyCanonicalTextGesture(gesture);
@@ -2749,7 +2751,7 @@ const BrunoTableGridSurface = memo(function BrunoTableGridSurface({
           ? result
           : Object.freeze({
               kind: "rejected" as const,
-              diagnostic: pasteCapability!.fromCellEdit(result),
+              diagnostic: pasteCapability.fromCellEdit(result),
             });
       },
       () => gridElement.current?.focus({ preventScroll: true }),

@@ -304,6 +304,7 @@ test("queues the next Drag Fill frame before native edge scrolling schedules vie
 
   const timeline: string[] = [];
   const dragFillFrameIds: number[] = [];
+  const viewportFrameIds: number[] = [];
   const removeFrames = installBrunoTableClientDragFillFrameListener(tableId, (event) => {
     if (event.phase !== "scheduled") return;
     dragFillFrameIds.push(event.frameId);
@@ -315,6 +316,14 @@ test("queues the next Drag Fill frame before native edge scrolling schedules vie
     .mockImplementation((callback) => {
       const frameId = requestFrame(callback);
       timeline.push(`raf:${String(frameId)}`);
+      const schedulingStack = new Error().stack ?? "";
+      if (
+        schedulingStack.includes("virtual-viewport.ts") &&
+        schedulingStack.includes("schedulePublish")
+      ) {
+        viewportFrameIds.push(frameId);
+        timeline.push(`viewport:${String(frameId)}`);
+      }
       return frameId;
     });
 
@@ -332,14 +341,13 @@ test("queues the next Drag Fill frame before native edge scrolling schedules vie
     expect(dragFillFrameIds.length).toBeGreaterThanOrEqual(2);
     const continuation = `drag-fill:${String(dragFillFrameIds[1])}`;
     const continuationIndex = timeline.indexOf(continuation);
-    const viewportRequestAfterContinuation = timeline
-      .slice(continuationIndex + 1)
-      .findIndex(
-        (entry) =>
-          entry.startsWith("raf:") && !dragFillFrameIds.some((id) => entry === `raf:${String(id)}`),
-      );
+    const firstViewportFrameId = viewportFrameIds[0];
+    const firstViewportRequestIndex =
+      firstViewportFrameId === undefined
+        ? -1
+        : timeline.indexOf(`viewport:${String(firstViewportFrameId)}`);
     expect(continuationIndex).toBeGreaterThanOrEqual(0);
-    expect(viewportRequestAfterContinuation).toBeGreaterThanOrEqual(0);
+    expect(firstViewportRequestIndex).toBeGreaterThan(continuationIndex);
   } finally {
     grid.dispatchEvent(pointer("pointercancel", 811, centerOf(handle)));
     removeFrames();
