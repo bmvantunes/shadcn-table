@@ -43,11 +43,8 @@ JavaScript has no required module-evaluation side effects.
 
 ## Public contracts
 
-The public runtime surface is the BrunoTable-branded root API, the Server-only `@bruno/table/server`
-entry, and the optional branded Effect subpath. The Server subpath shares public column, filter,
-grouping, and toolbar primitives while excluding Client edit runtime from Server-only bundles. The
-root entry continues to export `BrunoTableServer` for compatibility. Package metadata is available
-at `@bruno/table/package.json`. Private Grid Runtime,
+The public runtime surface is the BrunoTable-branded root API and the optional branded Effect
+subpath. Package metadata is available at `@bruno/table/package.json`. Private Grid Runtime,
 geometry, stores, XState actors, TanStack instances, View Server translation, and internal React
 components are not public entry points. Deep imports into `dist` or `src` are unsupported and blocked
 by the exports map.
